@@ -7,6 +7,13 @@
   <title>NoteLoop — 議事録自動化</title>
   <meta name="description" content="ブラウザだけで完結する議事録自動化アプリ。録音 → 高精度文字起こし → 議事録整形 → 音声 / txt / Word / メール下書きで出力。" />
   <link rel="stylesheet" href="./styles.css" />
+  <!-- PWA（アプリとしてインストール可能に） -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <meta name="theme-color" content="#4f6ef7" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="NoteLoop" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 </head>
 <body>
   <header class="app-header">
@@ -133,13 +140,8 @@
       <div class="panel">
         <h3 class="settings-group-title">文字起こし</h3>
         <div class="field settings-field">
-          <label for="langSelect">言語</label>
-          <select id="langSelect">
-            <option value="japanese" selected>日本語 (ja)</option>
-            <option value="chinese">中国語 (zh)</option>
-            <option value="english">英語 (en)</option>
-            <option value="auto">自動判定</option>
-          </select>
+          <label>言語</label>
+          <div class="static-value">日本語（固定）</div>
         </div>
         <div class="field settings-field">
           <label for="accuracyModel">高精度モデル（録音停止後の再処理）</label>

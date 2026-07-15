@@ -25,7 +25,7 @@ const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
 const toMinutes      = $('toMinutes');
 
-const langSelect     = $('langSelect');
+const LANGUAGE       = 'japanese';   // 日本語固定
 const accuracyModel  = $('accuracyModel');
 const liveEnabled    = $('liveEnabled');
 const liveModel      = $('liveModel');
@@ -280,7 +280,7 @@ async function runFinalPass(blob) {
       finalResolve = resolve;
       worker.postMessage(
         { type: 'transcribe', id: ++reqId, mode: 'final', longform: true,
-          audio, model: accuracyModel.value, language: langSelect.value },
+          audio, model: accuracyModel.value, language: LANGUAGE },
         [audio.buffer]
       );
     });
@@ -372,7 +372,7 @@ function maybeSendChunk(force) {
   workerBusy = true;
   if (recording) setStatus('working', '文字起こし中…（暫定）');
   worker.postMessage(
-    { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: liveModel.value, language: langSelect.value },
+    { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: liveModel.value, language: LANGUAGE },
     [audio.buffer]
   );
 }
@@ -670,3 +670,10 @@ downloadAudio.disabled = true;
 downloadWav.disabled = true;
 liveModelField.style.display = liveEnabled.checked ? '' : 'none';
 seedIfEmpty();
+
+// Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => { /* 失敗しても通常動作に影響なし */ });
+  });
+}

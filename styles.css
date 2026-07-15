@@ -219,6 +219,7 @@ select:focus, input:focus, textarea:focus {
 
 /* ---------- Settings ---------- */
 .settings-group-title { margin: 0 0 14px; font-size: 14px; font-weight: 800; }
+.static-value { font-size: 14px; font-weight: 600; padding: 11px 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
 .settings-field { margin-bottom: 18px; }
 .settings-field:last-child { margin-bottom: 0; }
 .switch-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; cursor: pointer; font-size: 13.5px; font-weight: 700; color: var(--text); }
