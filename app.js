@@ -49,10 +49,20 @@ const secTodos       = $('secTodos');
 const exportTxt      = $('exportTxt');
 const exportMd       = $('exportMd');
 const exportDocx     = $('exportDocx');
-const exportMail     = $('exportMail');
+const exportMailScreen = $('exportMailScreen');
 const saveMinutes    = $('saveMinutes');
 const historyList    = $('historyList');
 const screenTitle    = $('screenTitle');
+
+// メール
+const mailTo = $('mailTo'), mailSubject = $('mailSubject'), mailBody = $('mailBody');
+const mailFromMinutes = $('mailFromMinutes');
+const mailThunderbird = $('mailThunderbird'), mailGmail = $('mailGmail'), mailOutlook = $('mailOutlook'), mailEml = $('mailEml'), mailCopy = $('mailCopy');
+// 用語辞書
+const openTermFix = $('openTermFix');
+const termModal = $('termModal'), termModalClose = $('termModalClose'), termModalDone = $('termModalDone');
+const termWrong = $('termWrong'), termRight = $('termRight'), termApply = $('termApply'), termRegister = $('termRegister'), termApplyAll = $('termApplyAll');
+const termDictList = $('termDictList'), termFoundNote = $('termFoundNote');
 
 const claudeSend           = $('claudeSend');
 const claudeCopy           = $('claudeCopy');
@@ -77,8 +87,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.0';
-const APP_UPDATED = '2026.7.15 21:10';
+const APP_VERSION = 'Ver.1.1';
+const APP_UPDATED = '2026.7.15 23:00';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -155,6 +165,7 @@ function showScreen(id, title) {
   if (title) screenTitle.textContent = title;
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (id === 'screen-home') updateHomeUI();
+  if (id === 'screen-mail') prepareMailFromMinutes();
 }
 toMinutes.addEventListener('click', () => showScreen('screen-minutes', '議事録'));
 
@@ -169,13 +180,34 @@ function updateHomeUI() {
 
   waveWrap.hidden = !showWave;
   timerEl.hidden = !recording;
-  recHint.hidden = !recording;
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   transcriptPanel.hidden = !(recording || hasText || hasAudio);
   transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
   toMinutes.hidden = !(!recording && !homeProcessing && hasText);
+  updateFabState();
 
   if (showWave) startWave(); else stopWave();
+}
+
+/** 録音ボタンの段階変化: 録音 → 文字起こし中 → 議事録作成 → メール */
+function updateFabState() {
+  let state;
+  if (recording) state = 'recording';
+  else if (homeProcessing) state = 'processing';
+  else {
+    const hasText = liveTranscript.value.trim().length > 0;
+    const hasMinutes = !!(secSummary.value.trim() || secDecisions.value.trim() || secTodos.value.trim());
+    if (hasMinutes) state = 'mail';
+    else if (hasText) state = 'minutes';
+    else state = 'idle';
+  }
+  recordBtn.dataset.state = state;
+  recordBtn.disabled = (state === 'processing');
+  const labels = { idle: '', recording: '録音中… タップで停止', processing: '文字起こし中…', minutes: 'タップで議事録を作成', mail: 'タップでメールを作成' };
+  const arias = { idle: '録音開始', recording: '録音停止', processing: '文字起こし中', minutes: '議事録を作成', mail: 'メールを作成' };
+  recHint.textContent = labels[state] || '';
+  recHint.hidden = (state === 'idle');
+  recordBtn.setAttribute('aria-label', arias[state]);
 }
 
 /* =========================================================
@@ -232,8 +264,12 @@ function setStatus(kind, text) {
  * 録音
  * =======================================================*/
 recordBtn.addEventListener('click', async () => {
-  if (recording) await stopRecording();
-  else await startRecording();
+  const st = recordBtn.dataset.state;
+  if (st === 'recording') return stopRecording();
+  if (st === 'processing') return;
+  if (st === 'minutes') return showScreen('screen-minutes', '議事録');
+  if (st === 'mail') { prepareMailFromMinutes(); return showScreen('screen-mail', 'メール'); }
+  return startRecording();
 });
 
 async function startRecording() {
@@ -248,8 +284,6 @@ async function startRecording() {
     recordedBlob = null;
     sttActivity = 0.4;
     audioWrap.hidden = true;
-    recordBtn.classList.add('recording');
-    recordBtn.setAttribute('aria-label', '録音停止');
     setStatus('working', '認識中…（Web Speech）');
     updateHomeUI();
     startTime = Date.now();
@@ -314,8 +348,6 @@ async function startRecording() {
   pendingChunks = [];
   recordedBlob = null;
   audioWrap.hidden = true;
-  recordBtn.classList.add('recording');
-  recordBtn.setAttribute('aria-label', '録音停止');
 
   setStatus('working', useLive ? '準備中…' : '録音中');
 
@@ -329,8 +361,6 @@ async function startRecording() {
 
 async function stopRecording() {
   recording = false;
-  recordBtn.classList.remove('recording');
-  recordBtn.setAttribute('aria-label', '録音開始');
   recHint.hidden = true;
   timerEl.hidden = true;
 
@@ -366,6 +396,7 @@ async function stopRecording() {
     setStatus('ready', 'モデル準備完了');
     updateHomeUI();
   }
+  checkTerms(); // 登録用語（会社名など）が含まれていれば確認ポップアップ
   // 文字起こし＋音声を自動的に履歴へ保存（最大10件）
   await autoSaveRecording();
 }
@@ -890,14 +921,127 @@ exportDocx.addEventListener('click', async () => {
   } catch (err) { showError('Word 出力に失敗しました: ' + (err && err.message ? err.message : err)); }
 });
 
-exportMail.addEventListener('click', () => {
+exportMailScreen.addEventListener('click', () => { prepareMailFromMinutes(); showScreen('screen-mail', 'メール'); });
+
+/* =========================================================
+ * メール作成（既定メーラー / Gmail / Outlook / .eml）
+ * =======================================================*/
+function buildMailSubject(m) { return `【議事録】${m.name}（${formatDateJp(m.date)}）`; }
+function prepareMailFromMinutes() {
   const m = currentMinutes();
-  const subject = `【議事録】${m.name}（${formatDateJp(m.date)}）`;
-  const body = buildPlainText(m);
-  const MAX = 1800;
-  const trimmed = body.length > MAX ? body.slice(0, MAX) + '\n…（以下省略。txt/Word をご利用ください）' : body;
-  window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(trimmed)}`;
+  if (!mailSubject.value.trim()) mailSubject.value = buildMailSubject(m);
+  if (!mailBody.value.trim()) mailBody.value = buildPlainText(m);
+}
+mailFromMinutes.addEventListener('click', () => {
+  const m = currentMinutes();
+  mailSubject.value = buildMailSubject(m);
+  mailBody.value = buildPlainText(m);
 });
+mailThunderbird.addEventListener('click', () => {
+  const to = mailTo.value.trim();
+  const href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(mailSubject.value)}&body=${encodeURIComponent(mailBody.value)}`;
+  window.location.href = href;
+});
+mailGmail.addEventListener('click', () => {
+  const u = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(mailTo.value.trim())}&su=${encodeURIComponent(mailSubject.value)}&body=${encodeURIComponent(mailBody.value)}`;
+  window.open(u, '_blank', 'noopener');
+});
+mailOutlook.addEventListener('click', () => {
+  const u = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(mailTo.value.trim())}&subject=${encodeURIComponent(mailSubject.value)}&body=${encodeURIComponent(mailBody.value)}`;
+  window.open(u, '_blank', 'noopener');
+});
+mailEml.addEventListener('click', () => {
+  const to = mailTo.value.trim();
+  const eml =
+    (to ? `To: ${to}\n` : '') +
+    `Subject: ${mailSubject.value}\n` +
+    `X-Unsent: 1\n` +
+    `Content-Type: text/plain; charset=UTF-8\n\n` +
+    mailBody.value;
+  const m = currentMinutes();
+  download(`${safeFileName(m)}.eml`, eml, 'message/rfc822;charset=utf-8');
+});
+mailCopy.addEventListener('click', async () => {
+  const ok = await copyText(mailBody.value);
+  showError(ok ? '' : '本文のコピーに失敗しました。');
+  if (ok) { hideError(); }
+});
+
+/* =========================================================
+ * 用語の確認・修正（会社名など）＋辞書
+ * =======================================================*/
+const TERM_KEY = 'noteloop_terms';
+let termDict = [];
+function loadTermDict() { try { termDict = JSON.parse(localStorage.getItem(TERM_KEY)) || []; } catch (_) { termDict = []; } }
+function saveTermDict() { localStorage.setItem(TERM_KEY, JSON.stringify(termDict)); }
+function replaceAllInTranscript(wrong, right) {
+  if (!wrong) return 0;
+  const before = liveTranscript.value;
+  const after = before.split(wrong).join(right);
+  const n = before === after ? 0 : (before.split(wrong).length - 1);
+  if (n > 0) { liveTranscript.value = after; updateHomeUI(); }
+  return n;
+}
+function renderTermDict() {
+  termDictList.innerHTML = '';
+  if (!termDict.length) {
+    const li = document.createElement('li'); li.className = 'term-dict-empty';
+    li.textContent = 'まだ登録された用語はありません。上で「辞書に登録」できます。';
+    termDictList.appendChild(li); return;
+  }
+  termDict.forEach((t, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="tp"><span class="wrong"></span><span class="arrow">→</span><span class="right"></span></span>
+      <span class="acts"><button class="t-apply" type="button">適用</button><button class="t-del" type="button">削除</button></span>`;
+    li.querySelector('.wrong').textContent = t.wrong;
+    li.querySelector('.right').textContent = t.right;
+    li.querySelector('.t-apply').addEventListener('click', () => { const n = replaceAllInTranscript(t.wrong, t.right); showTermNote(`「${t.wrong}」を ${n} 件置換しました。`); });
+    li.querySelector('.t-del').addEventListener('click', () => { termDict.splice(i, 1); saveTermDict(); renderTermDict(); });
+    termDictList.appendChild(li);
+  });
+}
+function showTermNote(msg) { termFoundNote.textContent = msg; }
+function openTermModal(note) {
+  showTermNote(note || '会社名や固有名詞など、誤変換された語を正しい語に一括置換できます。');
+  renderTermDict();
+  termModal.hidden = false;
+  requestAnimationFrame(() => termModal.classList.add('show'));
+}
+function closeTermModal() {
+  termModal.classList.remove('show');
+  setTimeout(() => { if (!termModal.classList.contains('show')) termModal.hidden = true; }, 260);
+}
+openTermFix.addEventListener('click', () => openTermModal());
+termModalClose.addEventListener('click', closeTermModal);
+termModalDone.addEventListener('click', closeTermModal);
+termModal.addEventListener('click', (e) => { if (e.target === termModal) closeTermModal(); });
+termApply.addEventListener('click', () => {
+  const w = termWrong.value.trim(), r = termRight.value.trim();
+  if (!w) { showTermNote('「誤り」の語を入力してください。'); return; }
+  const n = replaceAllInTranscript(w, r);
+  showTermNote(`「${w}」を ${n} 件置換しました。`);
+});
+termRegister.addEventListener('click', () => {
+  const w = termWrong.value.trim(), r = termRight.value.trim();
+  if (!w || !r) { showTermNote('「誤り」と「正しい」を両方入力してください。'); return; }
+  if (!termDict.some((t) => t.wrong === w)) termDict.push({ wrong: w, right: r });
+  saveTermDict(); renderTermDict();
+  showTermNote(`辞書に登録しました。以後、録音後に「${w}」を自動でチェックします。`);
+});
+termApplyAll.addEventListener('click', () => {
+  let total = 0;
+  for (const t of termDict) total += replaceAllInTranscript(t.wrong, t.right);
+  showTermNote(`登録用語をすべて適用しました（計 ${total} 件置換）。`);
+});
+/** 録音後に登録用語が含まれていれば確認ポップアップを開く */
+function checkTerms() {
+  if (!termDict.length) return;
+  const text = liveTranscript.value;
+  const found = termDict.filter((t) => text.includes(t.wrong));
+  if (found.length) {
+    openTermModal(`「${found.map((t) => t.wrong).join('」「')}」が見つかりました。正しい語に一括修正できます。`);
+  }
+}
 
 /* =========================================================
  * 音声ファイルの出力
@@ -1248,17 +1392,20 @@ claudeSend.addEventListener('click', async () => {
   hideError();
   const prompt = buildClaudePrompt();
   claudePromptPreview.value = prompt;
-  // ジェスチャーを保つため先にウィンドウを開く（noopener は付けず、参照取得後に opener を切る）
-  const win = window.open(CLAUDE_URL, '_blank');
+  // 短いプロンプトは ?q= で事前入力を試みる（URL長の制限があるため長い場合は /new）。
+  // どちらでもクリップボードにコピーしておき、貼り付けでも送れるようにする。
+  const url = prompt.length <= 6000 ? `${CLAUDE_URL}?q=${encodeURIComponent(prompt)}` : CLAUDE_URL;
+  const win = window.open(url, '_blank');
   if (win) { try { win.opener = null; } catch (_) {} }
+  claudeOpen.href = url;
   claudeOpen.hidden = false; // 手動フォールバックのリンクは常に表示
   const copied = await copyText(prompt);
   if (!win) {
     setClaudeStatus('warn', 'ポップアップがブロックされました。下の「→ Claudeを開く」を押してください（プロンプトはコピー済みです）。');
   } else if (copied) {
-    setClaudeStatus('ok', '✓ プロンプトをコピーしました。開いた Claude の入力欄に <strong>貼り付け（⌘/Ctrl+V）→ 送信</strong> してください。');
+    setClaudeStatus('ok', '✓ Claudeを開きました。プロンプトが未入力の場合は入力欄で <strong>貼り付け（⌘/Ctrl+V）→ 送信</strong>（コピー済み）。');
   } else {
-    setClaudeStatus('warn', '⚠ 自動コピーできませんでした。下の「送信するプロンプトを確認」を開いて、内容を手動でコピーしてください。');
+    setClaudeStatus('warn', 'Claudeを開きました。未入力なら下の「送信するプロンプトを確認」から手動でコピーしてください。');
   }
 });
 
@@ -1319,6 +1466,7 @@ if (!getSR()) {
 applyEngineUI();
 updateHomeUI();
 renderParticipants();
+loadTermDict();
 drawerVerMain.textContent = APP_VERSION;
 drawerVerSub.textContent = APP_UPDATED;
 seedIfEmpty();
