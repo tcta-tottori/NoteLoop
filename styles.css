@@ -37,6 +37,14 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 body { min-height: 100vh; overflow-x: hidden; }
+/* 全画面共通のロゴ色グラデーション背景（固定・背面） */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1;
+  background:
+    radial-gradient(130% 90% at 12% -5%, rgba(79, 110, 247, .15), transparent 55%),
+    radial-gradient(130% 90% at 100% 12%, rgba(124, 92, 246, .15), transparent 55%),
+    linear-gradient(170deg, #eef1ff 0%, #f5f0ff 55%, #fdeef8 100%);
+}
 
 a { color: var(--brand1); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -94,10 +102,10 @@ a:hover { text-decoration: underline; }
   padding: 13px 14px; border-radius: 12px; font-size: 15px; font-weight: 700; color: var(--muted);
   transition: .16s;
 }
-.drawer-item .d-ico { font-size: 19px; filter: grayscale(.35); }
+.drawer-item .d-ico { width: 20px; height: 20px; flex: none; opacity: .85; }
 .drawer-item:hover { background: var(--surface-2); color: var(--text); }
 .drawer-item.active { background: color-mix(in srgb, var(--brand1) 10%, transparent); color: var(--brand1); }
-.drawer-item.active .d-ico { filter: none; }
+.drawer-item.active .d-ico { opacity: 1; }
 .brand { display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
 .app-name {
   margin: 0; font-size: 22px; font-weight: 800; line-height: 1.1;
@@ -122,20 +130,15 @@ a:hover { text-decoration: underline; }
 }
 /* ホームはマイクボタン固定分の余白を確保 */
 .home-screen { min-height: calc(100vh - 120px); padding-bottom: 120px; position: relative; }
-/* ホーム全体をロゴ色の一体型グラデーション背景に（固定・コンテンツの背面） */
-.home-screen::before {
-  content: ""; position: fixed; inset: 0; z-index: -1;
-  background:
-    radial-gradient(130% 90% at 12% -5%, rgba(79, 110, 247, .18), transparent 55%),
-    radial-gradient(130% 90% at 100% 12%, rgba(124, 92, 246, .18), transparent 55%),
-    linear-gradient(170deg, #eef1ff 0%, #f5f0ff 55%, #fdeef8 100%);
-}
 .screen { display: none; }
 .screen.active { display: block; animation: fade .22s ease; }
 @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 .panel {
-  background: var(--surface); border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid color-mix(in srgb, #ffffff 45%, var(--border));
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
   border-radius: var(--radius); box-shadow: var(--shadow-md);
   padding: clamp(16px, 2.4vw, 22px);
   margin-bottom: 16px;
