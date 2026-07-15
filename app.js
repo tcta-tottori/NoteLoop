@@ -12,6 +12,7 @@ const SVG_ATTR = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 const ICO_DOWNLOAD   = `<svg class="btn-ico" ${SVG_ATTR}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
 const ICO_MUSIC      = `<svg class="btn-ico" ${SVG_ATTR}><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
 const ICO_HEADPHONES = `<svg class="btn-ico" ${SVG_ATTR}><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg>`;
+const ICO_TRASH      = `<svg class="btn-ico" ${SVG_ATTR}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
 
 /* ===== 要素 ===== */
 const recordBtn      = $('recordBtn');
@@ -95,8 +96,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.6';
-const APP_UPDATED = '2026.7.16 07:35';
+const APP_VERSION = 'Ver.1.7';
+const APP_UPDATED = '2026.7.16 07:55';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -1004,7 +1005,24 @@ function runGenerate() {
   const src = liveTranscript.value.trim();
   if (!src) { showError('文字起こしが空です。先に録音するか、テキストを入力してください。'); showScreen('screen-home', '録音・文字起こし'); return; }
   hideError();
+  ensureAutoTitle();  // タイトル未設定なら文字起こしから自動生成
   fillMinutesUI(generateMinutes(src));
+}
+
+/** 文字起こしの内容から短い会議タイトルを作る */
+function autoTitleFromTranscript(text) {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  let s = (t.split(/[。．.!！?？\n]/)[0] || t).trim();
+  if (!s) s = t;
+  if (s.length > 24) s = s.slice(0, 24) + '…';
+  return s;
+}
+/** タイトルが未入力なら、文字起こしから自動生成してフィールドへ反映 */
+function ensureAutoTitle() {
+  if (meetingName.value.trim()) return;
+  const t = autoTitleFromTranscript(liveTranscript.value);
+  if (t) { meetingName.value = t; updateMeetingSummary(); }
 }
 generateBtn.addEventListener('click', runGenerate);
 regenerateBtn.addEventListener('click', runGenerate);
@@ -1014,7 +1032,7 @@ regenerateBtn.addEventListener('click', runGenerate);
  * =======================================================*/
 function currentMinutes() {
   return {
-    name: meetingName.value.trim() || '議事録',
+    name: meetingName.value.trim() || autoTitleFromTranscript(liveTranscript.value) || '議事録',
     date: meetingDate.value || todayStr(),
     participants: participants.slice(),
     summary: fromBullets(secSummary.value),
@@ -1351,6 +1369,7 @@ function idbDel(key) { return idbOpen().then((db) => new Promise((res) => { cons
 async function autoSaveRecording() {
   const transcript = liveTranscript.value.trim();
   if (!transcript) { updateHomeUI(); return; }
+  ensureAutoTitle();  // タイトル未設定なら文字起こしから自動生成
   const m = currentMinutes();
   const gen = generateMinutes(transcript);
   const id = 'rec-' + Date.now() + '-' + Math.floor(performance.now());
@@ -1407,17 +1426,24 @@ function renderHistory() {
   for (const item of list.slice().reverse()) {
     const li = document.createElement('li');
     li.className = 'history-item';
+    li.setAttribute('role', 'button');
+    li.tabIndex = 0;
     const excerpt = item.transcript || [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
     const meta = formatDateJp(item.date) + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '') + (item.audio ? ' ・ 音声あり' : '');
     li.innerHTML = `<h3></h3><span class="meta"></span><span class="excerpt"></span>
-      <div class="history-actions"><button class="open" type="button">開く</button><button class="audio" type="button" hidden>${ICO_HEADPHONES} 音声</button><button class="del" type="button">削除</button></div>`;
+      <div class="history-actions">
+        <button class="audio icon-btn" type="button" aria-label="音声を保存" hidden>${ICO_HEADPHONES}</button>
+        <button class="del icon-btn" type="button" aria-label="削除">${ICO_TRASH}</button>
+      </div>`;
     li.querySelector('h3').textContent = item.name + (item._sample ? '（サンプル）' : '');
     li.querySelector('.meta').textContent = meta;
     li.querySelector('.excerpt').textContent = excerpt;
-    li.querySelector('.open').addEventListener('click', () => openMinutes(item));
+    // カードをタップ / Enter で開く
+    li.addEventListener('click', () => openMinutes(item));
+    li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMinutes(item); } });
     const audioBtn = li.querySelector('.audio');
-    if (item.audio) { audioBtn.hidden = false; audioBtn.addEventListener('click', () => downloadHistoryAudio(item)); }
-    li.querySelector('.del').addEventListener('click', () => deleteMinutes(item.id));
+    if (item.audio) { audioBtn.hidden = false; audioBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadHistoryAudio(item); }); }
+    li.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); deleteMinutes(item.id); });
     historyList.appendChild(li);
   }
 }

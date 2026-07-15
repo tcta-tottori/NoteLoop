@@ -2,7 +2,7 @@
 // アプリシェル（HTML/CSS/JS/アイコン）をキャッシュし、インストール可能＆起動高速化。
 // 文字起こしモデル等の外部CDNはブラウザのHTTPキャッシュに任せ、ここでは扱わない。
 
-const CACHE = 'noteloop-shell-v8';
+const CACHE = 'noteloop-shell-v9';
 const SHELL = [
   './',
   './index.html',
