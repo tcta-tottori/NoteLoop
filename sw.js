@@ -2,7 +2,7 @@
 // アプリシェル（HTML/CSS/JS/アイコン）をキャッシュし、インストール可能＆起動高速化。
 // 文字起こしモデル等の外部CDNはブラウザのHTTPキャッシュに任せ、ここでは扱わない。
 
-const CACHE = 'noteloop-shell-v5';
+const CACHE = 'noteloop-shell-v6';
 const SHELL = [
   './',
   './index.html',
@@ -26,6 +26,18 @@ self.addEventListener('activate', (event) => {
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// 録音中通知のクリック / 「停止」アクション → アプリを前面化して停止を伝える
+self.addEventListener('notificationclick', (event) => {
+  const wantStop = event.action === 'stop';
+  event.notification.close();
+  event.waitUntil((async () => {
+    const clis = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    let client = clis.find((c) => 'focus' in c) || null;
+    try { if (client) await client.focus(); else if (self.clients.openWindow) client = await self.clients.openWindow('./'); } catch (_) {}
+    if (client && wantStop) client.postMessage({ type: 'stop-recording' });
+  })());
 });
 
 self.addEventListener('fetch', (event) => {

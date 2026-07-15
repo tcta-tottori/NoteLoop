@@ -158,7 +158,7 @@ a:hover { text-decoration: underline; }
 .drawer-logo { height: 56px; width: auto; max-width: 90%; opacity: .95; filter: drop-shadow(0 1px 5px rgba(0, 0, 0, .2)); }
 .brand { display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
 .header-logo {
-  display: block; height: 52px; width: auto; max-width: 68vw;
+  display: block; height: 34px; width: auto; max-width: 62vw;
   filter: drop-shadow(0 1px 6px rgba(0, 0, 0, .18));
 }
 .app-subtitle {

@@ -94,7 +94,7 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.3';
+const APP_VERSION = 'Ver.1.4';
 const APP_UPDATED = '2026.7.16';
 
 let participants = [];   // { dept, name }
@@ -284,6 +284,55 @@ function setStatus(kind, text) {
 }
 
 /* =========================================================
+ * 録音中の通知（画面オフでも継続・通知から停止できる）
+ *   Service Worker の showNotification で常駐通知を表示し、
+ *   通知の「停止」アクション → SW → ページへ postMessage で停止操作を伝える。
+ * =======================================================*/
+const NOTIF_TAG = 'noteloop-recording';
+let notifLastSec = -1;
+
+async function ensureNotifyPermission() {
+  if (!('Notification' in window)) return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  try { return (await Notification.requestPermission()) === 'granted'; } catch (_) { return false; }
+}
+
+/** 録音中の常駐通知を表示／更新（elapsed は "00:12" 形式） */
+async function showRecordingNotification(elapsed) {
+  if (!('serviceWorker' in navigator)) return;
+  if (!(await ensureNotifyPermission())) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    await reg.showNotification('● 録音中' + (elapsed ? '　' + elapsed : ''), {
+      body: '画面を消しても録音は続きます。ここから停止できます。',
+      tag: NOTIF_TAG, renotify: false, silent: true, requireInteraction: true,
+      icon: './icons/icon-192.png', badge: './icons/favicon-48.png',
+      actions: [{ action: 'stop', title: '■ 停止' }],
+      data: { type: 'recording' },
+    });
+  } catch (_) { /* 通知非対応でも録音は継続 */ }
+}
+
+/** 録音通知を消す */
+async function clearRecordingNotification() {
+  notifLastSec = -1;
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const ns = await reg.getNotifications({ tag: NOTIF_TAG });
+    ns.forEach((n) => n.close());
+  } catch (_) {}
+}
+
+// 通知の「停止」から送られてくるメッセージで録音を止める
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'stop-recording' && recording) stopRecording();
+  });
+}
+
+/* =========================================================
  * 録音
  * =======================================================*/
 recordBtn.addEventListener('click', async () => {
@@ -418,6 +467,7 @@ async function stopRecording() {
 
   clearInterval(timerInterval);
   clearInterval(liveTimer); liveTimer = null;
+  clearRecordingNotification();
 
   if (activeEngine === 'webspeech') stopWebSpeech();
 
@@ -764,6 +814,11 @@ function updateTimer() {
   const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const s = String(elapsed % 60).padStart(2, '0');
   timerEl.textContent = `${m}:${s}`;
+  // 通知の経過時間は 5 秒ごとに更新（頻繁な再表示を避ける）
+  if (recording && elapsed !== notifLastSec && (elapsed % 5 === 0)) {
+    notifLastSec = elapsed;
+    showRecordingNotification(`${m}:${s}`);
+  }
 }
 
 /* ===== 上部のウェーブアニメーション ===== */
@@ -1556,6 +1611,17 @@ seedIfEmpty();
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => { /* 失敗しても通常動作に影響なし */ });
+    navigator.serviceWorker.register('./sw.js')
+      .then(() => { if (!recording) clearRecordingNotification(); }) // 前回の残留通知を掃除
+      .catch(() => { /* 失敗しても通常動作に影響なし */ });
   });
 }
+
+// 画面復帰時: 録音中なら音声処理を再開し、通知を出し直す（バックグラウンド対策）
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !recording) return;
+  try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch (_) {}
+  // Web Speech が停止していれば再開
+  if (activeEngine === 'webspeech' && !recognition) { try { beginRecognition(); } catch (_) {} }
+  notifLastSec = -1; // 次のtickで通知を更新
+});
