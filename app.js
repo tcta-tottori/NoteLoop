@@ -26,6 +26,9 @@ const clearTranscript= $('clearTranscript');
 const toMinutes      = $('toMinutes');
 
 const LANGUAGE       = 'japanese';   // 日本語固定
+const engineSelect   = $('engineSelect');
+const engineHint     = $('engineHint');
+const whisperSettings= $('whisperSettings');
 const accuracyModel  = $('accuracyModel');
 const liveEnabled    = $('liveEnabled');
 const liveModel      = $('liveModel');
@@ -79,6 +82,12 @@ let procTimer = null;   // 高精度処理の経過時間表示
 let pendingChunks = [];
 let workerBusy = false;
 let reqId = 0;
+
+// エンジン / Web Speech API
+let activeEngine = 'whisper';   // 録音開始時に確定
+let recognition = null;
+let sttBase = '';               // 録音開始時点の既存テキスト
+let sttFinal = '';              // 今回の録音で確定した認識結果
 
 /* =========================================================
  * 画面切り替え（下部メニュー）
@@ -171,7 +180,8 @@ async function startRecording() {
     return;
   }
 
-  const useLive = liveEnabled.checked;
+  activeEngine = engineSelect.value;
+  const useLive = activeEngine === 'whisper' && liveEnabled.checked;
   if (useLive) worker.postMessage({ type: 'load', model: liveModel.value });
 
   // MediaRecorder（再生・高精度再処理・音声出力用の音声を保持）
@@ -215,7 +225,15 @@ async function startRecording() {
   recordBtn.classList.add('recording');
   recordBtn.setAttribute('aria-label', '録音停止');
   recHint.textContent = '録音中… タップで停止';
-  if (useLive) setStatus('working', '準備中…'); else setStatus('', '録音中');
+
+  if (activeEngine === 'webspeech') {
+    const ok = startWebSpeech();
+    setStatus(ok ? 'working' : '', ok ? 'Web Speech で認識中…' : '録音中（認識なし）');
+  } else if (useLive) {
+    setStatus('working', '準備中…');
+  } else {
+    setStatus('', '録音中');
+  }
 
   startTime = Date.now();
   updateTimer();
@@ -233,6 +251,8 @@ async function stopRecording() {
   clearInterval(liveTimer); liveTimer = null;
   cancelAnimationFrame(rafId);
 
+  if (activeEngine === 'webspeech') stopWebSpeech();
+
   // 録音した音声を確定
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     await new Promise((res) => { mediaRecorder.onstop = res; mediaRecorder.stop(); });
@@ -249,13 +269,96 @@ async function stopRecording() {
   }
   teardownAudio();
 
-  // 高精度パス: 音声全体を再処理して確定版に置き換え
-  if (recordedBlob) {
+  if (activeEngine === 'webspeech') {
+    // Web Speech はリアルタイムで確定済み。高精度パスは行わない。
+    setStatus('ready', '認識完了');
+  } else if (recordedBlob) {
+    // Whisper: 音声全体を高精度で再処理して確定版に置き換え
     await runFinalPass(recordedBlob);
   } else {
     setStatus('ready', 'モデル準備完了');
   }
   recHint.textContent = 'タップして録音開始';
+}
+
+/* =========================================================
+ * Web Speech API（ブラウザ標準の音声認識）
+ *   無料・リアルタイム・高精度だが、音声はブラウザ経由でクラウドへ送られ、
+ *   インターネット接続が必要（Chrome は Google、Edge は Azure）。
+ * =======================================================*/
+function getSR() { return window.SpeechRecognition || window.webkitSpeechRecognition || null; }
+
+function joinStt(base, add) {
+  base = (base || '').trim();
+  add = (add || '').trim();
+  if (!base) return add;
+  if (!add) return base;
+  return base + ' ' + add;
+}
+
+function beginRecognition() {
+  const SR = getSR();
+  if (!SR) return false;
+  try {
+    recognition = new SR();
+    recognition.lang = 'ja-JP';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.onresult = onSpeechResult;
+    recognition.onerror = onSpeechError;
+    recognition.onend = onSpeechEnd;
+    recognition.start();
+    return true;
+  } catch (_) { return false; }
+}
+
+function startWebSpeech() {
+  if (!getSR()) {
+    showError('このブラウザは Web Speech API（音声認識）に対応していません。設定でエンジンを「ブラウザ内Whisper」に切り替えてください。');
+    return false;
+  }
+  sttBase = liveTranscript.value.trim();
+  sttFinal = '';
+  return beginRecognition();
+}
+
+function onSpeechResult(e) {
+  let interim = '';
+  for (let i = e.resultIndex; i < e.results.length; i++) {
+    const r = e.results[i];
+    if (r.isFinal) sttFinal += r[0].transcript;
+    else interim += r[0].transcript;
+  }
+  liveTranscript.value = joinStt(sttBase, sttFinal + interim);
+  liveTranscript.scrollTop = liveTranscript.scrollHeight;
+}
+
+function onSpeechError(e) {
+  const err = e && e.error;
+  if (err === 'not-allowed' || err === 'service-not-allowed') {
+    showError('マイク／音声認識が許可されていません。ブラウザの権限を確認してください。');
+  } else if (err === 'network') {
+    showError('音声認識にはインターネット接続が必要です。接続を確認してください。');
+  }
+  // 'no-speech' / 'aborted' は無視（onend で再開）
+}
+
+function onSpeechEnd() {
+  // 録音継続中に認識が切れたら、新しいインスタンスで再開（無音や時間制限対策）
+  if (recording && activeEngine === 'webspeech') {
+    setTimeout(() => { if (recording && activeEngine === 'webspeech') beginRecognition(); }, 200);
+  }
+}
+
+function stopWebSpeech() {
+  if (recognition) {
+    recognition.onend = null;   // 再開を止める
+    recognition.onresult = null;
+    try { recognition.stop(); } catch (_) {}
+    try { recognition.abort(); } catch (_) {}
+    recognition = null;
+  }
+  liveTranscript.value = joinStt(sttBase, sttFinal.trim());
 }
 
 function teardownAudio() {
@@ -793,6 +896,18 @@ claudeInstructionReset.addEventListener('click', () => {
  * =======================================================*/
 liveEnabled.addEventListener('change', () => { liveModelField.style.display = liveEnabled.checked ? '' : 'none'; });
 
+const ENGINE_KEY = 'noteloop_engine';
+function applyEngineUI() {
+  const ws = engineSelect.value === 'webspeech';
+  whisperSettings.style.display = ws ? 'none' : '';
+  engineHint.textContent = ws
+    ? 'ブラウザ標準の音声認識。リアルタイムで高精度ですが、音声はブラウザ経由でクラウド（Chromeは Google、Edgeは Azure）へ送信され、インターネット接続が必要です。'
+    : '音声を端末内で処理します（外部送信なし・オフライン可）。初回はモデルをダウンロードします。';
+  if (!recording) setStatus('', ws ? 'Web Speech（要ネット）' : 'モデル未読み込み');
+  localStorage.setItem(ENGINE_KEY, engineSelect.value);
+}
+engineSelect.addEventListener('change', applyEngineUI);
+
 function showError(msg) { errorBox.textContent = msg; errorBox.hidden = false; }
 function hideError() { errorBox.hidden = true; errorBox.textContent = ''; }
 
@@ -801,6 +916,14 @@ downloadAudio.disabled = true;
 downloadWav.disabled = true;
 liveModelField.style.display = liveEnabled.checked ? '' : 'none';
 claudeInstruction.value = loadInstruction();
+// エンジンの復元 + Web Speech 非対応ブラウザの表示
+const savedEngine = localStorage.getItem(ENGINE_KEY);
+if (savedEngine === 'webspeech' || savedEngine === 'whisper') engineSelect.value = savedEngine;
+if (!getSR()) {
+  const opt = engineSelect.querySelector('option[value="webspeech"]');
+  if (opt) opt.textContent = 'Web Speech API（このブラウザは非対応）';
+}
+applyEngineUI();
 seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
