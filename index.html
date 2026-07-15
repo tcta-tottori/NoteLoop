@@ -101,14 +101,17 @@
 
       <!-- 中央: 点滅する案内（待機中のみ） -->
       <div class="idle-prompt" id="idlePrompt">
-        <span class="idle-emoji" aria-hidden="true">🎙</span>
         <span>マイクボタンで録音開始</span>
       </div>
 
       <!-- 中央下部に固定するマイクボタン -->
       <button id="recordBtn" class="mic-fab" type="button" aria-label="録音開始">
         <span class="rec-ring" aria-hidden="true"></span>
-        <span class="rec-icon" aria-hidden="true"></span>
+        <svg class="mic-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+          <path d="M12 18v4"/>
+        </svg>
       </button>
       <div class="rec-hint" id="recHint" hidden>録音中… タップで停止</div>
     </section>
