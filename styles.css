@@ -253,6 +253,18 @@ select:focus, input:focus, textarea:focus {
   padding: 11px 14px; font-size: 13.5px; margin-top: 12px;
 }
 
+/* ---------- Section head (パネル内の見出し) ---------- */
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.section-title { font-size: 13.5px; font-weight: 800; color: var(--text); }
+.section-title .btn-ico { width: 17px; height: 17px; color: var(--brand1); }
+.home-audio-hint {
+  margin: 14px 2px 0; padding: 10px 12px; text-align: center;
+  font-size: 12.5px; color: var(--muted); line-height: 1.6;
+  background: color-mix(in srgb, var(--brand1) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brand1) 18%, var(--border)); border-radius: var(--radius-sm);
+}
+.home-audio-hint .link-btn { margin-left: 4px; }
+
 /* ---------- Audio card ---------- */
 .audio-card audio { width: 100%; margin: 8px 0 10px; }
 .audio-size { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }

@@ -27,10 +27,13 @@ const progressWrap   = $('progressWrap');
 const progressBar    = $('progressBar');
 const errorBox       = $('errorBox');
 const audioWrap      = $('audioWrap');
+const audioEmptyNote = $('audioEmptyNote');
 const player         = $('player');
 const audioSize      = $('audioSize');
 const downloadAudio  = $('downloadAudio');
 const downloadWav    = $('downloadWav');
+const homeAudioHint  = $('homeAudioHint');
+const goMinutesFromHome = $('goMinutesFromHome');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
 
@@ -54,7 +57,6 @@ const secTodos       = $('secTodos');
 const exportTxt      = $('exportTxt');
 const exportMd       = $('exportMd');
 const exportDocx     = $('exportDocx');
-const exportMailScreen = $('exportMailScreen');
 const saveMinutes    = $('saveMinutes');
 const historyList    = $('historyList');
 const screenTitle    = $('screenTitle');
@@ -92,8 +94,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.2';
-const APP_UPDATED = '2026.7.15';
+const APP_VERSION = 'Ver.1.3';
+const APP_UPDATED = '2026.7.16';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -157,8 +159,18 @@ drawerBackdrop.addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 drawerItems.forEach((it) => it.addEventListener('click', () => {
   showScreen(it.dataset.target, it.dataset.title);
+  if (it.dataset.scroll) {
+    if (it.dataset.scroll === 'mailPanel') prepareMailFromMinutes();
+    scrollToEl(it.dataset.scroll);
+  }
   closeDrawer();
 }));
+
+/** 指定IDの要素まで滑らかにスクロール */
+function scrollToEl(id) {
+  const el = document.getElementById(id);
+  if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+}
 
 function showScreen(id, title) {
   document.querySelectorAll('.screen').forEach((s) => {
@@ -170,8 +182,15 @@ function showScreen(id, title) {
   if (title) screenTitle.textContent = title;
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (id === 'screen-home') updateHomeUI();
-  if (id === 'screen-mail') prepareMailFromMinutes();
+  if (id === 'screen-minutes') refreshAudioPanel();
 }
+
+/** 録音音声パネルの表示（音声の有無で再生カードと案内文を切替） */
+function setAudioAvailable(has) {
+  if (audioWrap) audioWrap.hidden = !has;
+  if (audioEmptyNote) audioEmptyNote.hidden = has;
+}
+function refreshAudioPanel() { setAudioAvailable(!!recordedBlob); }
 
 /* =========================================================
  * ホーム画面の表示状態（最小構成: 待機はマイクと点滅案内のみ）
@@ -187,6 +206,7 @@ function updateHomeUI() {
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   transcriptPanel.hidden = !(recording || hasText || hasAudio);
   transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
+  if (homeAudioHint) homeAudioHint.hidden = !(hasAudio && !recording && !homeProcessing); // 録音後は議事録への導線を出す
   updateFabState();
 
   if (showWave) startWave(); else stopWave();
@@ -271,7 +291,7 @@ recordBtn.addEventListener('click', async () => {
   if (st === 'recording') return stopRecording();
   if (st === 'processing') return;
   if (st === 'minutes') return showScreen('screen-minutes', '議事録');
-  if (st === 'mail') { prepareMailFromMinutes(); return showScreen('screen-mail', 'メール'); }
+  if (st === 'mail') { showScreen('screen-minutes', '議事録'); prepareMailFromMinutes(); scrollToEl('mailPanel'); return; }
   return startRecording();
 });
 
@@ -286,7 +306,7 @@ async function startRecording() {
     recording = true;
     recordedBlob = null;
     sttActivity = 0.4;
-    audioWrap.hidden = true;
+    setAudioAvailable(false);
     // 認識と並行して音声も録音し、停止後に「録音した音声」の確認・保存を可能にする。
     // マイク取得や録音に失敗しても認識は継続する（音声カードが出ないだけ）。
     await startWebSpeechAudioCapture();
@@ -353,7 +373,7 @@ async function startRecording() {
   recording = true;
   pendingChunks = [];
   recordedBlob = null;
-  audioWrap.hidden = true;
+  setAudioAvailable(false);
 
   setStatus('working', useLive ? '準備中…' : '録音中');
 
@@ -408,7 +428,7 @@ async function stopRecording() {
       recordedBlob = new Blob(recordedBlobs, { type: recordedBlobs[0].type || 'audio/webm' });
       player.src = URL.createObjectURL(recordedBlob);
       audioSize.textContent = formatBytes(recordedBlob.size);
-      audioWrap.hidden = false;
+      setAudioAvailable(true);
       downloadAudio.disabled = false;
       downloadWav.disabled = false;
       // 保存ボタンに実際の拡張子を表示
@@ -735,6 +755,7 @@ function appendTranscript(text) {
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
 }
 clearTranscript.addEventListener('click', () => { liveTranscript.value = ''; updateHomeUI(); });
+if (goMinutesFromHome) goMinutesFromHome.addEventListener('click', () => showScreen('screen-minutes', '議事録'));
 liveTranscript.addEventListener('input', updateHomeUI);
 
 /* ===== タイマー ===== */
@@ -982,7 +1003,6 @@ exportDocx.addEventListener('click', async () => {
   } catch (err) { showError('Word 出力に失敗しました: ' + (err && err.message ? err.message : err)); }
 });
 
-exportMailScreen.addEventListener('click', () => { prepareMailFromMinutes(); showScreen('screen-mail', 'メール'); });
 
 /* =========================================================
  * メール作成（既定メーラー / Gmail / Outlook / .eml）
@@ -1514,6 +1534,7 @@ function hideError() { errorBox.hidden = true; errorBox.textContent = ''; }
 meetingDate.value = todayStr();
 downloadAudio.disabled = true;
 downloadWav.disabled = true;
+setAudioAvailable(false);
 liveModelField.style.display = liveEnabled.checked ? '' : 'none';
 claudeInstruction.value = loadInstruction();
 // エンジンの復元 + Web Speech 非対応ブラウザの表示
