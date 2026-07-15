@@ -158,11 +158,11 @@ a:hover { text-decoration: underline; }
 .drawer-logo { height: 56px; width: auto; max-width: 90%; opacity: .95; filter: drop-shadow(0 1px 5px rgba(0, 0, 0, .2)); }
 .brand { display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
 .header-logo {
-  display: block; height: 72px; width: auto; max-width: 76vw;
+  display: block; height: 52px; width: auto; max-width: 68vw;
   filter: drop-shadow(0 1px 6px rgba(0, 0, 0, .18));
 }
 .app-subtitle {
-  margin: -14px 0 0; font-size: 10px; color: rgba(255, 255, 255, .82); font-weight: 500;
+  margin: 1px 0 0; font-size: 10px; color: rgba(255, 255, 255, .82); font-weight: 500;
   letter-spacing: .16em;
   font-family: "Yu Gothic", "YuGothic", "游ゴシック", "游ゴシック体", "Yu Gothic Medium", "Hiragino Sans", sans-serif;
 }
