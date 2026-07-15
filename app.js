@@ -165,7 +165,7 @@ worker.onmessage = (e) => {
   const msg = e.data || {};
   switch (msg.type) {
     case 'progress':
-      if (msg.data && typeof msg.data.progress === 'number') setModelLoading(msg.data.progress);
+      if (msg.data && typeof msg.data.progress === 'number') { lastDlProgress = performance.now(); setModelLoading(msg.data.progress); }
       break;
     case 'ready':
       setStatus('ready', 'モデル準備完了');
@@ -428,18 +428,32 @@ function teardownAudio() {
 async function runFinalPass(blob) {
   recordBtn.disabled = true;
   homeProcessing = true;
+  procProgress = 0;
   updateHomeUI();
-  const procStart = Date.now();
-  setStatus('working', '高精度で文字起こし中…');
-  procTimer = setInterval(() => {
-    const s = Math.floor((Date.now() - procStart) / 1000);
-    setStatus('working', `高精度で文字起こし中…（${s}秒）`);
-  }, 1000);
+  setStatus('working', '音声を準備中…');
 
   try {
     const audio = await decodeTo16kMono(blob);
-    // 音量チェック（無音・小音量だと誤認識・反復が起きやすい）
-    const level = rms(audio);
+    const level = rms(audio); // 音量チェック（無音だと誤認識・反復が起きやすい）
+
+    // 所要時間を推定（音声長 × モデル係数）してETA表示に使う
+    const durationSec = audio.length / SAMPLE_RATE;
+    const factor = { 'Xenova/whisper-base': 2, 'Xenova/whisper-small': 4, 'Xenova/whisper-medium': 8 }[accuracyModel.value] || 4;
+    const estTotal = Math.max(5, durationSec * factor);
+    const procStart = Date.now();
+    progressWrap.hidden = false;
+
+    procTimer = setInterval(() => {
+      const el = (Date.now() - procStart) / 1000;
+      procProgress = Math.min(0.96, el / estTotal);
+      // モデルDL中は本物のDL進捗に譲る
+      if (performance.now() - lastDlProgress > 1200) {
+        progressBar.style.width = (procProgress * 100).toFixed(0) + '%';
+        const remain = Math.max(0, Math.ceil(estTotal - el));
+        setStatus('working', `高精度で文字起こし中… 残り約 ${remain}秒`);
+      }
+    }, 300);
+
     await new Promise((resolve) => {
       finalResolve = resolve;
       worker.postMessage(
@@ -448,6 +462,9 @@ async function runFinalPass(blob) {
         [audio.buffer]
       );
     });
+
+    procProgress = 1;
+    progressBar.style.width = '100%';
     setStatus('ready', '文字起こし完了');
     if (level < 0.008) {
       showError('録音の音量がかなり小さいようです。マイクに近づける／端末の録音音量を上げると精度が上がります。');
@@ -457,8 +474,10 @@ async function runFinalPass(blob) {
     setStatus('ready', 'モデル準備完了');
   } finally {
     clearInterval(procTimer); procTimer = null;
+    progressWrap.hidden = true;
     recordBtn.disabled = false;
     homeProcessing = false;
+    procProgress = 0;
     updateHomeUI();
   }
 }
@@ -560,6 +579,8 @@ function updateTimer() {
 
 /* ===== 上部のウェーブアニメーション ===== */
 let waveRAF = null, wavePhase = 0, waveLevel = 0.14, waveActive = false;
+let procProgress = 0;      // 高精度処理の推定進捗 0..1
+let lastDlProgress = 0;    // 直近のモデルDL進捗の時刻
 const waveBuf = new Uint8Array(1024);
 function brandVar(n) { return (getComputedStyle(document.documentElement).getPropertyValue(n) || '').trim(); }
 function resizeWave() {
@@ -583,6 +604,8 @@ function waveLoop() {
   waveRAF = requestAnimationFrame(waveLoop);
   // 大きいほど速く揺れる（静かなときはゆっくり）
   wavePhase += 0.02 + waveLevel * 0.055;
+  // 高精度処理中は「文字が打たれていく」別アニメーションを表示
+  if (homeProcessing && !recording) { drawProcessingFrame(); return; }
   let target;
   if (recording && analyser) {
     analyser.getByteTimeDomainData(waveBuf);
@@ -600,6 +623,52 @@ function waveLoop() {
   waveLevel += (target - waveLevel) * k;
   drawWaveFrame();
 }
+/** 角丸矩形パス */
+function rrect(ctx, x, y, w, h, r) {
+  r = Math.min(r, h / 2, w / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/** 高精度処理中: 文字が左から打ち込まれていくアニメーション */
+function drawProcessingFrame() {
+  const ctx = wave.getContext('2d');
+  const w = wave.width, h = wave.height;
+  ctx.clearRect(0, 0, w, h);
+  const marginX = w * 0.13, usable = w - marginX * 2;
+  const widths = [0.94, 0.72, 0.88, 0.56];
+  const lines = widths.length;
+  const lineH = Math.max(7, h * 0.052);
+  const gap = h * 0.135;
+  const startY = h * 0.30;
+  for (let i = 0; i < lines; i++) {
+    const y = startY + i * gap;
+    const bw = usable * widths[i];
+    // ベース（薄い下地）
+    ctx.fillStyle = 'rgba(99, 102, 241, 0.15)';
+    rrect(ctx, marginX, y, bw, lineH, lineH / 2); ctx.fill();
+    // 進捗に応じて行ごとに順番に埋まる（＝タイピング風）
+    const p = Math.max(0, Math.min(1, procProgress * lines - i));
+    const fw = bw * p;
+    if (fw > 1) {
+      const g = ctx.createLinearGradient(marginX, 0, marginX + usable, 0);
+      g.addColorStop(0, '#4f6ef7'); g.addColorStop(0.6, '#7c5cf6'); g.addColorStop(1, '#ec4899');
+      ctx.fillStyle = g;
+      rrect(ctx, marginX, y, fw, lineH, lineH / 2); ctx.fill();
+      // 点滅キャレット
+      if (p < 1 && Math.floor(wavePhase * 3) % 2 === 0) {
+        ctx.fillStyle = 'rgba(124, 92, 246, 0.95)';
+        rrect(ctx, marginX + fw + 3, y - lineH * 0.25, 3, lineH * 1.5, 1.5); ctx.fill();
+      }
+    }
+  }
+}
+
 function drawWaveFrame() {
   const ctx = wave.getContext('2d');
   const w = wave.width, h = wave.height, mid = h * 0.52;
@@ -1030,6 +1099,7 @@ if (savedEngine === 'webspeech' || savedEngine === 'whisper') engineSelect.value
 if (!getSR()) {
   const opt = engineSelect.querySelector('option[value="webspeech"]');
   if (opt) opt.textContent = 'Web Speech API（このブラウザは非対応）';
+  if (engineSelect.value === 'webspeech') engineSelect.value = 'whisper'; // 非対応なら Whisper に
 }
 applyEngineUI();
 updateHomeUI();
