@@ -62,6 +62,20 @@ const claudePromptPreview  = $('claudePromptPreview');
 const claudeInstruction    = $('claudeInstruction');
 const claudeInstructionReset = $('claudeInstructionReset');
 
+const appVersionEl   = $('appVersion');
+const partDept       = $('partDept');
+const partDeptOther  = $('partDeptOther');
+const partName       = $('partName');
+const partAdd        = $('partAdd');
+const partList       = $('partList');
+
+// バージョン / 更新日
+const APP_VERSION = 'v1.1';
+const APP_UPDATED = '2026/07/15 20:30';
+
+let participants = [];   // { dept, name }
+let sttActivity = 0;     // Web Speech 用の波の活性度
+
 /* ===== 状態 ===== */
 const SAMPLE_RATE = 16000;
 const CHUNK_MIN_SEC = 4;
@@ -215,6 +229,27 @@ recordBtn.addEventListener('click', async () => {
 
 async function startRecording() {
   hideError();
+  activeEngine = engineSelect.value;
+
+  // --- Web Speech: 認識専用（getUserMedia を使わずマイク競合を回避） ---
+  if (activeEngine === 'webspeech') {
+    const ok = startWebSpeech();
+    if (!ok) return; // startWebSpeech がエラー表示
+    recording = true;
+    recordedBlob = null;
+    sttActivity = 0.4;
+    audioWrap.hidden = true;
+    recordBtn.classList.add('recording');
+    recordBtn.setAttribute('aria-label', '録音停止');
+    setStatus('working', '認識中…（Web Speech）');
+    updateHomeUI();
+    startTime = Date.now();
+    updateTimer();
+    timerInterval = setInterval(updateTimer, 250);
+    return;
+  }
+
+  // --- Whisper: 録音（音声保存）＋停止後に高精度文字起こし ---
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
@@ -228,8 +263,7 @@ async function startRecording() {
     return;
   }
 
-  activeEngine = engineSelect.value;
-  const useLive = activeEngine === 'whisper' && liveEnabled.checked;
+  const useLive = liveEnabled.checked;
   if (useLive) worker.postMessage({ type: 'load', model: liveModel.value });
 
   // MediaRecorder（再生・高精度再処理・音声出力用の音声を保持）
@@ -274,14 +308,7 @@ async function startRecording() {
   recordBtn.classList.add('recording');
   recordBtn.setAttribute('aria-label', '録音停止');
 
-  if (activeEngine === 'webspeech') {
-    const ok = startWebSpeech();
-    setStatus('working', ok ? 'Web Speech で認識中…' : '録音中（音声認識が使えません）');
-  } else if (useLive) {
-    setStatus('working', '準備中…');
-  } else {
-    setStatus('working', '録音中');
-  }
+  setStatus('working', useLive ? '準備中…' : '録音中');
 
   updateHomeUI();
 
@@ -330,6 +357,8 @@ async function stopRecording() {
     setStatus('ready', 'モデル準備完了');
     updateHomeUI();
   }
+  // 文字起こし＋音声を自動的に履歴へ保存（最大10件）
+  await autoSaveRecording();
 }
 
 /* =========================================================
@@ -382,6 +411,7 @@ function onSpeechResult(e) {
   }
   liveTranscript.value = joinStt(sttBase, sttFinal + interim);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
+  sttActivity = 0.9; // 発話に反応して波を動かす
 }
 
 function onSpeechError(e) {
@@ -606,6 +636,7 @@ function waveLoop() {
   wavePhase += 0.02 + waveLevel * 0.055;
   // 高精度処理中は「文字が打たれていく」別アニメーションを表示
   if (homeProcessing && !recording) { drawProcessingFrame(); return; }
+  sttActivity *= 0.9;
   let target;
   if (recording && analyser) {
     analyser.getByteTimeDomainData(waveBuf);
@@ -615,6 +646,8 @@ function waveLoop() {
     // ノイズゲート＋ゲイン: 静かなら凪(0)、声が大きいほど大きく（0〜1）
     const gated = Math.max(0, r - 0.008);
     target = Math.min(1, gated * 8);
+  } else if (recording && activeEngine === 'webspeech') {
+    target = sttActivity; // 音声解析なし → 発話イベントで揺らす
   } else {
     target = 0.14 + Math.sin(wavePhase * 1.4) * 0.05; // 処理中はゆるやかに揺れる
   }
@@ -749,11 +782,14 @@ function currentMinutes() {
   return {
     name: meetingName.value.trim() || '議事録',
     date: meetingDate.value || todayStr(),
+    participants: participants.slice(),
     summary: fromBullets(secSummary.value),
     decisions: fromBullets(secDecisions.value),
     todos: fromBullets(secTodos.value),
   };
 }
+function participantLabel(p) { return p.dept ? (p.name ? `${p.dept} ${p.name}` : p.dept) : (p.name || ''); }
+function participantsText(list) { return (list || []).map(participantLabel).filter(Boolean).join('、'); }
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -764,6 +800,7 @@ function buildPlainText(m) {
   const lines = [];
   lines.push(m.name);
   lines.push(`日付: ${m.date}`);
+  if (m.participants && m.participants.length) lines.push(`参加者: ${participantsText(m.participants)}`);
   lines.push('', '■ 要点・見出し', m.summary.length ? toBullets(m.summary) : '（なし）');
   lines.push('', '■ 決定事項', m.decisions.length ? toBullets(m.decisions) : '（なし）');
   lines.push('', '■ ToDo', m.todos.length ? toBullets(m.todos) : '（なし）');
@@ -771,7 +808,8 @@ function buildPlainText(m) {
 }
 function buildMarkdown(m) {
   const sec = (t, arr) => `## ${t}\n\n` + (arr.length ? arr.map((x) => `- ${x}`).join('\n') : '（なし）') + '\n';
-  return `# ${m.name}\n\n**日付:** ${m.date}\n\n` + sec('要点・見出し', m.summary) + '\n' + sec('決定事項', m.decisions) + '\n' + sec('ToDo', m.todos);
+  const parts = (m.participants && m.participants.length) ? `**参加者:** ${participantsText(m.participants)}\n\n` : '';
+  return `# ${m.name}\n\n**日付:** ${m.date}\n\n${parts}` + sec('要点・見出し', m.summary) + '\n' + sec('決定事項', m.decisions) + '\n' + sec('ToDo', m.todos);
 }
 function download(filename, content, mime) {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
@@ -795,6 +833,7 @@ exportDocx.addEventListener('click', async () => {
   const doc = new Document({ sections: [{ children: [
     new Paragraph({ text: m.name, heading: HeadingLevel.TITLE }),
     new Paragraph({ children: [new TextRun({ text: `日付: ${m.date}`, bold: true })] }),
+    ...(m.participants && m.participants.length ? [new Paragraph({ children: [new TextRun({ text: `参加者: ${participantsText(m.participants)}` })] })] : []),
     new Paragraph({ text: '要点・見出し', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.summary),
     new Paragraph({ text: '決定事項', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.decisions),
     new Paragraph({ text: 'ToDo', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.todos),
@@ -879,6 +918,84 @@ function audioBufferToWav(buffer) {
 }
 
 /* =========================================================
+ * 参加者（部署・氏名）
+ * =======================================================*/
+function renderParticipants() {
+  partList.innerHTML = '';
+  participants.forEach((p, idx) => {
+    const li = document.createElement('li');
+    li.className = 'participant-chip';
+    const span = document.createElement('span');
+    if (p.dept) { const d = document.createElement('span'); d.className = 'dept'; d.textContent = p.dept; span.appendChild(d); }
+    if (p.name) span.appendChild(document.createTextNode((p.dept ? ' ' : '') + p.name));
+    li.appendChild(span);
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.textContent = '×'; btn.setAttribute('aria-label', '削除');
+    btn.addEventListener('click', () => { participants.splice(idx, 1); renderParticipants(); });
+    li.appendChild(btn);
+    partList.appendChild(li);
+  });
+}
+partDept.addEventListener('change', () => {
+  const other = partDept.value === '__other';
+  partDeptOther.hidden = !other;
+  if (other) partDeptOther.focus();
+});
+partAdd.addEventListener('click', () => {
+  const dept = partDept.value === '__other' ? partDeptOther.value.trim() : partDept.value;
+  const name = partName.value.trim();
+  if (!dept && !name) { showError('部署を選ぶか、氏名を入力してください。'); return; }
+  hideError();
+  participants.push({ dept, name });
+  renderParticipants();
+  partName.value = ''; partDeptOther.value = ''; partDept.value = ''; partDeptOther.hidden = true;
+});
+partName.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); partAdd.click(); } });
+
+/* =========================================================
+ * IndexedDB（録音音声の保存）
+ * =======================================================*/
+const IDB_NAME = 'noteloop', IDB_STORE = 'audio';
+function idbOpen() {
+  return new Promise((res, rej) => {
+    let r;
+    try { r = indexedDB.open(IDB_NAME, 1); } catch (e) { return rej(e); }
+    r.onupgradeneeded = () => { try { r.result.createObjectStore(IDB_STORE); } catch (_) {} };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function idbPut(key, val) { return idbOpen().then((db) => new Promise((res, rej) => { const tx = db.transaction(IDB_STORE, 'readwrite'); tx.objectStore(IDB_STORE).put(val, key); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); })); }
+function idbGet(key) { return idbOpen().then((db) => new Promise((res, rej) => { const tx = db.transaction(IDB_STORE, 'readonly'); const rq = tx.objectStore(IDB_STORE).get(key); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error); })); }
+function idbDel(key) { return idbOpen().then((db) => new Promise((res) => { const tx = db.transaction(IDB_STORE, 'readwrite'); tx.objectStore(IDB_STORE).delete(key); tx.oncomplete = () => res(); tx.onerror = () => res(); })).catch(() => {}); }
+
+/* =========================================================
+ * 録音終了時の自動保存（文字起こし＋音声、最大10件）
+ * =======================================================*/
+async function autoSaveRecording() {
+  const transcript = liveTranscript.value.trim();
+  if (!transcript) { updateHomeUI(); return; }
+  const m = currentMinutes();
+  const gen = generateMinutes(transcript);
+  const id = 'rec-' + Date.now() + '-' + Math.floor(performance.now());
+  let audio = null;
+  if (recordedBlob) {
+    try { await idbPut(id, recordedBlob); audio = { ext: extFromMime(recordedBlob.type), size: recordedBlob.size }; }
+    catch (_) { audio = null; }
+  }
+  const entry = {
+    id, name: m.name, date: m.date, participants: m.participants,
+    transcript, summary: gen.summary, decisions: gen.decisions, todos: gen.todos,
+    audio, ts: Date.now(), auto: true,
+  };
+  const list = loadStore();
+  list.push(entry);
+  while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
+  saveStore(list);
+  renderHistory();
+}
+
+/* =========================================================
  * 過去の議事録一覧（localStorage）
  * =======================================================*/
 const STORE_KEY = 'noteloop_minutes_v1';
@@ -914,24 +1031,43 @@ function renderHistory() {
   for (const item of list.slice().reverse()) {
     const li = document.createElement('li');
     li.className = 'history-item';
-    const excerpt = [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
+    const excerpt = item.transcript || [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
+    const meta = item.date + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '') + (item.audio ? ' ・ 🎧' : '');
     li.innerHTML = `<h3></h3><span class="meta"></span><span class="excerpt"></span>
-      <div class="history-actions"><button class="open" type="button">開く</button><button class="del" type="button">削除</button></div>`;
+      <div class="history-actions"><button class="open" type="button">開く</button><button class="audio" type="button" hidden>🎧 音声</button><button class="del" type="button">削除</button></div>`;
     li.querySelector('h3').textContent = item.name + (item._sample ? '（サンプル）' : '');
-    li.querySelector('.meta').textContent = item.date;
+    li.querySelector('.meta').textContent = meta;
     li.querySelector('.excerpt').textContent = excerpt;
     li.querySelector('.open').addEventListener('click', () => openMinutes(item));
+    const audioBtn = li.querySelector('.audio');
+    if (item.audio) { audioBtn.hidden = false; audioBtn.addEventListener('click', () => downloadHistoryAudio(item)); }
     li.querySelector('.del').addEventListener('click', () => deleteMinutes(item.id));
     historyList.appendChild(li);
   }
 }
+async function downloadHistoryAudio(item) {
+  try {
+    const blob = await idbGet(item.id);
+    if (!blob) { showError('保存された音声が見つかりませんでした。'); return; }
+    hideError();
+    download(`${safeFileName(item)}.${(item.audio && item.audio.ext) || 'webm'}`, blob, blob.type || 'audio/webm');
+  } catch (_) { showError('音声の読み込みに失敗しました。'); }
+}
 function openMinutes(item) {
   meetingName.value = item.name || '';
   meetingDate.value = item.date || '';
+  participants = (item.participants || []).map((p) => ({ dept: p.dept || '', name: p.name || '' }));
+  renderParticipants();
   fillMinutesUI({ summary: item.summary || [], decisions: item.decisions || [], todos: item.todos || [] });
+  if (item.transcript) liveTranscript.value = item.transcript;
   showScreen('screen-minutes', '議事録');
 }
-function deleteMinutes(id) { saveStore(loadStore().filter((x) => x.id !== id)); renderHistory(); }
+function deleteMinutes(id) {
+  const item = loadStore().find((x) => x.id === id);
+  if (item && item.audio) idbDel(id);
+  saveStore(loadStore().filter((x) => x.id !== id));
+  renderHistory();
+}
 
 saveMinutes.addEventListener('click', () => {
   const m = currentMinutes();
@@ -939,7 +1075,8 @@ saveMinutes.addEventListener('click', () => {
   hideError();
   const list = loadStore();
   const id = 'm-' + Date.now() + '-' + Math.floor(performance.now());
-  list.push({ id, name: m.name, date: m.date, summary: m.summary, decisions: m.decisions, todos: m.todos });
+  list.push({ id, name: m.name, date: m.date, participants: m.participants, transcript: liveTranscript.value.trim(), summary: m.summary, decisions: m.decisions, todos: m.todos });
+  while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
   saveStore(list);
   renderHistory();
   showScreen('screen-history', '過去の議事録');
@@ -983,11 +1120,12 @@ function buildClaudePrompt() {
       `■ ToDo\n${m.todos.length ? toBullets(m.todos) : '（なし）'}`;
   }
 
+  const partLine = (m.participants && m.participants.length) ? `\n参加者: ${participantsText(m.participants)}` : '';
   return `${instr}
 
 【会議情報】
 会議名: ${m.name}
-日付: ${m.date}${draft}
+日付: ${m.date}${partLine}${draft}
 
 【文字起こし】
 ${transcript}`;
@@ -1103,6 +1241,8 @@ if (!getSR()) {
 }
 applyEngineUI();
 updateHomeUI();
+renderParticipants();
+appVersionEl.innerHTML = `${APP_VERSION}<br>${APP_UPDATED}`;
 seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）

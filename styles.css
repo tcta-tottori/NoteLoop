@@ -135,6 +135,28 @@ a:hover { text-decoration: underline; }
 }
 /* ホームはマイクボタン固定分の余白を確保 */
 .home-screen { min-height: calc(100vh - 120px); padding-bottom: 120px; position: relative; }
+.app-version {
+  position: absolute; top: 6px; right: 4px; z-index: 6;
+  font-size: 10px; color: var(--faint); font-weight: 600; letter-spacing: .02em;
+  text-align: right; line-height: 1.4; pointer-events: none;
+}
+
+/* 参加者 */
+.participants-field { margin-top: 14px; }
+.participant-add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.participant-add select { flex: 1 1 44%; min-width: 130px; }
+.participant-add input { flex: 1 1 30%; min-width: 110px; }
+.participant-add .chip-btn { flex: none; }
+.participant-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.participant-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: color-mix(in srgb, var(--brand1) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brand1) 25%, var(--border));
+  color: var(--text); border-radius: 999px; padding: 6px 8px 6px 12px; font-size: 12.5px; font-weight: 600;
+}
+.participant-chip .dept { color: var(--brand1); }
+.participant-chip button { background: none; border: none; cursor: pointer; color: var(--muted); font-size: 15px; line-height: 1; padding: 0 2px; }
+.participant-chip button:hover { color: var(--danger); }
 .screen { display: none; }
 .screen.active { display: block; animation: fade .22s ease; }
 @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

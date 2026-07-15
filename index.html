@@ -62,6 +62,8 @@
     <!-- ========== ホーム: 録音・文字起こし ========== -->
     <section class="screen active home-screen" id="screen-home" aria-labelledby="screenTitle">
 
+      <div class="app-version" id="appVersion" aria-label="バージョン情報"></div>
+
       <!-- 上部: ウェーブアニメーション -->
       <div class="wave-wrap" id="waveWrap" hidden>
         <canvas id="wave" class="wave" width="900" height="140" aria-hidden="true"></canvas>
@@ -124,13 +126,38 @@
       <div class="panel">
         <div class="meta-grid">
           <div class="field">
-            <label for="meetingName">会議名</label>
+            <label for="meetingName">タイトル（会議名）</label>
             <input id="meetingName" type="text" placeholder="例: 定例ミーティング" />
           </div>
           <div class="field">
             <label for="meetingDate">日付</label>
             <input id="meetingDate" type="date" />
           </div>
+        </div>
+
+        <div class="field participants-field">
+          <label>参加者（部署・氏名）</label>
+          <div class="participant-add">
+            <select id="partDept" aria-label="部署">
+              <option value="">部署を選択</option>
+              <option>営業企画部</option>
+              <option>経営企画部</option>
+              <option>生産管理部</option>
+              <option>商品部</option>
+              <option>技術部</option>
+              <option>品質保証部</option>
+              <option>製造技術部</option>
+              <option>プロセス技術部</option>
+              <option>化成品部</option>
+              <option>総務部</option>
+              <option>新建高</option>
+              <option value="__other">その他（手入力）</option>
+            </select>
+            <input id="partDeptOther" type="text" placeholder="部署名を入力" hidden />
+            <input id="partName" type="text" placeholder="氏名（任意）" />
+            <button id="partAdd" class="chip-btn" type="button">＋ 追加</button>
+          </div>
+          <ul id="partList" class="participant-list"></ul>
         </div>
 
         <div class="gen-row">
