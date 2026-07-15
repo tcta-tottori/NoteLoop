@@ -7,6 +7,12 @@
 
 const $ = (id) => document.getElementById(id);
 
+/* ===== インラインSVGアイコン（絵文字を使わず、アプリUIに統一） ===== */
+const SVG_ATTR = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+const ICO_DOWNLOAD   = `<svg class="btn-ico" ${SVG_ATTR}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+const ICO_MUSIC      = `<svg class="btn-ico" ${SVG_ATTR}><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
+const ICO_HEADPHONES = `<svg class="btn-ico" ${SVG_ATTR}><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg>`;
+
 /* ===== 要素 ===== */
 const recordBtn      = $('recordBtn');
 const recHint        = $('recHint');
@@ -27,7 +33,6 @@ const downloadAudio  = $('downloadAudio');
 const downloadWav    = $('downloadWav');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
-const toMinutes      = $('toMinutes');
 
 const LANGUAGE       = 'japanese';   // 日本語固定
 const engineSelect   = $('engineSelect');
@@ -87,8 +92,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.1';
-const APP_UPDATED = '2026.7.15 23:00';
+const APP_VERSION = 'Ver.1.2';
+const APP_UPDATED = '2026.7.15';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -167,7 +172,6 @@ function showScreen(id, title) {
   if (id === 'screen-home') updateHomeUI();
   if (id === 'screen-mail') prepareMailFromMinutes();
 }
-toMinutes.addEventListener('click', () => showScreen('screen-minutes', '議事録'));
 
 /* =========================================================
  * ホーム画面の表示状態（最小構成: 待機はマイクと点滅案内のみ）
@@ -183,7 +187,6 @@ function updateHomeUI() {
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   transcriptPanel.hidden = !(recording || hasText || hasAudio);
   transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
-  toMinutes.hidden = !(!recording && !homeProcessing && hasText);
   updateFabState();
 
   if (showWave) startWave(); else stopWave();
@@ -284,6 +287,9 @@ async function startRecording() {
     recordedBlob = null;
     sttActivity = 0.4;
     audioWrap.hidden = true;
+    // 認識と並行して音声も録音し、停止後に「録音した音声」の確認・保存を可能にする。
+    // マイク取得や録音に失敗しても認識は継続する（音声カードが出ないだけ）。
+    await startWebSpeechAudioCapture();
     setStatus('working', '認識中…（Web Speech）');
     updateHomeUI();
     startTime = Date.now();
@@ -359,6 +365,32 @@ async function startRecording() {
   if (useLive) liveTimer = setInterval(() => maybeSendChunk(false), LIVE_INTERVAL_MS);
 }
 
+/**
+ * Web Speech 認識中に、音声を並行して録音する（確認・保存用）。
+ * マイク取得や MediaRecorder に失敗した場合は録音なしで認識のみ継続。
+ */
+async function startWebSpeechAudioCapture() {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (_) { mediaStream = null; return; } // 認識は Web Speech 側の独自マイクで継続
+  recordedBlobs = [];
+  try {
+    const mime = pickAudioMime();
+    mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
+    mediaRecorder.start();
+  } catch (_) { mediaRecorder = null; }
+  // 波形を実際の音声レベルで動かす（取得できたときのみ）
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    sourceNode = audioCtx.createMediaStreamSource(mediaStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    sourceNode.connect(analyser);
+  } catch (_) { analyser = null; }
+}
+
 async function stopRecording() {
   recording = false;
   recHint.hidden = true;
@@ -380,7 +412,7 @@ async function stopRecording() {
       downloadAudio.disabled = false;
       downloadWav.disabled = false;
       // 保存ボタンに実際の拡張子を表示
-      downloadAudio.innerHTML = `<span aria-hidden="true">⬇</span> 音声を保存 (.${extFromMime(recordedBlob.type)})`;
+      downloadAudio.innerHTML = `${ICO_DOWNLOAD} 音声を保存 (.${extFromMime(recordedBlob.type)})`;
     }
   }
   teardownAudio();
@@ -450,7 +482,13 @@ function composeSpeech(interim) {
   for (const s of sttSegs) if (s) parts.push(s);
   const tail = (sttCurFinal + (interim || '')).trim();
   if (tail) parts.push(tail);
-  return formatTranscript(parts.join('\n'));
+  // 各セグメント内のループを圧縮し、直前と同一のセグメントは除外して重複を防ぐ
+  const cleaned = [];
+  for (const p of parts) {
+    const c = collapseLoops(p).trim();
+    if (c && c !== cleaned[cleaned.length - 1]) cleaned.push(c);
+  }
+  return formatTranscript(cleaned.join('\n'));
 }
 
 function onSpeechResult(e) {
@@ -476,11 +514,17 @@ function onSpeechError(e) {
   // 'no-speech' / 'aborted' は無視（onend で再開）
 }
 
+/** 確定分をセグメント配列へ追加（ループ圧縮＋直前と同一なら破棄） */
+function commitSttSegment() {
+  const seg = collapseLoops(sttCurFinal.trim()).trim();
+  sttCurFinal = '';
+  if (seg && seg !== sttSegs[sttSegs.length - 1]) sttSegs.push(seg);
+}
+
 function onSpeechEnd() {
   // 録音継続中に認識が切れたら、確定分をコミットして新インスタンスで再開
   if (recording && activeEngine === 'webspeech') {
-    if (sttCurFinal.trim()) sttSegs.push(sttCurFinal.trim());
-    sttCurFinal = '';
+    commitSttSegment();
     setTimeout(() => { if (recording && activeEngine === 'webspeech') beginRecognition(); }, 200);
   }
 }
@@ -493,8 +537,7 @@ function stopWebSpeech() {
     try { recognition.abort(); } catch (_) {}
     recognition = null;
   }
-  if (sttCurFinal.trim()) sttSegs.push(sttCurFinal.trim());
-  sttCurFinal = '';
+  commitSttSegment();
   liveTranscript.value = composeSpeech('');
 }
 
@@ -611,19 +654,37 @@ function formatDateJp(d) {
   return `${+m[2]}/${+m[3]}（${w}）`;
 }
 
+/**
+ * 直後に同じ語句が繰り返される「ループ」を圧縮する。
+ * 音声認識（Whisper / Web Speech とも）で起きやすい
+ * 「大根ポケモン大根ポケモン大根ポケモン」「とひどいですとひどいです」等を 1 回にまとめる。
+ */
+function collapseLoops(text) {
+  if (!text) return '';
+  let t = text;
+  let prev;
+  // 収束するまで繰り返し圧縮（入れ子のループにも対応）
+  do {
+    prev = t;
+    // 5〜40字のまとまった語句が 2 回以上連続 → 1 回に
+    t = t.replace(/(.{5,40}?)\1{1,}/g, '$1');
+    // 2〜4字の短い語句が 3 回以上連続 → 2 回まで（言い直し等は残す）
+    t = t.replace(/(.{2,4}?)\1{2,}/g, '$1$1');
+    // 1 字の 4 回以上連続 → 2 字に
+    t = t.replace(/(.)\1{3,}/g, '$1$1');
+  } while (t !== prev);
+  return t;
+}
+
 /** Whisper の反復ハルシネーションを後処理で除去 */
 function cleanupTranscript(text) {
   if (!text) return '';
-  let t = text.replace(/\s+/g, ' ').trim();
-  // 短い文字列の連続反復（例: 「5.5.5.5」「このようにこのように」）を 2 回までに圧縮
-  t = t.replace(/(.{1,12}?)\1{3,}/g, '$1$1');
+  let t = collapseLoops(text.replace(/\s+/g, ' ').trim());
   // 句読点で区切り、直前と同じ断片が連続したら間引く
   const segs = t.split(/(?<=[。．！？!?、,])/).map((s) => s.trim()).filter(Boolean);
   const out = [];
-  let rep = 0;
   for (const s of segs) {
-    const prev = out[out.length - 1];
-    if (prev && s === prev) { rep++; if (rep >= 1) continue; } else { rep = 0; }
+    if (out.length && s === out[out.length - 1]) continue; // 直前と同一の文は捨てる
     out.push(s);
   }
   return out.join(' ').replace(/\s+/g, ' ').trim();
@@ -1083,7 +1144,7 @@ downloadWav.addEventListener('click', async () => {
     showError('WAV への変換に失敗しました: ' + (err && err.message ? err.message : err));
   } finally {
     downloadWav.disabled = false;
-    downloadWav.innerHTML = '<span aria-hidden="true">🎵</span> WAVに変換';
+    downloadWav.innerHTML = `${ICO_MUSIC} WAVに変換`;
   }
 });
 function audioBufferToWav(buffer) {
@@ -1252,9 +1313,9 @@ function renderHistory() {
     const li = document.createElement('li');
     li.className = 'history-item';
     const excerpt = item.transcript || [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
-    const meta = formatDateJp(item.date) + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '') + (item.audio ? ' ・ 🎧' : '');
+    const meta = formatDateJp(item.date) + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '') + (item.audio ? ' ・ 音声あり' : '');
     li.innerHTML = `<h3></h3><span class="meta"></span><span class="excerpt"></span>
-      <div class="history-actions"><button class="open" type="button">開く</button><button class="audio" type="button" hidden>🎧 音声</button><button class="del" type="button">削除</button></div>`;
+      <div class="history-actions"><button class="open" type="button">開く</button><button class="audio" type="button" hidden>${ICO_HEADPHONES} 音声</button><button class="del" type="button">削除</button></div>`;
     li.querySelector('h3').textContent = item.name + (item._sample ? '（サンプル）' : '');
     li.querySelector('.meta').textContent = meta;
     li.querySelector('.excerpt').textContent = excerpt;
