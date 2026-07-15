@@ -1,13 +1,13 @@
 // app.js — NoteLoop メインロジック
 // 録音（MediaRecorder + Web Audio）→ ブラウザ内 Whisper 文字起こし（worker.js）
-// → 議事録整形（簡易ロジック / 差し替え可能）→ txt / md / docx / メール下書き出力
+//   ・録音中: 軽量モデルで暫定表示（ライブ）
+//   ・停止後: 音声全体を高精度モデルで再処理して確定版に置き換え（精度重視）
+// → 議事録整形（簡易ロジック / 差し替え可）→ txt / md / docx / メール / 音声 出力
 'use strict';
 
-/* =========================================================
- * 要素の取得
- * =======================================================*/
 const $ = (id) => document.getElementById(id);
 
+/* ===== 要素 ===== */
 const recordBtn      = $('recordBtn');
 const recHint        = $('recHint');
 const timerEl        = $('timer');
@@ -23,11 +23,13 @@ const downloadAudio  = $('downloadAudio');
 const downloadWav    = $('downloadWav');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
+const toMinutes      = $('toMinutes');
 
 const langSelect     = $('langSelect');
-const modelSelect    = $('modelSelect');
-const settingsToggle = $('settingsToggle');
-const settingsPanel  = $('settingsPanel');
+const accuracyModel  = $('accuracyModel');
+const liveEnabled    = $('liveEnabled');
+const liveModel      = $('liveModel');
+const liveModelField = $('liveModelField');
 
 const meetingName    = $('meetingName');
 const meetingDate    = $('meetingDate');
@@ -43,113 +45,107 @@ const exportDocx     = $('exportDocx');
 const exportMail     = $('exportMail');
 const saveMinutes    = $('saveMinutes');
 const historyList    = $('historyList');
+const screenTitle    = $('screenTitle');
 
-/* =========================================================
- * 状態
- * =======================================================*/
-const SAMPLE_RATE = 16000;         // Whisper が期待するサンプルレート
-const CHUNK_MIN_SEC = 4;           // ライブ文字起こしを走らせる最小の溜まり秒数
-const LIVE_INTERVAL_MS = 3000;     // ライブ文字起こしの間隔
+/* ===== 状態 ===== */
+const SAMPLE_RATE = 16000;
+const CHUNK_MIN_SEC = 4;
+const LIVE_INTERVAL_MS = 3000;
 
 let recording = false;
 let mediaStream = null;
 let mediaRecorder = null;
 let recordedBlobs = [];
+let recordedBlob = null;
 let audioCtx = null;
 let sourceNode = null;
 let processorNode = null;
 let analyser = null;
-let recordedBlob = null;   // 録音した音声（再生・ダウンロード用）
 let rafId = null;
 let liveTimer = null;
 let startTime = 0;
 let timerInterval = null;
+let procTimer = null;   // 高精度処理の経過時間表示
 
-// 文字起こし用の PCM バッファ
-let pendingChunks = [];   // まだワーカーへ送っていない Float32Array 群
+// ライブ文字起こし用の PCM バッファ
+let pendingChunks = [];
 let workerBusy = false;
 let reqId = 0;
-let finalizing = false;
-let finalizeResolve = null;
+
+/* =========================================================
+ * 画面切り替え（下部メニュー）
+ * =======================================================*/
+const navBtns = Array.from(document.querySelectorAll('.nav-btn'));
+navBtns.forEach((btn) => {
+  btn.addEventListener('click', () => showScreen(btn.dataset.target, btn.dataset.title));
+});
+function showScreen(id, title) {
+  document.querySelectorAll('.screen').forEach((s) => {
+    const active = s.id === id;
+    s.classList.toggle('active', active);
+    s.hidden = !active;
+  });
+  navBtns.forEach((b) => b.classList.toggle('active', b.dataset.target === id));
+  if (title) screenTitle.textContent = title;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+toMinutes.addEventListener('click', () => showScreen('screen-minutes', '議事録'));
 
 /* =========================================================
  * Web Worker（Whisper）
  * =======================================================*/
 const worker = new Worker('./worker.js', { type: 'module' });
-let modelReady = false;
+let finalResolve = null;   // 高精度パス完了を待つ Promise
 
 worker.onmessage = (e) => {
   const msg = e.data || {};
   switch (msg.type) {
-    case 'progress': {
-      // モデルファイルのダウンロード進捗
-      if (msg.data && typeof msg.data.progress === 'number') {
-        setModelLoading(msg.data.progress, msg.data.file);
+    case 'progress':
+      if (msg.data && typeof msg.data.progress === 'number') setModelLoading(msg.data.progress);
+      break;
+    case 'ready':
+      setStatus('ready', 'モデル準備完了');
+      break;
+    case 'result':
+      if (msg.mode === 'final') {
+        // 高精度パスの結果で置き換え
+        if (msg.text) liveTranscript.value = msg.text;
+        if (finalResolve) { finalResolve(); finalResolve = null; }
+      } else {
+        // ライブ（暫定）結果を追記
+        workerBusy = false;
+        if (msg.text) appendTranscript(msg.text);
+        maybeSendChunk(false);
       }
       break;
-    }
-    case 'ready': {
-      modelReady = true;
-      setModelReady();
-      break;
-    }
-    case 'result': {
-      workerBusy = false;
-      if (msg.text) appendTranscript(msg.text);
-      // まだ溜まっていれば続けて処理
-      maybeSendChunk(finalizing);
-      if (finalizing && pendingChunks.length === 0 && !workerBusy) {
-        if (finalizeResolve) { finalizeResolve(); finalizeResolve = null; }
+    case 'error':
+      if (msg.mode === 'final') {
+        if (finalResolve) { finalResolve(); finalResolve = null; }
+      } else {
+        workerBusy = false;
       }
-      updateWorkingChip();
-      break;
-    }
-    case 'error': {
-      workerBusy = false;
       showError('文字起こしエラー: ' + msg.message);
-      if (finalizing && finalizeResolve) { finalizeResolve(); finalizeResolve = null; }
-      updateWorkingChip();
       break;
-    }
   }
 };
 
-function setModelLoading(progress, file) {
-  modelReady = false;
-  modelStatus.textContent = 'モデル読み込み中…';
-  modelStatus.className = 'status-chip loading';
+function setModelLoading(progress) {
+  setStatus('loading', 'モデル読み込み中…');
   progressWrap.hidden = false;
   progressBar.style.width = Math.max(2, Math.min(100, progress)).toFixed(0) + '%';
 }
-function setModelReady() {
-  modelStatus.textContent = 'モデル準備完了';
-  modelStatus.className = 'status-chip ready';
-  progressWrap.hidden = true;
-}
-function updateWorkingChip() {
-  if (!modelReady) return;
-  if (workerBusy) {
-    modelStatus.textContent = '文字起こし中…';
-    modelStatus.className = 'status-chip working';
-  } else {
-    setModelReady();
-  }
-}
-
-/** 現在選択中のモデルを読み込む（初回のみダウンロード） */
-function ensureModelLoaded() {
-  worker.postMessage({ type: 'load', model: modelSelect.value });
+function setStatus(kind, text) {
+  modelStatus.textContent = text;
+  modelStatus.className = 'status-chip' + (kind ? ' ' + kind : '');
+  if (kind === 'ready') progressWrap.hidden = true;
 }
 
 /* =========================================================
  * 録音
  * =======================================================*/
 recordBtn.addEventListener('click', async () => {
-  if (recording) {
-    await stopRecording();
-  } else {
-    await startRecording();
-  }
+  if (recording) await stopRecording();
+  else await startRecording();
 });
 
 async function startRecording() {
@@ -167,69 +163,64 @@ async function startRecording() {
     return;
   }
 
-  // モデルの読み込みを開始（未読み込みなら）
-  ensureModelLoaded();
+  const useLive = liveEnabled.checked;
+  if (useLive) worker.postMessage({ type: 'load', model: liveModel.value });
 
-  // --- MediaRecorder（再生用の音声を保持） ---
+  // MediaRecorder（再生・高精度再処理用の音声を保持）
   recordedBlobs = [];
+  recordedBlob = null;
   try {
     mediaRecorder = new MediaRecorder(mediaStream);
     mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
     mediaRecorder.start();
-  } catch (_) {
-    mediaRecorder = null; // 再生用は無くても録音・文字起こしは続行
-  }
+  } catch (_) { mediaRecorder = null; }
 
-  // --- Web Audio（文字起こし用 PCM を 16kHz で取得 + 波形表示） ---
+  // Web Audio（波形表示 + ライブ用 PCM を 16kHz で取得）
   audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
   if (audioCtx.state === 'suspended') await audioCtx.resume();
   sourceNode = audioCtx.createMediaStreamSource(mediaStream);
-
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 1024;
   sourceNode.connect(analyser);
 
-  processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
-  processorNode.onaudioprocess = (e) => {
-    if (!recording) return;
-    const input = e.inputBuffer.getChannelData(0);
-    pendingChunks.push(new Float32Array(input));
-  };
-  // フィードバック回避のため gain 0 を経由して destination へ接続
-  const silent = audioCtx.createGain();
-  silent.gain.value = 0;
-  sourceNode.connect(processorNode);
-  processorNode.connect(silent);
-  silent.connect(audioCtx.destination);
+  if (useLive) {
+    processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
+    processorNode.onaudioprocess = (e) => {
+      if (!recording) return;
+      pendingChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    const silent = audioCtx.createGain();
+    silent.gain.value = 0;
+    sourceNode.connect(processorNode);
+    processorNode.connect(silent);
+    silent.connect(audioCtx.destination);
+  }
 
-  // 状態更新
   recording = true;
   pendingChunks = [];
-  finalizing = false;
   audioWrap.hidden = true;
   recordBtn.classList.add('recording');
   recordBtn.setAttribute('aria-label', '録音停止');
   recHint.textContent = '録音中… タップで停止';
+  if (useLive) setStatus('working', '準備中…'); else setStatus('', '録音中');
 
   startTime = Date.now();
   updateTimer();
   timerInterval = setInterval(updateTimer, 250);
-
   drawWaveform();
-  liveTimer = setInterval(() => maybeSendChunk(false), LIVE_INTERVAL_MS);
+  if (useLive) liveTimer = setInterval(() => maybeSendChunk(false), LIVE_INTERVAL_MS);
 }
 
 async function stopRecording() {
   recording = false;
   recordBtn.classList.remove('recording');
   recordBtn.setAttribute('aria-label', '録音開始');
-  recHint.textContent = '文字起こしを処理中…';
 
   clearInterval(timerInterval);
-  clearInterval(liveTimer);
-  liveTimer = null;
+  clearInterval(liveTimer); liveTimer = null;
   cancelAnimationFrame(rafId);
 
+  // 録音した音声を確定
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     await new Promise((res) => { mediaRecorder.onstop = res; mediaRecorder.stop(); });
     if (recordedBlobs.length) {
@@ -241,23 +232,15 @@ async function stopRecording() {
       downloadWav.disabled = false;
     }
   }
-
-  // 残りの音声を最終処理
-  finalizing = true;
-  await new Promise((resolve) => {
-    finalizeResolve = resolve;
-    maybeSendChunk(true);
-    // 送るものが無ければ即完了
-    if (!workerBusy && pendingChunks.length === 0) {
-      finalizeResolve = null;
-      resolve();
-    }
-  });
-  finalizing = false;
-  recHint.textContent = 'タップして録音開始';
-
-  // オーディオ資源の解放
   teardownAudio();
+
+  // 高精度パス: 音声全体を再処理して確定版に置き換え
+  if (recordedBlob) {
+    await runFinalPass(recordedBlob);
+  } else {
+    setStatus('ready', 'モデル準備完了');
+  }
+  recHint.textContent = 'タップして録音開始';
 }
 
 function teardownAudio() {
@@ -269,11 +252,57 @@ function teardownAudio() {
   if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
 }
 
-/* =========================================================
- * ライブ文字起こしのチャンク送信
- * =======================================================*/
-function totalSamples(arr) { return arr.reduce((s, a) => s + a.length, 0); }
+/**
+ * 録音停止後の高精度文字起こし（音声全体を 30 秒コンテキストで再処理）。
+ * ライブの暫定テキストを、精度の高い確定版で置き換える。
+ */
+async function runFinalPass(blob) {
+  recordBtn.disabled = true;
+  const procStart = Date.now();
+  setStatus('working', '高精度で文字起こし中…');
+  procTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - procStart) / 1000);
+    setStatus('working', `高精度で文字起こし中…（${s}秒）`);
+  }, 1000);
 
+  try {
+    const audio = await decodeTo16kMono(blob);
+    await new Promise((resolve) => {
+      finalResolve = resolve;
+      worker.postMessage(
+        { type: 'transcribe', id: ++reqId, mode: 'final', longform: true,
+          audio, model: accuracyModel.value, language: langSelect.value },
+        [audio.buffer]
+      );
+    });
+    setStatus('ready', '文字起こし完了');
+  } catch (err) {
+    showError('高精度処理に失敗しました: ' + (err && err.message ? err.message : err));
+    setStatus('ready', 'モデル準備完了');
+  } finally {
+    clearInterval(procTimer); procTimer = null;
+    recordBtn.disabled = false;
+  }
+}
+
+/** 録音 Blob を 16kHz モノラルの Float32 にデコード＆リサンプル */
+async function decodeTo16kMono(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const tmp = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await tmp.decodeAudioData(arrayBuffer);
+  tmp.close();
+  const frames = Math.ceil(decoded.duration * SAMPLE_RATE);
+  const off = new OfflineAudioContext(1, Math.max(frames, 1), SAMPLE_RATE);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  const rendered = await off.startRendering();
+  return rendered.getChannelData(0).slice();
+}
+
+/* ===== ライブ用チャンク送信 ===== */
+function totalSamples(arr) { return arr.reduce((s, a) => s + a.length, 0); }
 function drainPending() {
   const len = totalSamples(pendingChunks);
   const out = new Float32Array(len);
@@ -282,69 +311,50 @@ function drainPending() {
   pendingChunks = [];
   return out;
 }
-
-/**
- * 溜まった音声をワーカーへ送る。
- * force=true（録音停止時）は短くても最後の一片を処理する。
- */
 function maybeSendChunk(force) {
   if (workerBusy) return;
   const len = totalSamples(pendingChunks);
-  const secs = len / SAMPLE_RATE;
   if (len === 0) return;
-  if (!force && secs < CHUNK_MIN_SEC) return;
-  if (force && secs < 0.4) { pendingChunks = []; return; } // ほぼ無音は破棄
-
+  if (!force && len / SAMPLE_RATE < CHUNK_MIN_SEC) return;
   const audio = drainPending();
   workerBusy = true;
-  updateWorkingChip();
+  if (recording) setStatus('working', '文字起こし中…（暫定）');
   worker.postMessage(
-    { type: 'transcribe', id: ++reqId, audio, model: modelSelect.value, language: langSelect.value },
+    { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: liveModel.value, language: langSelect.value },
     [audio.buffer]
   );
 }
-
 function appendTranscript(text) {
   const cur = liveTranscript.value.trimEnd();
   liveTranscript.value = cur ? cur + ' ' + text : text;
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
 }
-
 clearTranscript.addEventListener('click', () => { liveTranscript.value = ''; });
 
-/* =========================================================
- * タイマー & 波形
- * =======================================================*/
+/* ===== タイマー & 波形 ===== */
 function updateTimer() {
   const elapsed = Math.floor((Date.now() - startTime) / 1000);
   const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const s = String(elapsed % 60).padStart(2, '0');
   timerEl.textContent = `${m}:${s}`;
 }
-
 function drawWaveform() {
   const ctx = waveform.getContext('2d');
   const buf = new Uint8Array(analyser.fftSize);
-  const cssColor = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || '#3b5bdb';
-
+  const color = (getComputedStyle(document.documentElement).getPropertyValue('--brand1') || '#4f6ef7').trim();
   const render = () => {
     rafId = requestAnimationFrame(render);
     const w = waveform.width, h = waveform.height;
     analyser.getByteTimeDomainData(buf);
     ctx.clearRect(0, 0, w, h);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = cssColor;
-    ctx.beginPath();
-    const slice = w / buf.length;
-    let x = 0;
+    ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.beginPath();
+    const slice = w / buf.length; let x = 0;
     for (let i = 0; i < buf.length; i++) {
-      const v = buf[i] / 128.0;
-      const y = (v * h) / 2;
+      const y = (buf[i] / 128.0 * h) / 2;
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       x += slice;
     }
-    ctx.lineTo(w, h / 2);
-    ctx.stroke();
+    ctx.lineTo(w, h / 2); ctx.stroke();
   };
   render();
 }
@@ -352,68 +362,43 @@ function drawWaveform() {
 /* =========================================================
  * 議事録化（簡易ロジック / スタブ）
  *   本番ではこの generateMinutes をサーバの Claude 呼び出しに差し替える。
- *   入出力の形（transcript → {summary, decisions, todos}）を保てば置き換え可能。
  * =======================================================*/
 function generateMinutes(transcript) {
   const text = (transcript || '').replace(/\s+/g, ' ').trim();
   if (!text) return { summary: [], decisions: [], todos: [] };
-
-  // 文単位に分割（。！？改行）
-  const sentences = text
-    .split(/(?<=[。．！？!?])\s*/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const sentences = text.split(/(?<=[。．！？!?])\s*/).map((s) => s.trim()).filter(Boolean);
 
   const decisionKw = ['決定', '決めた', '決めま', '決まり', '合意', '承認', '方針', 'することにし', '確定', '採用'];
-  const todoKw     = ['ToDo', 'タスク', '対応し', '確認し', '準備', '実施', '送付', '送りま', '連絡', '作成', '提出',
-                      'までに', '期限', 'お願いし', 'してくださ', '担当', '進めま', '検討し', 'フォロー', '共有し'];
+  const todoKw = ['ToDo', 'タスク', '対応し', '確認し', '準備', '実施', '送付', '送りま', '連絡', '作成', '提出',
+                  'までに', '期限', 'お願いし', 'してくださ', '担当', '進めま', '検討し', 'フォロー', '共有し'];
 
-  const decisions = [];
-  const todos = [];
-  const rest = [];
-
+  const decisions = [], todos = [], rest = [];
   for (const s of sentences) {
     if (decisionKw.some((k) => s.includes(k))) decisions.push(s);
     else if (todoKw.some((k) => s.includes(k))) todos.push(s);
     else rest.push(s);
   }
-
-  // 要点・見出し: 決定/ToDo に振り分けられなかった文から代表を数点
   let summary = rest.slice(0, 5);
   if (summary.length === 0) summary = sentences.slice(0, 3);
-
-  return {
-    summary: dedupe(summary),
-    decisions: dedupe(decisions),
-    todos: dedupe(todos),
-  };
+  return { summary: dedupe(summary), decisions: dedupe(decisions), todos: dedupe(todos) };
 }
-
 function dedupe(arr) {
   const seen = new Set();
   return arr.filter((x) => { const k = x.trim(); if (seen.has(k)) return false; seen.add(k); return true; });
 }
-
-function toBullets(arr) {
-  return arr.map((x) => '・' + x).join('\n');
-}
-function fromBullets(str) {
-  return (str || '').split('\n').map((l) => l.replace(/^[・\-*•]\s*/, '').trim()).filter(Boolean);
-}
-
+function toBullets(arr) { return arr.map((x) => '・' + x).join('\n'); }
+function fromBullets(str) { return (str || '').split('\n').map((l) => l.replace(/^[・\-*•]\s*/, '').trim()).filter(Boolean); }
 function fillMinutesUI(m) {
-  secSummary.value   = toBullets(m.summary);
+  secSummary.value = toBullets(m.summary);
   secDecisions.value = toBullets(m.decisions);
-  secTodos.value     = toBullets(m.todos);
+  secTodos.value = toBullets(m.todos);
 }
-
 function runGenerate() {
   const src = liveTranscript.value.trim();
-  if (!src) { showError('文字起こしが空です。先に録音するか、テキストを入力してください。'); return; }
+  if (!src) { showError('文字起こしが空です。先に録音するか、テキストを入力してください。'); showScreen('screen-home', '録音・文字起こし'); return; }
   hideError();
   fillMinutesUI(generateMinutes(src));
 }
-
 generateBtn.addEventListener('click', runGenerate);
 regenerateBtn.addEventListener('click', runGenerate);
 
@@ -429,40 +414,25 @@ function currentMinutes() {
     todos: fromBullets(secTodos.value),
   };
 }
-
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-
-function safeFileName(m) {
-  return `${m.name}_${m.date}`.replace(/[\\/:*?"<>|\s]+/g, '_');
-}
+function safeFileName(m) { return `${m.name}_${m.date}`.replace(/[\\/:*?"<>|\s]+/g, '_'); }
 
 function buildPlainText(m) {
   const lines = [];
-  lines.push(`${m.name}`);
+  lines.push(m.name);
   lines.push(`日付: ${m.date}`);
-  lines.push('');
-  lines.push('■ 要点・見出し');
-  lines.push(m.summary.length ? toBullets(m.summary) : '（なし）');
-  lines.push('');
-  lines.push('■ 決定事項');
-  lines.push(m.decisions.length ? toBullets(m.decisions) : '（なし）');
-  lines.push('');
-  lines.push('■ ToDo');
-  lines.push(m.todos.length ? toBullets(m.todos) : '（なし）');
+  lines.push('', '■ 要点・見出し', m.summary.length ? toBullets(m.summary) : '（なし）');
+  lines.push('', '■ 決定事項', m.decisions.length ? toBullets(m.decisions) : '（なし）');
+  lines.push('', '■ ToDo', m.todos.length ? toBullets(m.todos) : '（なし）');
   return lines.join('\n');
 }
-
 function buildMarkdown(m) {
-  const sec = (title, arr) => `## ${title}\n\n` + (arr.length ? arr.map((x) => `- ${x}`).join('\n') : '（なし）') + '\n';
-  return `# ${m.name}\n\n**日付:** ${m.date}\n\n` +
-    sec('要点・見出し', m.summary) + '\n' +
-    sec('決定事項', m.decisions) + '\n' +
-    sec('ToDo', m.todos);
+  const sec = (t, arr) => `## ${t}\n\n` + (arr.length ? arr.map((x) => `- ${x}`).join('\n') : '（なし）') + '\n';
+  return `# ${m.name}\n\n**日付:** ${m.date}\n\n` + sec('要点・見出し', m.summary) + '\n' + sec('決定事項', m.decisions) + '\n' + sec('ToDo', m.todos);
 }
-
 function download(filename, content, mime) {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -472,70 +442,47 @@ function download(filename, content, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-exportTxt.addEventListener('click', () => {
-  const m = currentMinutes();
-  download(`${safeFileName(m)}.txt`, buildPlainText(m), 'text/plain;charset=utf-8');
-});
-
-exportMd.addEventListener('click', () => {
-  const m = currentMinutes();
-  download(`${safeFileName(m)}.md`, buildMarkdown(m), 'text/markdown;charset=utf-8');
-});
+exportTxt.addEventListener('click', () => { const m = currentMinutes(); download(`${safeFileName(m)}.txt`, buildPlainText(m), 'text/plain;charset=utf-8'); });
+exportMd.addEventListener('click', () => { const m = currentMinutes(); download(`${safeFileName(m)}.md`, buildMarkdown(m), 'text/markdown;charset=utf-8'); });
 
 exportDocx.addEventListener('click', async () => {
   const m = currentMinutes();
   if (!window.docx) { showError('Word 出力ライブラリの読み込みに失敗しました（オンライン環境で再読み込みしてください）。'); return; }
   const { Document, Packer, Paragraph, HeadingLevel, TextRun } = window.docx;
-
   const bulletParas = (arr) => arr.length
     ? arr.map((t) => new Paragraph({ text: t, bullet: { level: 0 } }))
     : [new Paragraph({ children: [new TextRun({ text: '（なし）', italics: true })] })];
-
-  const doc = new Document({
-    sections: [{
-      children: [
-        new Paragraph({ text: m.name, heading: HeadingLevel.TITLE }),
-        new Paragraph({ children: [new TextRun({ text: `日付: ${m.date}`, bold: true })] }),
-        new Paragraph({ text: '要点・見出し', heading: HeadingLevel.HEADING_1 }),
-        ...bulletParas(m.summary),
-        new Paragraph({ text: '決定事項', heading: HeadingLevel.HEADING_1 }),
-        ...bulletParas(m.decisions),
-        new Paragraph({ text: 'ToDo', heading: HeadingLevel.HEADING_1 }),
-        ...bulletParas(m.todos),
-      ],
-    }],
-  });
-
+  const doc = new Document({ sections: [{ children: [
+    new Paragraph({ text: m.name, heading: HeadingLevel.TITLE }),
+    new Paragraph({ children: [new TextRun({ text: `日付: ${m.date}`, bold: true })] }),
+    new Paragraph({ text: '要点・見出し', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.summary),
+    new Paragraph({ text: '決定事項', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.decisions),
+    new Paragraph({ text: 'ToDo', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.todos),
+  ] }] });
   try {
     const blob = await Packer.toBlob(doc);
     download(`${safeFileName(m)}.docx`, blob, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-  } catch (err) {
-    showError('Word 出力に失敗しました: ' + (err && err.message ? err.message : err));
-  }
+  } catch (err) { showError('Word 出力に失敗しました: ' + (err && err.message ? err.message : err)); }
 });
 
 exportMail.addEventListener('click', () => {
   const m = currentMinutes();
   const subject = `【議事録】${m.name}（${m.date}）`;
   const body = buildPlainText(m);
-  // mailto は本文長に制限があるため長すぎる場合は切り詰める
   const MAX = 1800;
   const trimmed = body.length > MAX ? body.slice(0, MAX) + '\n…（以下省略。txt/Word をご利用ください）' : body;
-  const href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(trimmed)}`;
-  window.location.href = href;
+  window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(trimmed)}`;
 });
 
 /* =========================================================
- * 音声ファイルの出力（ネイティブ形式 / WAV 変換）
+ * 音声ファイルの出力
  * =======================================================*/
 function formatBytes(bytes) {
   if (!bytes) return '';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0, n = bytes;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+  const u = ['B', 'KB', 'MB', 'GB']; let i = 0, n = bytes;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 }
-
 function extFromMime(mime) {
   if (!mime) return 'webm';
   if (mime.includes('webm')) return 'webm';
@@ -545,31 +492,24 @@ function extFromMime(mime) {
   if (mime.includes('wav')) return 'wav';
   return 'webm';
 }
-
-// 録音した音声をそのままの形式でダウンロード
 downloadAudio.addEventListener('click', () => {
   if (!recordedBlob) { showError('保存できる音声がありません。先に録音してください。'); return; }
   hideError();
   const m = currentMinutes();
-  const ext = extFromMime(recordedBlob.type);
-  download(`${safeFileName(m)}.${ext}`, recordedBlob, recordedBlob.type || 'audio/webm');
+  download(`${safeFileName(m)}.${extFromMime(recordedBlob.type)}`, recordedBlob, recordedBlob.type || 'audio/webm');
 });
-
-// 録音した音声を WAV に変換してダウンロード（互換性の高い形式）
 downloadWav.addEventListener('click', async () => {
   if (!recordedBlob) { showError('変換できる音声がありません。先に録音してください。'); return; }
   hideError();
-  const original = downloadWav.textContent;
   downloadWav.disabled = true;
   downloadWav.textContent = '変換中…';
   try {
     const arrayBuffer = await recordedBlob.arrayBuffer();
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-    const wavBlob = audioBufferToWav(audioBuffer);
     ctx.close();
     const m = currentMinutes();
-    download(`${safeFileName(m)}.wav`, wavBlob, 'audio/wav');
+    download(`${safeFileName(m)}.wav`, audioBufferToWav(audioBuffer), 'audio/wav');
   } catch (err) {
     showError('WAV への変換に失敗しました: ' + (err && err.message ? err.message : err));
   } finally {
@@ -577,43 +517,22 @@ downloadWav.addEventListener('click', async () => {
     downloadWav.innerHTML = '<span aria-hidden="true">🎵</span> WAVに変換';
   }
 });
-
-// AudioBuffer → WAV(16bit PCM) Blob
 function audioBufferToWav(buffer) {
-  const numCh = buffer.numberOfChannels;
-  const sampleRate = buffer.sampleRate;
-  const channels = [];
+  const numCh = buffer.numberOfChannels, sampleRate = buffer.sampleRate, channels = [];
   for (let c = 0; c < numCh; c++) channels.push(buffer.getChannelData(c));
-
-  const frames = buffer.length;
-  const bytesPerSample = 2;
-  const blockAlign = numCh * bytesPerSample;
-  const dataSize = frames * blockAlign;
-  const arr = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(arr);
-
-  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-
-  writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);        // PCM chunk size
-  view.setUint16(20, 1, true);         // format = PCM
-  view.setUint16(22, numCh, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);        // bits per sample
-  writeStr(36, 'data');
-  view.setUint32(40, dataSize, true);
-
+  const frames = buffer.length, bytesPerSample = 2, blockAlign = numCh * bytesPerSample, dataSize = frames * blockAlign;
+  const arr = new ArrayBuffer(44 + dataSize), view = new DataView(arr);
+  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeStr(8, 'WAVE');
+  writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, numCh, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true); view.setUint16(34, 16, true);
+  writeStr(36, 'data'); view.setUint32(40, dataSize, true);
   let offset = 44;
   for (let i = 0; i < frames; i++) {
     for (let c = 0; c < numCh; c++) {
-      let s = Math.max(-1, Math.min(1, channels[c][i]));
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      offset += 2;
+      const s = Math.max(-1, Math.min(1, channels[c][i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true); offset += 2;
     }
   }
   return new Blob([view], { type: 'audio/wav' });
@@ -623,39 +542,25 @@ function audioBufferToWav(buffer) {
  * 過去の議事録一覧（localStorage）
  * =======================================================*/
 const STORE_KEY = 'noteloop_minutes_v1';
-
-function loadStore() {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }
-  catch (_) { return []; }
-}
-function saveStore(list) {
-  localStorage.setItem(STORE_KEY, JSON.stringify(list));
-}
-
+function loadStore() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (_) { return []; } }
+function saveStore(list) { localStorage.setItem(STORE_KEY, JSON.stringify(list)); }
 function seedIfEmpty() {
   let list = loadStore();
   if (list.length === 0) {
     list = [
-      {
-        id: 'seed-1', name: '週次定例MTG', date: '2026-07-14',
+      { id: 'seed-1', name: '週次定例MTG', date: '2026-07-14',
         summary: ['来月のリリース計画について協議した'],
         decisions: ['リリースを1週間延期することを決定', 'QA体制を再確認する方針で合意'],
-        todos: ['テスト計画を更新する（担当: 田中）', 'QA体制の調整を進める（担当: 佐藤）', '関係者へ共有する（担当: 鈴木）'],
-        _sample: true,
-      },
-      {
-        id: 'seed-2', name: '開発キックオフ', date: '2026-07-11',
+        todos: ['テスト計画を更新する（担当: 田中）', 'QA体制の調整を進める（担当: 佐藤）', '関係者へ共有する（担当: 鈴木）'], _sample: true },
+      { id: 'seed-2', name: '開発キックオフ', date: '2026-07-11',
         summary: ['新規プロジェクトの体制とスケジュールを確認した'],
         decisions: ['開発は2週間スプリントで進めることを決定'],
-        todos: ['環境構築を今週中に実施する', '要件一覧を作成して共有する'],
-        _sample: true,
-      },
+        todos: ['環境構築を今週中に実施する', '要件一覧を作成して共有する'], _sample: true },
     ];
     saveStore(list);
   }
   renderHistory();
 }
-
 function renderHistory() {
   const list = loadStore();
   historyList.innerHTML = '';
@@ -670,14 +575,8 @@ function renderHistory() {
     const li = document.createElement('li');
     li.className = 'history-item';
     const excerpt = [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
-    li.innerHTML = `
-      <h3></h3>
-      <span class="meta"></span>
-      <span class="excerpt"></span>
-      <div class="history-actions">
-        <button class="open" type="button">開く</button>
-        <button class="del" type="button">削除</button>
-      </div>`;
+    li.innerHTML = `<h3></h3><span class="meta"></span><span class="excerpt"></span>
+      <div class="history-actions"><button class="open" type="button">開く</button><button class="del" type="button">削除</button></div>`;
     li.querySelector('h3').textContent = item.name + (item._sample ? '（サンプル）' : '');
     li.querySelector('.meta').textContent = item.date;
     li.querySelector('.excerpt').textContent = excerpt;
@@ -686,59 +585,36 @@ function renderHistory() {
     historyList.appendChild(li);
   }
 }
-
 function openMinutes(item) {
   meetingName.value = item.name || '';
   meetingDate.value = item.date || '';
-  fillMinutesUI({
-    summary: item.summary || [],
-    decisions: item.decisions || [],
-    todos: item.todos || [],
-  });
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  fillMinutesUI({ summary: item.summary || [], decisions: item.decisions || [], todos: item.todos || [] });
+  showScreen('screen-minutes', '議事録');
 }
-
-function deleteMinutes(id) {
-  const list = loadStore().filter((x) => x.id !== id);
-  saveStore(list);
-  renderHistory();
-}
+function deleteMinutes(id) { saveStore(loadStore().filter((x) => x.id !== id)); renderHistory(); }
 
 saveMinutes.addEventListener('click', () => {
   const m = currentMinutes();
-  if (!m.summary.length && !m.decisions.length && !m.todos.length) {
-    showError('保存する議事録が空です。先に生成してください。');
-    return;
-  }
+  if (!m.summary.length && !m.decisions.length && !m.todos.length) { showError('保存する議事録が空です。先に生成してください。'); return; }
   hideError();
   const list = loadStore();
   const id = 'm-' + Date.now() + '-' + Math.floor(performance.now());
   list.push({ id, name: m.name, date: m.date, summary: m.summary, decisions: m.decisions, todos: m.todos });
   saveStore(list);
   renderHistory();
+  showScreen('screen-history', '過去の議事録');
 });
 
 /* =========================================================
  * 設定・エラー・初期化
  * =======================================================*/
-settingsToggle.addEventListener('click', () => {
-  const open = settingsPanel.hidden;
-  settingsPanel.hidden = !open;
-  settingsToggle.setAttribute('aria-expanded', String(open));
-});
-
-// モデルを切り替えたら再読み込みできるようフラグをリセット
-modelSelect.addEventListener('change', () => {
-  modelReady = false;
-  modelStatus.textContent = 'モデル未読み込み';
-  modelStatus.className = 'status-chip';
-});
+liveEnabled.addEventListener('change', () => { liveModelField.style.display = liveEnabled.checked ? '' : 'none'; });
 
 function showError(msg) { errorBox.textContent = msg; errorBox.hidden = false; }
 function hideError() { errorBox.hidden = true; errorBox.textContent = ''; }
 
-// 初期化
 meetingDate.value = todayStr();
 downloadAudio.disabled = true;
 downloadWav.disabled = true;
+liveModelField.style.display = liveEnabled.checked ? '' : 'none';
 seedIfEmpty();

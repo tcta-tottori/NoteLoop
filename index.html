@@ -3,18 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="color-scheme" content="light dark" />
+  <meta name="color-scheme" content="light" />
   <title>NoteLoop — 議事録自動化</title>
-  <meta name="description" content="ブラウザだけで完結する議事録自動化アプリ。録音 → 文字起こし → 議事録整形 → 音声 / txt / Word / メール下書きで出力。" />
+  <meta name="description" content="ブラウザだけで完結する議事録自動化アプリ。録音 → 高精度文字起こし → 議事録整形 → 音声 / txt / Word / メール下書きで出力。" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div class="bg-orbs" aria-hidden="true"></div>
-
   <header class="app-header">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
           <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
           <path d="M12 18v4"/>
@@ -22,64 +20,41 @@
       </span>
       <div class="brand-text">
         <h1>NoteLoop</h1>
-        <p>録音 → 文字起こし → 議事録 → 出力を、ブラウザだけで</p>
+        <p id="screenTitle">録音・文字起こし</p>
       </div>
     </div>
-    <button id="settingsToggle" class="ghost-btn" type="button" aria-expanded="false" aria-controls="settingsPanel">
-      <span aria-hidden="true">⚙</span><span class="btn-label">設定</span>
-    </button>
   </header>
 
-  <!-- 設定パネル -->
-  <section id="settingsPanel" class="settings-panel" hidden>
-    <div class="field">
-      <label for="langSelect">文字起こしの言語</label>
-      <select id="langSelect">
-        <option value="japanese" selected>日本語 (ja)</option>
-        <option value="chinese">中国語 (zh)</option>
-        <option value="english">英語 (en)</option>
-        <option value="auto">自動判定</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="modelSelect">Whisper モデル</label>
-      <select id="modelSelect">
-        <option value="Xenova/whisper-tiny" selected>tiny（軽量・高速 / 精度低め）</option>
-        <option value="Xenova/whisper-base">base（やや重い / 精度やや高め）</option>
-      </select>
-    </div>
-    <p class="hint">初回はモデル（数十MB〜）をダウンロードします。音声はブラウザ内で処理され、外部へ送信されません。</p>
-  </section>
+  <main class="app-main">
 
-  <main class="layout">
-    <!-- 左カラム: 録音・文字起こし -->
-    <section class="panel" aria-labelledby="recTitle">
-      <h2 id="recTitle" class="panel-title"><span class="dot dot-rec"></span>録音・文字起こし</h2>
-
-      <div class="record-stage">
-        <button id="recordBtn" class="record-btn" type="button" aria-label="録音開始">
-          <span class="rec-ring" aria-hidden="true"></span>
-          <span class="rec-icon" aria-hidden="true"></span>
-        </button>
-        <div class="record-meta">
-          <div class="timer" id="timer" aria-live="polite">00:00</div>
-          <div class="rec-hint" id="recHint">タップして録音開始</div>
+    <!-- ========== ホーム: 録音・文字起こし ========== -->
+    <section class="screen active" id="screen-home" aria-labelledby="screenTitle">
+      <div class="panel">
+        <div class="record-stage">
+          <button id="recordBtn" class="record-btn" type="button" aria-label="録音開始">
+            <span class="rec-ring" aria-hidden="true"></span>
+            <span class="rec-icon" aria-hidden="true"></span>
+          </button>
+          <div class="record-meta">
+            <div class="timer" id="timer" aria-live="polite">00:00</div>
+            <div class="rec-hint" id="recHint">タップして録音開始</div>
+          </div>
         </div>
-      </div>
 
-      <canvas id="waveform" class="waveform" width="600" height="72" aria-hidden="true"></canvas>
+        <canvas id="waveform" class="waveform" width="600" height="72" aria-hidden="true"></canvas>
 
-      <div id="statusBar" class="status-bar" role="status" aria-live="polite">
-        <span id="modelStatus" class="status-chip">モデル未読み込み</span>
-        <div class="progress" hidden id="progressWrap">
-          <div class="progress-bar" id="progressBar"></div>
+        <div id="statusBar" class="status-bar" role="status" aria-live="polite">
+          <span id="modelStatus" class="status-chip">モデル未読み込み</span>
+          <div class="progress" hidden id="progressWrap">
+            <div class="progress-bar" id="progressBar"></div>
+          </div>
         </div>
-      </div>
 
-      <div id="errorBox" class="error-box" hidden></div>
+        <div id="errorBox" class="error-box" hidden></div>
+      </div>
 
       <!-- 録音の再生＆音声ファイル出力 -->
-      <div class="audio-card" id="audioWrap" hidden>
+      <div class="panel audio-card" id="audioWrap" hidden>
         <div class="mini-label-row">
           <span class="mini-label"><span aria-hidden="true">🎧</span> 録音した音声</span>
           <span class="audio-size" id="audioSize"></span>
@@ -91,49 +66,50 @@
         </div>
       </div>
 
-      <div class="transcript-block">
+      <div class="panel">
         <div class="mini-label-row">
-          <label class="mini-label" for="liveTranscript">文字起こし（録音中に逐次表示 / 手直し可）</label>
+          <label class="mini-label" for="liveTranscript">文字起こし</label>
           <button id="clearTranscript" class="link-btn" type="button">クリア</button>
         </div>
-        <textarea id="liveTranscript" class="transcript" placeholder="ここに文字起こしが表示されます。録音を止めた後、そのまま編集して議事録を生成できます。"></textarea>
+        <textarea id="liveTranscript" class="transcript" placeholder="録音を止めると、音声全体を高精度で再処理して結果を表示します。ここで手直しもできます。"></textarea>
+        <button id="toMinutes" class="wide-btn" type="button">この文字起こしで議事録を作る <span aria-hidden="true">→</span></button>
       </div>
     </section>
 
-    <!-- 右カラム: 議事録 -->
-    <section class="panel" aria-labelledby="minTitle">
-      <h2 id="minTitle" class="panel-title"><span class="dot dot-min"></span>議事録</h2>
-
-      <div class="meta-grid">
-        <div class="field">
-          <label for="meetingName">会議名</label>
-          <input id="meetingName" type="text" placeholder="例: 定例ミーティング" />
+    <!-- ========== 議事録 ========== -->
+    <section class="screen" id="screen-minutes" aria-labelledby="screenTitle" hidden>
+      <div class="panel">
+        <div class="meta-grid">
+          <div class="field">
+            <label for="meetingName">会議名</label>
+            <input id="meetingName" type="text" placeholder="例: 定例ミーティング" />
+          </div>
+          <div class="field">
+            <label for="meetingDate">日付</label>
+            <input id="meetingDate" type="date" />
+          </div>
         </div>
-        <div class="field">
-          <label for="meetingDate">日付</label>
-          <input id="meetingDate" type="date" />
+
+        <div class="gen-row">
+          <button id="generateBtn" class="primary-btn" type="button"><span aria-hidden="true">✨</span> 議事録を生成</button>
+          <button id="regenerateBtn" class="secondary-btn" type="button"><span aria-hidden="true">↻</span> 再生成</button>
+        </div>
+
+        <div class="minutes-section">
+          <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
+          <textarea id="secSummary" class="minutes-area" rows="4" placeholder="会議の要点がここに入ります。"></textarea>
+        </div>
+        <div class="minutes-section">
+          <label class="mini-label" for="secDecisions"><span class="tag tag-dec">決定事項</span></label>
+          <textarea id="secDecisions" class="minutes-area" rows="4" placeholder="決まったことがここに入ります。"></textarea>
+        </div>
+        <div class="minutes-section">
+          <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
+          <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題がここに入ります。"></textarea>
         </div>
       </div>
 
-      <div class="gen-row">
-        <button id="generateBtn" class="primary-btn" type="button"><span aria-hidden="true">✨</span> 議事録を生成</button>
-        <button id="regenerateBtn" class="secondary-btn" type="button"><span aria-hidden="true">↻</span> 再生成</button>
-      </div>
-
-      <div class="minutes-section">
-        <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
-        <textarea id="secSummary" class="minutes-area" rows="4" placeholder="会議の要点がここに入ります。"></textarea>
-      </div>
-      <div class="minutes-section">
-        <label class="mini-label" for="secDecisions"><span class="tag tag-dec">決定事項</span></label>
-        <textarea id="secDecisions" class="minutes-area" rows="4" placeholder="決まったことがここに入ります。"></textarea>
-      </div>
-      <div class="minutes-section">
-        <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
-        <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題がここに入ります。"></textarea>
-      </div>
-
-      <div class="export-block">
+      <div class="panel">
         <span class="export-heading">書き出し</span>
         <div class="export-row">
           <button class="export-btn" id="exportTxt" type="button"><span aria-hidden="true">📄</span> .txt</button>
@@ -145,16 +121,77 @@
       </div>
     </section>
 
-    <!-- 過去の議事録一覧 -->
-    <section class="panel history" aria-labelledby="histTitle">
-      <h2 id="histTitle" class="panel-title"><span class="dot dot-hist"></span>過去の議事録</h2>
-      <ul id="historyList" class="history-list"></ul>
+    <!-- ========== 履歴 ========== -->
+    <section class="screen" id="screen-history" aria-labelledby="screenTitle" hidden>
+      <div class="panel">
+        <ul id="historyList" class="history-list"></ul>
+      </div>
     </section>
+
+    <!-- ========== 設定 ========== -->
+    <section class="screen" id="screen-settings" aria-labelledby="screenTitle" hidden>
+      <div class="panel">
+        <h3 class="settings-group-title">文字起こし</h3>
+        <div class="field settings-field">
+          <label for="langSelect">言語</label>
+          <select id="langSelect">
+            <option value="japanese" selected>日本語 (ja)</option>
+            <option value="chinese">中国語 (zh)</option>
+            <option value="english">英語 (en)</option>
+            <option value="auto">自動判定</option>
+          </select>
+        </div>
+        <div class="field settings-field">
+          <label for="accuracyModel">高精度モデル（録音停止後の再処理）</label>
+          <select id="accuracyModel">
+            <option value="Xenova/whisper-base">base（約80MB・速い / 精度標準）</option>
+            <option value="Xenova/whisper-small" selected>small（約250MB・おすすめ / 高精度・遅い）</option>
+            <option value="Xenova/whisper-medium">medium（約500MB・PC推奨 / 最高精度・かなり遅い）</option>
+          </select>
+          <p class="field-hint">停止後に音声全体をこのモデルで再処理し、精度の高い確定版を作ります。大きいほど高精度・低速で、初回はダウンロードに時間がかかります。</p>
+        </div>
+        <div class="field settings-field">
+          <label class="switch-row" for="liveEnabled">
+            <span>
+              録音中のライブ表示
+              <span class="field-hint inline">録音しながら軽量モデルで暫定表示。停止後に高精度で置き換えます。</span>
+            </span>
+            <input type="checkbox" id="liveEnabled" checked />
+          </label>
+        </div>
+        <div class="field settings-field" id="liveModelField">
+          <label for="liveModel">ライブ表示用の軽量モデル</label>
+          <select id="liveModel">
+            <option value="Xenova/whisper-tiny" selected>tiny（約40MB・最速）</option>
+            <option value="Xenova/whisper-base">base（約80MB）</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel about-panel">
+        <h3 class="settings-group-title">このアプリについて</h3>
+        <p>録音・文字起こし・議事録化・出力をすべて<strong>ブラウザ内で完結</strong>するPoCサンプルです。音声は外部へ送信されません。文字起こしは <a href="https://github.com/xenova/transformers.js" target="_blank" rel="noopener">Transformers.js</a> の Whisper を利用しています。</p>
+        <p class="field-hint">初回はモデル（数十MB〜数百MB）のダウンロードが発生します。Wi-Fi環境での初回利用を推奨します。</p>
+      </div>
+    </section>
+
   </main>
 
-  <footer class="app-footer">
-    <p>ブラウザ内で完結（サーバ不要）。文字起こしは <a href="https://github.com/xenova/transformers.js" target="_blank" rel="noopener">Transformers.js</a> の Whisper を利用。これはPoCサンプルです。</p>
-  </footer>
+  <!-- ========== 下部メニュー ========== -->
+  <nav class="bottom-nav" aria-label="メニュー">
+    <button class="nav-btn active" type="button" data-target="screen-home" data-title="録音・文字起こし">
+      <span class="nav-ico" aria-hidden="true">🎙</span><span class="nav-label">録音</span>
+    </button>
+    <button class="nav-btn" type="button" data-target="screen-minutes" data-title="議事録">
+      <span class="nav-ico" aria-hidden="true">📝</span><span class="nav-label">議事録</span>
+    </button>
+    <button class="nav-btn" type="button" data-target="screen-history" data-title="過去の議事録">
+      <span class="nav-ico" aria-hidden="true">🗂</span><span class="nav-label">履歴</span>
+    </button>
+    <button class="nav-btn" type="button" data-target="screen-settings" data-title="設定">
+      <span class="nav-ico" aria-hidden="true">⚙</span><span class="nav-label">設定</span>
+    </button>
+  </nav>
 
   <!-- docx-js (Word 出力) を CDN から読み込み -->
   <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>

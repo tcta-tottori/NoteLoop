@@ -6,20 +6,15 @@ import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers
 // リモートモデルのみ利用（ローカルファイル探索を無効化）
 env.allowLocalModels = false;
 
-let transcriber = null;
-let loadedModel = null;
+// モデルごとにパイプラインをキャッシュ（ライブ用 tiny と 高精度用 small を同時保持できる）
+const cache = new Map();
 
-/**
- * モデルを（必要なら）読み込み、パイプラインを返す。
- * 同じモデルなら再利用する。
- */
-async function getTranscriber(model, onProgress) {
-  if (transcriber && loadedModel === model) return transcriber;
-  loadedModel = model;
-  transcriber = await pipeline('automatic-speech-recognition', model, {
-    progress_callback: onProgress,
-  });
-  return transcriber;
+function getTranscriber(model, onProgress) {
+  if (!cache.has(model)) {
+    const p = pipeline('automatic-speech-recognition', model, { progress_callback: onProgress });
+    cache.set(model, p); // Promise をキャッシュ（二重ロード防止）
+  }
+  return cache.get(model);
 }
 
 self.onmessage = async (event) => {
@@ -38,20 +33,21 @@ self.onmessage = async (event) => {
   if (msg.type === 'transcribe') {
     try {
       const t = await getTranscriber(msg.model, (p) => self.postMessage({ type: 'progress', data: p }));
-      const options = {
-        task: 'transcribe',
-        chunk_length_s: 30,
-        stride_length_s: 5,
-      };
-      // 'auto' の場合は language を指定せず自動判定させる
-      if (msg.language && msg.language !== 'auto') {
-        options.language = msg.language;
+      const options = { task: 'transcribe' };
+      if (msg.language && msg.language !== 'auto') options.language = msg.language;
+
+      // 高精度パス（録音全体の再処理）は 30 秒チャンク＋オーバーラップで文脈を保つ
+      if (msg.longform) {
+        options.chunk_length_s = 30;
+        options.stride_length_s = 5;
+        options.return_timestamps = true;
       }
+
       const output = await t(msg.audio, options);
       const text = (output && output.text ? output.text : '').trim();
-      self.postMessage({ type: 'result', id: msg.id, text });
+      self.postMessage({ type: 'result', id: msg.id, mode: msg.mode, text });
     } catch (err) {
-      self.postMessage({ type: 'error', id: msg.id, message: String(err && err.message ? err.message : err) });
+      self.postMessage({ type: 'error', id: msg.id, mode: msg.mode, message: String(err && err.message ? err.message : err) });
     }
   }
 };
