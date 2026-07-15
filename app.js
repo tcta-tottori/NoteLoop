@@ -597,32 +597,31 @@ function waveLoop() {
 }
 function drawWaveFrame() {
   const ctx = wave.getContext('2d');
-  const w = wave.width, h = wave.height;
+  const w = wave.width, h = wave.height, mid = h * 0.52;
   ctx.clearRect(0, 0, w, h);
-  // 奥→手前へ重ねる塗りつぶし波（山並み / オーロラ風）
+  // 線で描く波。端に向かって振幅が細くなり、グロウで背景に溶け込む。
   const layers = [
-    { base: 0.50, amp: 0.17, freq: 1.3, speed: 0.7,  fill: 'rgba(129,140,248,0.42)' }, // 奥: 薄いインディゴ
-    { base: 0.62, amp: 0.15, freq: 1.9, speed: -1.0, fill: 'rgba(67,96,225,0.58)' },   // 中: ブルー
-    { base: 0.73, amp: 0.13, freq: 1.05, speed: 1.25, fill: 'rgba(30,52,130,0.82)' },  // 前: 濃紺
-    { base: 0.84, amp: 0.12, freq: 2.3, speed: -0.8, fill: 'rgba(15,23,42,0.95)' },    // 最前: ほぼ黒
+    { amp: 0.42, freq: 1.3, speed: 0.8,  col: '#7c5cf6', a: 0.42 },
+    { amp: 0.30, freq: 1.9, speed: -1.1, col: '#4f6ef7', a: 0.38 },
+    { amp: 0.20, freq: 2.7, speed: 1.5,  col: '#ec4899', a: 0.30 },
   ];
-  const step = Math.max(2, w / 220);
+  const step = Math.max(2, w / 240);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   for (const L of layers) {
-    const baseY = h * L.base;
-    const amp = h * L.amp * (0.35 + waveLevel);
     ctx.beginPath();
-    ctx.moveTo(0, h);
-    ctx.lineTo(0, baseY);
     for (let x = 0; x <= w; x += step) {
       const t = x / w;
-      const y = baseY - Math.sin(t * Math.PI * 2 * L.freq + wavePhase * L.speed) * amp;
-      ctx.lineTo(x, y);
+      const env = Math.sin(t * Math.PI);   // 端で0 → 中央でふくらむ（溶け込み）
+      const y = mid + Math.sin(t * Math.PI * 2 * L.freq + wavePhase * L.speed)
+                    * (h * L.amp * (0.28 + waveLevel)) * env;
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
-    ctx.lineTo(w, h);
-    ctx.closePath();
-    ctx.fillStyle = L.fill;
-    ctx.fill();
+    ctx.strokeStyle = L.col; ctx.globalAlpha = L.a;
+    ctx.lineWidth = Math.max(2.5, w * 0.0045);
+    ctx.shadowColor = L.col; ctx.shadowBlur = 14;
+    ctx.stroke();
   }
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 }
 window.addEventListener('resize', () => { if (waveActive) resizeWave(); });
 
