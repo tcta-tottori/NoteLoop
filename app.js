@@ -95,8 +95,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.5';
-const APP_UPDATED = '2026.7.16';
+const APP_VERSION = 'Ver.1.6';
+const APP_UPDATED = '2026.7.16 07:35';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -1638,11 +1638,28 @@ drawerVerSub.textContent = APP_UPDATED;
 seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
+// 新しい版が出たら自動で反映されるよう、更新検出→再読み込みまで行う。
 if ('serviceWorker' in navigator) {
+  let swRefreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swRefreshing || recording) return; // 録音中は中断しない
+    swRefreshing = true;
+    window.location.reload(); // 新しいSWが有効化されたら最新資産で読み直す
+  });
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js')
-      .then(() => { if (!recording) clearRecordingNotification(); }) // 前回の残留通知を掃除
+    // updateViaCache:'none' で sw.js 自体をHTTPキャッシュから読まず、更新を取りこぼさない
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
+      .then((reg) => {
+        try { reg.update(); } catch (_) {}                 // 起動ごとに更新チェック
+        if (!recording) clearRecordingNotification();       // 前回の残留通知を掃除
+      })
       .catch(() => { /* 失敗しても通常動作に影響なし */ });
+    // 復帰時にも更新チェック（アプリを開きっぱなしでも最新に）
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        navigator.serviceWorker.getRegistration().then((r) => { if (r) { try { r.update(); } catch (_) {} } });
+      }
+    });
   });
 }
 
