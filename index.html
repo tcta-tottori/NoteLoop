@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="light" />
-  <title>NoteLoop — 議事録自動化</title>
+  <title>NOTELOOP — 議事録自動化</title>
   <meta name="description" content="ブラウザだけで完結する議事録自動化アプリ。録音 → 高精度文字起こし → 議事録整形 → 音声 / txt / Word / メール下書きで出力。" />
   <link rel="stylesheet" href="./styles.css" />
   <!-- PWA（アプリとしてインストール可能に） -->
@@ -12,7 +12,7 @@
   <meta name="theme-color" content="#4f6ef7" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="NoteLoop" />
+  <meta name="apple-mobile-web-app-title" content="NOTELOOP" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
 </head>
 <body>
@@ -21,17 +21,8 @@
       <span class="bar"></span><span class="bar"></span><span class="bar"></span>
     </button>
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
-          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
-          <path d="M12 18v4"/>
-        </svg>
-      </span>
-      <div class="brand-text">
-        <h1>NoteLoop</h1>
-        <p id="screenTitle">録音・文字起こし</p>
-      </div>
+      <h1 class="app-name">NOTELOOP</h1>
+      <p id="screenTitle" class="app-subtitle">録音・文字起こし・議事録作成</p>
     </div>
   </header>
 
@@ -46,9 +37,9 @@
           <path d="M12 18v4"/>
         </svg>
       </span>
-      <span class="drawer-brand">NoteLoop</span>
+      <span class="drawer-brand">NOTELOOP</span>
     </div>
-    <button class="drawer-item active" type="button" data-target="screen-home" data-title="録音・文字起こし"><span class="d-ico" aria-hidden="true">🎙</span> 録音</button>
+    <button class="drawer-item active" type="button" data-target="screen-home" data-title="録音・文字起こし・議事録作成"><span class="d-ico" aria-hidden="true">🎙</span> 録音</button>
     <button class="drawer-item" type="button" data-target="screen-minutes" data-title="議事録"><span class="d-ico" aria-hidden="true">📝</span> 議事録</button>
     <button class="drawer-item" type="button" data-target="screen-history" data-title="過去の議事録"><span class="d-ico" aria-hidden="true">🗂</span> 履歴</button>
     <button class="drawer-item" type="button" data-target="screen-settings" data-title="設定"><span class="d-ico" aria-hidden="true">⚙</span> 設定</button>

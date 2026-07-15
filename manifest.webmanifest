@@ -1,6 +1,6 @@
 {
-  "name": "NoteLoop — 議事録自動化",
-  "short_name": "NoteLoop",
+  "name": "NOTELOOP — 議事録自動化",
+  "short_name": "NOTELOOP",
   "description": "録音 → 文字起こし → 議事録 → 出力を、ブラウザだけで完結する議事録自動化アプリ。",
   "lang": "ja",
   "dir": "ltr",
