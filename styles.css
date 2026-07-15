@@ -176,7 +176,7 @@ a:hover { text-decoration: underline; }
   padding-bottom: calc(env(safe-area-inset-bottom) + 32px);
 }
 /* ホームはマイクボタン固定分の余白を確保 */
-.home-screen { min-height: calc(100vh - 120px); padding-bottom: 120px; position: relative; }
+.home-screen { min-height: calc(100vh - 120px); padding-bottom: 150px; position: relative; }
 
 /* 参加者 */
 .participants-field { margin-top: 14px; }
@@ -373,6 +373,11 @@ select:focus, input:focus, textarea:focus {
   min-height: 220px; border: none; background: transparent; box-shadow: none;
   resize: none; padding: 4px 2px; font-size: 15.5px; line-height: 1.95;
 }
+/* 文字起こし中は上側（過去）を少し薄くフェード */
+.home-transcript.fade-old .transcript {
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,.28) 0, rgba(0,0,0,.6) 12%, #000 32%);
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,.28) 0, rgba(0,0,0,.6) 12%, #000 32%);
+}
 .home-transcript .transcript:hover,
 .home-transcript .transcript:focus { border: none; box-shadow: none; outline: none; }
 .home-transcript .audio-card { margin-top: 16px; border: none; background: transparent; padding: 0; }
@@ -443,7 +448,7 @@ select:focus, input:focus, textarea:focus {
   border-radius: var(--radius-sm); padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; transition: .16s;
 }
 .meeting-info-btn:hover { border-color: var(--brand1); color: var(--brand1); }
-.meeting-summary { font-size: 12.5px; color: var(--muted); margin: 10px 2px 4px; line-height: 1.6; }
+.meeting-summary { font-size: 12.5px; color: var(--muted); margin: 10px 2px 16px; line-height: 1.6; }
 .meeting-summary:empty { display: none; }
 .meeting-summary .ms-title { font-weight: 700; color: var(--text); }
 

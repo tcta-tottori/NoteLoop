@@ -111,8 +111,9 @@ let reqId = 0;
 // エンジン / Web Speech API
 let activeEngine = 'whisper';   // 録音開始時に確定
 let recognition = null;
-let sttBase = '';               // 録音開始時点の既存テキスト
-let sttFinal = '';              // 今回の録音で確定した認識結果
+let sttBase = '';       // 録音開始時点の既存テキスト
+let sttSegs = [];       // 確定済みセグメント（過去の認識インスタンス分）
+let sttCurFinal = '';   // 現インスタンスの確定分
 
 /* =========================================================
  * 画面切り替え（ハンバーガー → 左ドロワー）
@@ -171,6 +172,7 @@ function updateHomeUI() {
   recHint.hidden = !recording;
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   transcriptPanel.hidden = !(recording || hasText || hasAudio);
+  transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
   toMinutes.hidden = !(!recording && !homeProcessing && hasText);
 
   if (showWave) startWave(); else stopWave();
@@ -193,8 +195,8 @@ worker.onmessage = (e) => {
       break;
     case 'result':
       if (msg.mode === 'final') {
-        // 高精度パスの結果で置き換え（反復ハルシネーションを後処理で除去）
-        if (msg.text) liveTranscript.value = cleanupTranscript(msg.text);
+        // 高精度パスの結果で置き換え（反復除去＋句点で改行）
+        if (msg.text) liveTranscript.value = formatTranscript(cleanupTranscript(msg.text));
         if (finalResolve) { finalResolve(); finalResolve = null; }
       } else {
         // ライブ（暫定）結果を追記
@@ -405,18 +407,30 @@ function startWebSpeech() {
     return false;
   }
   sttBase = liveTranscript.value.trim();
-  sttFinal = '';
+  sttSegs = [];
+  sttCurFinal = '';
   return beginRecognition();
 }
 
+/** 確定セグメント＋現在の認識結果を結合して表示用テキストを作る */
+function composeSpeech(interim) {
+  const parts = [];
+  if (sttBase) parts.push(sttBase);
+  for (const s of sttSegs) if (s) parts.push(s);
+  const tail = (sttCurFinal + (interim || '')).trim();
+  if (tail) parts.push(tail);
+  return formatTranscript(parts.join('\n'));
+}
+
 function onSpeechResult(e) {
-  let interim = '';
-  for (let i = e.resultIndex; i < e.results.length; i++) {
-    const r = e.results[i];
-    if (r.isFinal) sttFinal += r[0].transcript;
-    else interim += r[0].transcript;
+  // 差分加算せず、現インスタンスの結果全体から毎回組み立て直す（重複防止）
+  let finalText = '', interim = '';
+  for (let i = 0; i < e.results.length; i++) {
+    const t = e.results[i][0].transcript;
+    if (e.results[i].isFinal) finalText += t; else interim += t;
   }
-  liveTranscript.value = joinStt(sttBase, sttFinal + interim);
+  sttCurFinal = finalText;
+  liveTranscript.value = composeSpeech(interim);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
   sttActivity = 0.9; // 発話に反応して波を動かす
 }
@@ -432,8 +446,10 @@ function onSpeechError(e) {
 }
 
 function onSpeechEnd() {
-  // 録音継続中に認識が切れたら、新しいインスタンスで再開（無音や時間制限対策）
+  // 録音継続中に認識が切れたら、確定分をコミットして新インスタンスで再開
   if (recording && activeEngine === 'webspeech') {
+    if (sttCurFinal.trim()) sttSegs.push(sttCurFinal.trim());
+    sttCurFinal = '';
     setTimeout(() => { if (recording && activeEngine === 'webspeech') beginRecognition(); }, 200);
   }
 }
@@ -446,7 +462,9 @@ function stopWebSpeech() {
     try { recognition.abort(); } catch (_) {}
     recognition = null;
   }
-  liveTranscript.value = joinStt(sttBase, sttFinal.trim());
+  if (sttCurFinal.trim()) sttSegs.push(sttCurFinal.trim());
+  sttCurFinal = '';
+  liveTranscript.value = composeSpeech('');
 }
 
 function teardownAudio() {
@@ -541,6 +559,27 @@ function rms(arr) {
   return Math.sqrt(sum / Math.max(1, n));
 }
 
+/** 句点（。．！？）で改行して読みやすく整形 */
+function formatTranscript(text) {
+  if (!text) return '';
+  return text
+    .replace(/[ \t　]+/g, ' ')
+    .replace(/\s*([。．！？])\s*/g, '$1\n')
+    .replace(/\n{2,}/g, '\n')
+    .replace(/^\n+/, '')
+    .trimEnd();
+}
+
+/** 日付を「7/16（火）」形式に */
+function formatDateJp(d) {
+  if (!d) return '';
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(d);
+  if (!m) return d;
+  const dt = new Date(+m[1], +m[2] - 1, +m[3]);
+  const w = ['日', '月', '火', '水', '木', '金', '土'][dt.getDay()];
+  return `${+m[2]}/${+m[3]}（${w}）`;
+}
+
 /** Whisper の反復ハルシネーションを後処理で除去 */
 function cleanupTranscript(text) {
   if (!text) return '';
@@ -600,7 +639,7 @@ function maybeSendChunk(force) {
 }
 function appendTranscript(text) {
   const cur = liveTranscript.value.trimEnd();
-  liveTranscript.value = cur ? cur + ' ' + text : text;
+  liveTranscript.value = formatTranscript(cur ? cur + ' ' + text : text);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
 }
 clearTranscript.addEventListener('click', () => { liveTranscript.value = ''; updateHomeUI(); });
@@ -806,7 +845,7 @@ function safeFileName(m) { return `${m.name}_${m.date}`.replace(/[\\/:*?"<>|\s]+
 function buildPlainText(m) {
   const lines = [];
   lines.push(m.name);
-  lines.push(`日付: ${m.date}`);
+  lines.push(`日付: ${formatDateJp(m.date)}`);
   if (m.participants && m.participants.length) lines.push(`参加者: ${participantsText(m.participants)}`);
   lines.push('', '■ 要点・見出し', m.summary.length ? toBullets(m.summary) : '（なし）');
   lines.push('', '■ 決定事項', m.decisions.length ? toBullets(m.decisions) : '（なし）');
@@ -816,7 +855,7 @@ function buildPlainText(m) {
 function buildMarkdown(m) {
   const sec = (t, arr) => `## ${t}\n\n` + (arr.length ? arr.map((x) => `- ${x}`).join('\n') : '（なし）') + '\n';
   const parts = (m.participants && m.participants.length) ? `**参加者:** ${participantsText(m.participants)}\n\n` : '';
-  return `# ${m.name}\n\n**日付:** ${m.date}\n\n${parts}` + sec('要点・見出し', m.summary) + '\n' + sec('決定事項', m.decisions) + '\n' + sec('ToDo', m.todos);
+  return `# ${m.name}\n\n**日付:** ${formatDateJp(m.date)}\n\n${parts}` + sec('要点・見出し', m.summary) + '\n' + sec('決定事項', m.decisions) + '\n' + sec('ToDo', m.todos);
 }
 function download(filename, content, mime) {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
@@ -839,7 +878,7 @@ exportDocx.addEventListener('click', async () => {
     : [new Paragraph({ children: [new TextRun({ text: '（なし）', italics: true })] })];
   const doc = new Document({ sections: [{ children: [
     new Paragraph({ text: m.name, heading: HeadingLevel.TITLE }),
-    new Paragraph({ children: [new TextRun({ text: `日付: ${m.date}`, bold: true })] }),
+    new Paragraph({ children: [new TextRun({ text: `日付: ${formatDateJp(m.date)}`, bold: true })] }),
     ...(m.participants && m.participants.length ? [new Paragraph({ children: [new TextRun({ text: `参加者: ${participantsText(m.participants)}` })] })] : []),
     new Paragraph({ text: '要点・見出し', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.summary),
     new Paragraph({ text: '決定事項', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.decisions),
@@ -853,7 +892,7 @@ exportDocx.addEventListener('click', async () => {
 
 exportMail.addEventListener('click', () => {
   const m = currentMinutes();
-  const subject = `【議事録】${m.name}（${m.date}）`;
+  const subject = `【議事録】${m.name}（${formatDateJp(m.date)}）`;
   const body = buildPlainText(m);
   const MAX = 1800;
   const trimmed = body.length > MAX ? body.slice(0, MAX) + '\n…（以下省略。txt/Word をご利用ください）' : body;
@@ -968,7 +1007,7 @@ function updateMeetingSummary() {
   const pt = participantsText(participants);
   if (!name && !pt && !date) { meetingSummary.innerHTML = ''; return; }
   let html = `<span class="ms-title">${escapeHtml(name || '（タイトル未設定）')}</span>`;
-  if (date) html += ` ・ ${escapeHtml(date)}`;
+  if (date) html += ` ・ ${escapeHtml(formatDateJp(date))}`;
   if (pt) html += `<br>参加者: ${escapeHtml(pt)}`;
   meetingSummary.innerHTML = html;
 }
@@ -1069,7 +1108,7 @@ function renderHistory() {
     const li = document.createElement('li');
     li.className = 'history-item';
     const excerpt = item.transcript || [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
-    const meta = item.date + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '') + (item.audio ? ' ・ 🎧' : '');
+    const meta = formatDateJp(item.date) + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '') + (item.audio ? ' ・ 🎧' : '');
     li.innerHTML = `<h3></h3><span class="meta"></span><span class="excerpt"></span>
       <div class="history-actions"><button class="open" type="button">開く</button><button class="audio" type="button" hidden>🎧 音声</button><button class="del" type="button">削除</button></div>`;
     li.querySelector('h3').textContent = item.name + (item._sample ? '（サンプル）' : '');
@@ -1163,7 +1202,7 @@ function buildClaudePrompt() {
 
 【会議情報】
 会議名: ${m.name}
-日付: ${m.date}${partLine}${draft}
+日付: ${formatDateJp(m.date)}${partLine}${draft}
 
 【文字起こし】
 ${transcript}`;
