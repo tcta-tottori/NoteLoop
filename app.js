@@ -33,7 +33,6 @@ const player         = $('player');
 const audioSize      = $('audioSize');
 const downloadAudio  = $('downloadAudio');
 const downloadWav    = $('downloadWav');
-const homeAudioHint  = $('homeAudioHint');
 const goMinutesFromHome = $('goMinutesFromHome');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
@@ -96,8 +95,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.7';
-const APP_UPDATED = '2026.7.16 07:55';
+const APP_VERSION = 'Ver.1.8';
+const APP_UPDATED = '2026.7.16 08:20';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -208,7 +207,7 @@ function updateHomeUI() {
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   transcriptPanel.hidden = !(recording || hasText || hasAudio);
   transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
-  if (homeAudioHint) homeAudioHint.hidden = !(hasAudio && !recording && !homeProcessing); // 録音後は議事録への導線を出す
+  if (goMinutesFromHome) goMinutesFromHome.hidden = !(hasAudio && !recording && !homeProcessing); // 録音後は議事録への導線を出す
   updateFabState();
 
   if (showWave) startWave(); else stopWave();
@@ -368,17 +367,22 @@ async function startRecording() {
   activeEngine = engineSelect.value;
   acquireWakeLock(); // 設定がONなら画面を常時オンに（ユーザー操作の直後に要求）
 
-  // --- Web Speech: 認識専用（getUserMedia を使わずマイク競合を回避） ---
+  // --- Web Speech: ライブ認識 ＋ 並行して音声録音 ---
   if (activeEngine === 'webspeech') {
-    const ok = startWebSpeech();
-    if (!ok) return; // startWebSpeech がエラー表示
-    recording = true;
+    if (!getSR()) {
+      showError('このブラウザは Web Speech API（音声認識）に対応していません。設定でエンジンを「ブラウザ内Whisper」に切り替えてください。');
+      return;
+    }
     recordedBlob = null;
-    sttActivity = 0.4;
     setAudioAvailable(false);
-    // 認識と並行して音声も録音し、停止後に「録音した音声」の確認・保存を可能にする。
-    // マイク取得や録音に失敗しても認識は継続する（音声カードが出ないだけ）。
+    // 先に録音用マイクを確保してから認識を開始する。
+    // （認識を先に始めてから getUserMedia するとブラウザによっては認識が止まり、
+    //   録音中のライブ文字起こしが動かなくなるため、この順序が重要）
     await startWebSpeechAudioCapture();
+    const ok = startWebSpeech();
+    if (!ok) { teardownAudio(); return; } // 認識を開始できなければ後始末
+    recording = true;
+    sttActivity = 0.4;
     setStatus('working', '認識中…（Web Speech）');
     updateHomeUI();
     startTime = Date.now();
@@ -568,17 +572,16 @@ function startWebSpeech() {
 
 /** 確定セグメント＋現在の認識結果を結合して表示用テキストを作る */
 function composeSpeech(interim) {
-  const parts = [];
-  if (sttBase) parts.push(sttBase);
-  for (const s of sttSegs) if (s) parts.push(s);
-  const tail = (sttCurFinal + (interim || '')).trim();
-  if (tail) parts.push(tail);
-  // 各セグメント内のループを圧縮し、直前と同一のセグメントは除外して重複を防ぐ
   const cleaned = [];
-  for (const p of parts) {
-    const c = collapseLoops(p).trim();
-    if (c && c !== cleaned[cleaned.length - 1]) cleaned.push(c);
-  }
+  const pushClean = (p) => {
+    const c = collapseLoops((p || '').trim()).trim();
+    if (c && c !== cleaned[cleaned.length - 1]) cleaned.push(c); // 直前と同一の確定分は除外
+  };
+  if (sttBase) pushClean(sttBase);
+  for (const s of sttSegs) if (s) pushClean(s);
+  // ライブの途中結果（tail）は圧縮・整形せずそのまま表示して、取りこぼし・遅延を防ぐ
+  const tail = (sttCurFinal + (interim || '')).trim();
+  if (tail) cleaned.push(tail);
   return formatTranscript(cleaned.join('\n'));
 }
 

@@ -155,10 +155,10 @@ a:hover { text-decoration: underline; }
   margin: auto -14px 0; padding: 14px 14px calc(10px + env(safe-area-inset-bottom));
   display: flex; justify-content: center;
 }
-.drawer-logo { height: 56px; width: auto; max-width: 90%; opacity: .95; filter: drop-shadow(0 1px 5px rgba(0, 0, 0, .2)); }
+.drawer-logo { height: 27px; width: auto; max-width: 90%; opacity: .95; filter: drop-shadow(0 1px 5px rgba(0, 0, 0, .2)); }
 .brand { display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
 .header-logo {
-  display: block; height: 34px; width: auto; max-width: 62vw;
+  display: block; height: 27px; width: auto; max-width: 58vw;
   filter: drop-shadow(0 1px 6px rgba(0, 0, 0, .18));
 }
 .app-subtitle {
@@ -257,13 +257,16 @@ select:focus, input:focus, textarea:focus {
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .section-title { font-size: 13.5px; font-weight: 800; color: var(--text); }
 .section-title .btn-ico { width: 17px; height: 17px; color: var(--brand1); }
-.home-audio-hint {
-  margin: 14px 2px 0; padding: 10px 12px; text-align: center;
-  font-size: 12.5px; color: var(--muted); line-height: 1.6;
-  background: color-mix(in srgb, var(--brand1) 6%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--brand1) 18%, var(--border)); border-radius: var(--radius-sm);
+/* ホーム: 録音後に議事録へ移動するシンプルなボタン */
+.go-minutes-btn {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  width: fit-content; margin: 14px auto 0; padding: 10px 20px;
+  background: var(--surface-2); color: var(--brand1);
+  border: 1px solid color-mix(in srgb, var(--brand1) 30%, var(--border)); border-radius: 999px;
+  font-size: 13.5px; font-weight: 700; cursor: pointer; transition: .16s;
 }
-.home-audio-hint .link-btn { margin-left: 4px; }
+.go-minutes-btn:hover { border-color: var(--brand1); background: color-mix(in srgb, var(--brand1) 8%, var(--surface)); transform: translateY(-1px); }
+.go-minutes-btn svg { width: 17px; height: 17px; flex: none; }
 
 /* ---------- Audio card ---------- */
 .audio-card audio { width: 100%; margin: 8px 0 10px; }
@@ -319,12 +322,15 @@ select:focus, input:focus, textarea:focus {
 
 /* ---------- Claude card ---------- */
 .claude-card { border: 1px solid color-mix(in srgb, var(--brand1) 30%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--brand1) 5%, var(--surface)), var(--surface)); }
-.claude-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.claude-head { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
 .claude-badge { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 12px; font-size: 20px; background: linear-gradient(135deg, var(--brand1), var(--brand2)); box-shadow: 0 5px 14px color-mix(in srgb, var(--brand1) 35%, transparent); }
 .claude-badge svg { width: 22px; height: 22px; }
 .claude-title { margin: 0 0 3px; font-size: 15px; font-weight: 800; }
 .claude-desc { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
-.claude-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+/* Claudeを開く（大）とコピー（小）を1行で配置 */
+.claude-actions { display: flex; gap: 10px; flex-wrap: nowrap; margin-bottom: 8px; }
+.claude-actions #claudeSend { flex: 2 1 0; min-width: 0; justify-content: center; white-space: nowrap; }
+.claude-actions #claudeCopy { flex: 1 1 0; min-width: 0; justify-content: center; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
 .claude-status { font-size: 13px; font-weight: 600; padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 8px; }
 .claude-status.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .claude-status.warn { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
