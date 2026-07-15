@@ -108,13 +108,13 @@ worker.onmessage = (e) => {
       break;
     case 'result':
       if (msg.mode === 'final') {
-        // 高精度パスの結果で置き換え
-        if (msg.text) liveTranscript.value = msg.text;
+        // 高精度パスの結果で置き換え（反復ハルシネーションを後処理で除去）
+        if (msg.text) liveTranscript.value = cleanupTranscript(msg.text);
         if (finalResolve) { finalResolve(); finalResolve = null; }
       } else {
         // ライブ（暫定）結果を追記
         workerBusy = false;
-        if (msg.text) appendTranscript(msg.text);
+        if (msg.text) appendTranscript(cleanupTranscript(msg.text));
         maybeSendChunk(false);
       }
       break;
@@ -166,14 +166,19 @@ async function startRecording() {
   const useLive = liveEnabled.checked;
   if (useLive) worker.postMessage({ type: 'load', model: liveModel.value });
 
-  // MediaRecorder（再生・高精度再処理用の音声を保持）
+  // MediaRecorder（再生・高精度再処理・音声出力用の音声を保持）
+  // AI で共有しやすい m4a を優先し、非対応ブラウザでは最適な形式にフォールバック
   recordedBlobs = [];
   recordedBlob = null;
   try {
-    mediaRecorder = new MediaRecorder(mediaStream);
+    const mime = pickAudioMime();
+    mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
     mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
     mediaRecorder.start();
-  } catch (_) { mediaRecorder = null; }
+  } catch (_) {
+    try { mediaRecorder = new MediaRecorder(mediaStream); mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); }; mediaRecorder.start(); }
+    catch (_2) { mediaRecorder = null; }
+  }
 
   // Web Audio（波形表示 + ライブ用 PCM を 16kHz で取得）
   audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
@@ -230,6 +235,8 @@ async function stopRecording() {
       audioWrap.hidden = false;
       downloadAudio.disabled = false;
       downloadWav.disabled = false;
+      // 保存ボタンに実際の拡張子を表示
+      downloadAudio.innerHTML = `<span aria-hidden="true">⬇</span> 音声を保存 (.${extFromMime(recordedBlob.type)})`;
     }
   }
   teardownAudio();
@@ -267,6 +274,8 @@ async function runFinalPass(blob) {
 
   try {
     const audio = await decodeTo16kMono(blob);
+    // 音量チェック（無音・小音量だと誤認識・反復が起きやすい）
+    const level = rms(audio);
     await new Promise((resolve) => {
       finalResolve = resolve;
       worker.postMessage(
@@ -276,6 +285,9 @@ async function runFinalPass(blob) {
       );
     });
     setStatus('ready', '文字起こし完了');
+    if (level < 0.008) {
+      showError('録音の音量がかなり小さいようです。マイクに近づける／端末の録音音量を上げると精度が上がります。');
+    }
   } catch (err) {
     showError('高精度処理に失敗しました: ' + (err && err.message ? err.message : err));
     setStatus('ready', 'モデル準備完了');
@@ -283,6 +295,46 @@ async function runFinalPass(blob) {
     clearInterval(procTimer); procTimer = null;
     recordBtn.disabled = false;
   }
+}
+
+/** 録音に使う MIME を選ぶ（AI で共有しやすい m4a を優先） */
+function pickAudioMime() {
+  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return '';
+  const prefs = [
+    'audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/aac', 'audio/mpeg',
+    'audio/ogg;codecs=opus', 'audio/ogg',
+    'audio/webm;codecs=opus', 'audio/webm',
+  ];
+  for (const t of prefs) { try { if (MediaRecorder.isTypeSupported(t)) return t; } catch (_) {} }
+  return '';
+}
+
+/** 音声の実効音量（RMS） */
+function rms(arr) {
+  if (!arr || !arr.length) return 0;
+  let sum = 0;
+  const step = Math.max(1, Math.floor(arr.length / 100000)); // 間引いて概算
+  let n = 0;
+  for (let i = 0; i < arr.length; i += step) { sum += arr[i] * arr[i]; n++; }
+  return Math.sqrt(sum / Math.max(1, n));
+}
+
+/** Whisper の反復ハルシネーションを後処理で除去 */
+function cleanupTranscript(text) {
+  if (!text) return '';
+  let t = text.replace(/\s+/g, ' ').trim();
+  // 短い文字列の連続反復（例: 「5.5.5.5」「このようにこのように」）を 2 回までに圧縮
+  t = t.replace(/(.{1,12}?)\1{3,}/g, '$1$1');
+  // 句読点で区切り、直前と同じ断片が連続したら間引く
+  const segs = t.split(/(?<=[。．！？!?、,])/).map((s) => s.trim()).filter(Boolean);
+  const out = [];
+  let rep = 0;
+  for (const s of segs) {
+    const prev = out[out.length - 1];
+    if (prev && s === prev) { rep++; if (rep >= 1) continue; } else { rep = 0; }
+    out.push(s);
+  }
+  return out.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 /** 録音 Blob を 16kHz モノラルの Float32 にデコード＆リサンプル */

@@ -33,11 +33,18 @@ self.onmessage = async (event) => {
   if (msg.type === 'transcribe') {
     try {
       const t = await getTranscriber(msg.model, (p) => self.postMessage({ type: 'progress', data: p }));
-      const options = { task: 'transcribe' };
+      const options = {
+        task: 'transcribe',
+        // 反復（「このように…」の暴走）を抑制する
+        no_repeat_ngram_size: 3,
+        repetition_penalty: 1.15,
+      };
       if (msg.language && msg.language !== 'auto') options.language = msg.language;
 
-      // 高精度パス（録音全体の再処理）は 30 秒チャンク＋オーバーラップで文脈を保つ
-      if (msg.longform) {
+      // 30 秒を超える音声だけチャンク分割＋オーバーラップで文脈を保つ。
+      // 短い音声はチャンク/タイムスタンプを使わない方が安定する。
+      const durationSec = (msg.audio && msg.audio.length ? msg.audio.length : 0) / 16000;
+      if (msg.longform && durationSec > 28) {
         options.chunk_length_s = 30;
         options.stride_length_s = 5;
         options.return_timestamps = true;
