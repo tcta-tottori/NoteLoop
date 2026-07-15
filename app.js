@@ -45,6 +45,7 @@ const accuracyModel  = $('accuracyModel');
 const liveEnabled    = $('liveEnabled');
 const liveModel      = $('liveModel');
 const liveModelField = $('liveModelField');
+const keepAwake      = $('keepAwake');
 
 const meetingName    = $('meetingName');
 const meetingDate    = $('meetingDate');
@@ -94,7 +95,7 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.4';
+const APP_VERSION = 'Ver.1.5';
 const APP_UPDATED = '2026.7.16';
 
 let participants = [];   // { dept, name }
@@ -332,6 +333,23 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+/* ===== 画面の常時オン（Wake Lock） ===== */
+let wakeLock = null;
+const WAKE_KEY = 'noteloop_keep_awake';
+/** 設定がONなら録音中に画面が消えないようロックを取得（対応ブラウザのみ） */
+async function acquireWakeLock() {
+  if (!keepAwake || !keepAwake.checked) return;
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; }); // 画面非表示等で自動解放される
+  } catch (_) { wakeLock = null; }
+}
+async function releaseWakeLock() {
+  try { if (wakeLock) await wakeLock.release(); } catch (_) {}
+  wakeLock = null;
+}
+
 /* =========================================================
  * 録音
  * =======================================================*/
@@ -347,6 +365,7 @@ recordBtn.addEventListener('click', async () => {
 async function startRecording() {
   hideError();
   activeEngine = engineSelect.value;
+  acquireWakeLock(); // 設定がONなら画面を常時オンに（ユーザー操作の直後に要求）
 
   // --- Web Speech: 認識専用（getUserMedia を使わずマイク競合を回避） ---
   if (activeEngine === 'webspeech') {
@@ -468,6 +487,7 @@ async function stopRecording() {
   clearInterval(timerInterval);
   clearInterval(liveTimer); liveTimer = null;
   clearRecordingNotification();
+  releaseWakeLock();
 
   if (activeEngine === 'webspeech') stopWebSpeech();
 
@@ -1571,6 +1591,14 @@ claudeInstructionReset.addEventListener('click', () => {
  * =======================================================*/
 liveEnabled.addEventListener('change', () => { liveModelField.style.display = liveEnabled.checked ? '' : 'none'; });
 
+// 画面常時オン設定の保存 / 即時反映（録音中に切り替えたら取得・解放）
+if (keepAwake) {
+  keepAwake.addEventListener('change', () => {
+    localStorage.setItem(WAKE_KEY, keepAwake.checked ? '1' : '0');
+    if (recording) { keepAwake.checked ? acquireWakeLock() : releaseWakeLock(); }
+  });
+}
+
 const ENGINE_KEY = 'noteloop_engine';
 function applyEngineUI() {
   const ws = engineSelect.value === 'webspeech';
@@ -1590,6 +1618,7 @@ meetingDate.value = todayStr();
 downloadAudio.disabled = true;
 downloadWav.disabled = true;
 setAudioAvailable(false);
+if (keepAwake) { const kw = localStorage.getItem(WAKE_KEY); if (kw === '0') keepAwake.checked = false; }
 liveModelField.style.display = liveEnabled.checked ? '' : 'none';
 claudeInstruction.value = loadInstruction();
 // エンジンの復元 + Web Speech 非対応ブラウザの表示
@@ -1623,5 +1652,6 @@ document.addEventListener('visibilitychange', () => {
   try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch (_) {}
   // Web Speech が停止していれば再開
   if (activeEngine === 'webspeech' && !recognition) { try { beginRecognition(); } catch (_) {} }
+  if (!wakeLock) acquireWakeLock(); // 画面復帰時にロックを取り直す（非表示中に自動解放されるため）
   notifLastSec = -1; // 次のtickで通知を更新
 });
