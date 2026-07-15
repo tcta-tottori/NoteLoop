@@ -126,7 +126,7 @@ function closeDrawer() {
   drawer.classList.remove('open');
   drawerBackdrop.classList.remove('show');
   menuToggle.setAttribute('aria-expanded', 'false');
-  setTimeout(() => { if (!drawer.classList.contains('open')) drawerBackdrop.hidden = true; }, 300);
+  setTimeout(() => { if (!drawer.classList.contains('open')) drawerBackdrop.hidden = true; }, 640);
 }
 menuToggle.addEventListener('click', () => {
   drawer.classList.contains('open') ? closeDrawer() : openDrawer();
