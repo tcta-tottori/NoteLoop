@@ -17,9 +17,12 @@
 </head>
 <body>
   <header class="app-header">
+    <button id="menuToggle" class="menu-toggle" type="button" aria-label="メニューを開く" aria-expanded="false" aria-controls="drawer">
+      <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+    </button>
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
           <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
           <path d="M12 18v4"/>
@@ -32,55 +35,82 @@
     </div>
   </header>
 
+  <!-- ドロワーメニュー（左からスライド） -->
+  <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+  <nav id="drawer" class="drawer" aria-label="メニュー">
+    <div class="drawer-head">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
+          <path d="M12 18v4"/>
+        </svg>
+      </span>
+      <span class="drawer-brand">NoteLoop</span>
+    </div>
+    <button class="drawer-item active" type="button" data-target="screen-home" data-title="録音・文字起こし"><span class="d-ico" aria-hidden="true">🎙</span> 録音</button>
+    <button class="drawer-item" type="button" data-target="screen-minutes" data-title="議事録"><span class="d-ico" aria-hidden="true">📝</span> 議事録</button>
+    <button class="drawer-item" type="button" data-target="screen-history" data-title="過去の議事録"><span class="d-ico" aria-hidden="true">🗂</span> 履歴</button>
+    <button class="drawer-item" type="button" data-target="screen-settings" data-title="設定"><span class="d-ico" aria-hidden="true">⚙</span> 設定</button>
+  </nav>
+
   <main class="app-main">
 
     <!-- ========== ホーム: 録音・文字起こし ========== -->
-    <section class="screen active" id="screen-home" aria-labelledby="screenTitle">
-      <div class="panel">
-        <div class="record-stage">
-          <button id="recordBtn" class="record-btn" type="button" aria-label="録音開始">
-            <span class="rec-ring" aria-hidden="true"></span>
-            <span class="rec-icon" aria-hidden="true"></span>
-          </button>
-          <div class="record-meta">
-            <div class="timer" id="timer" aria-live="polite">00:00</div>
-            <div class="rec-hint" id="recHint">タップして録音開始</div>
-          </div>
-        </div>
+    <section class="screen active home-screen" id="screen-home" aria-labelledby="screenTitle">
 
-        <canvas id="waveform" class="waveform" width="600" height="72" aria-hidden="true"></canvas>
-
-        <div id="statusBar" class="status-bar" role="status" aria-live="polite">
-          <span id="modelStatus" class="status-chip">モデル未読み込み</span>
-          <div class="progress" hidden id="progressWrap">
-            <div class="progress-bar" id="progressBar"></div>
-          </div>
-        </div>
-
-        <div id="errorBox" class="error-box" hidden></div>
+      <!-- 上部: ウェーブアニメーション -->
+      <div class="wave-wrap" id="waveWrap" hidden>
+        <canvas id="wave" class="wave" width="900" height="140" aria-hidden="true"></canvas>
+        <div class="wave-timer" id="timer" aria-live="polite" hidden>00:00</div>
       </div>
 
-      <!-- 録音の再生＆音声ファイル出力 -->
-      <div class="panel audio-card" id="audioWrap" hidden>
-        <div class="mini-label-row">
-          <span class="mini-label"><span aria-hidden="true">🎧</span> 録音した音声</span>
-          <span class="audio-size" id="audioSize"></span>
-        </div>
-        <audio id="player" controls preload="metadata"></audio>
-        <div class="audio-actions">
-          <button class="chip-btn" id="downloadAudio" type="button"><span aria-hidden="true">⬇</span> 音声を保存</button>
-          <button class="chip-btn" id="downloadWav" type="button"><span aria-hidden="true">🎵</span> WAVに変換</button>
+      <!-- モデル読み込み・処理状況（必要時のみ） -->
+      <div id="statusBar" class="status-bar home-status" role="status" aria-live="polite" hidden>
+        <span id="modelStatus" class="status-chip">モデル未読み込み</span>
+        <div class="progress" hidden id="progressWrap">
+          <div class="progress-bar" id="progressBar"></div>
         </div>
       </div>
 
-      <div class="panel">
+      <div id="errorBox" class="error-box" hidden></div>
+
+      <!-- 文字起こし本文（録音中／結果があるときのみ表示） -->
+      <div class="home-transcript" id="transcriptPanel" hidden>
         <div class="mini-label-row">
           <label class="mini-label" for="liveTranscript">文字起こし</label>
           <button id="clearTranscript" class="link-btn" type="button">クリア</button>
         </div>
-        <textarea id="liveTranscript" class="transcript" placeholder="録音を止めると、音声全体を高精度で再処理して結果を表示します。ここで手直しもできます。"></textarea>
-        <button id="toMinutes" class="wide-btn" type="button">この文字起こしで議事録を作る <span aria-hidden="true">→</span></button>
+        <textarea id="liveTranscript" class="transcript" placeholder="録音中の文字起こしがここに表示されます。停止後に編集できます。"></textarea>
+
+        <!-- 録音した音声（停止後） -->
+        <div class="audio-card" id="audioWrap" hidden>
+          <div class="mini-label-row">
+            <span class="mini-label"><span aria-hidden="true">🎧</span> 録音した音声</span>
+            <span class="audio-size" id="audioSize"></span>
+          </div>
+          <audio id="player" controls preload="metadata"></audio>
+          <div class="audio-actions">
+            <button class="chip-btn" id="downloadAudio" type="button"><span aria-hidden="true">⬇</span> 音声を保存</button>
+            <button class="chip-btn" id="downloadWav" type="button"><span aria-hidden="true">🎵</span> WAVに変換</button>
+          </div>
+        </div>
+
+        <button id="toMinutes" class="wide-btn" type="button" hidden>この文字起こしで議事録を作る <span aria-hidden="true">→</span></button>
       </div>
+
+      <!-- 中央: 点滅する案内（待機中のみ） -->
+      <div class="idle-prompt" id="idlePrompt">
+        <span class="idle-emoji" aria-hidden="true">🎙</span>
+        <span>マイクボタンで録音開始</span>
+      </div>
+
+      <!-- 中央下部に固定するマイクボタン -->
+      <button id="recordBtn" class="mic-fab" type="button" aria-label="録音開始">
+        <span class="rec-ring" aria-hidden="true"></span>
+        <span class="rec-icon" aria-hidden="true"></span>
+      </button>
+      <div class="rec-hint" id="recHint" hidden>録音中… タップで停止</div>
     </section>
 
     <!-- ========== 議事録 ========== -->
@@ -220,22 +250,6 @@
     </section>
 
   </main>
-
-  <!-- ========== 下部メニュー ========== -->
-  <nav class="bottom-nav" aria-label="メニュー">
-    <button class="nav-btn active" type="button" data-target="screen-home" data-title="録音・文字起こし">
-      <span class="nav-ico" aria-hidden="true">🎙</span><span class="nav-label">録音</span>
-    </button>
-    <button class="nav-btn" type="button" data-target="screen-minutes" data-title="議事録">
-      <span class="nav-ico" aria-hidden="true">📝</span><span class="nav-label">議事録</span>
-    </button>
-    <button class="nav-btn" type="button" data-target="screen-history" data-title="過去の議事録">
-      <span class="nav-ico" aria-hidden="true">🗂</span><span class="nav-label">履歴</span>
-    </button>
-    <button class="nav-btn" type="button" data-target="screen-settings" data-title="設定">
-      <span class="nav-ico" aria-hidden="true">⚙</span><span class="nav-label">設定</span>
-    </button>
-  </nav>
 
   <!-- docx-js (Word 出力) を CDN から読み込み -->
   <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>

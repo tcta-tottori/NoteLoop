@@ -11,7 +11,11 @@ const $ = (id) => document.getElementById(id);
 const recordBtn      = $('recordBtn');
 const recHint        = $('recHint');
 const timerEl        = $('timer');
-const waveform       = $('waveform');
+const wave           = $('wave');
+const waveWrap       = $('waveWrap');
+const statusBar      = $('statusBar');
+const transcriptPanel= $('transcriptPanel');
+const idlePrompt     = $('idlePrompt');
 const modelStatus    = $('modelStatus');
 const progressWrap   = $('progressWrap');
 const progressBar    = $('progressBar');
@@ -90,23 +94,66 @@ let sttBase = '';               // 録音開始時点の既存テキスト
 let sttFinal = '';              // 今回の録音で確定した認識結果
 
 /* =========================================================
- * 画面切り替え（下部メニュー）
+ * 画面切り替え（ハンバーガー → 左ドロワー）
  * =======================================================*/
-const navBtns = Array.from(document.querySelectorAll('.nav-btn'));
-navBtns.forEach((btn) => {
-  btn.addEventListener('click', () => showScreen(btn.dataset.target, btn.dataset.title));
+const menuToggle = $('menuToggle');
+const drawer = $('drawer');
+const drawerBackdrop = $('drawerBackdrop');
+const drawerItems = Array.from(document.querySelectorAll('.drawer-item'));
+
+function openDrawer() {
+  drawer.classList.add('open');
+  drawerBackdrop.hidden = false;
+  requestAnimationFrame(() => drawerBackdrop.classList.add('show'));
+  menuToggle.setAttribute('aria-expanded', 'true');
+}
+function closeDrawer() {
+  drawer.classList.remove('open');
+  drawerBackdrop.classList.remove('show');
+  menuToggle.setAttribute('aria-expanded', 'false');
+  setTimeout(() => { if (!drawer.classList.contains('open')) drawerBackdrop.hidden = true; }, 300);
+}
+menuToggle.addEventListener('click', () => {
+  drawer.classList.contains('open') ? closeDrawer() : openDrawer();
 });
+drawerBackdrop.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+drawerItems.forEach((it) => it.addEventListener('click', () => {
+  showScreen(it.dataset.target, it.dataset.title);
+  closeDrawer();
+}));
+
 function showScreen(id, title) {
   document.querySelectorAll('.screen').forEach((s) => {
     const active = s.id === id;
     s.classList.toggle('active', active);
     s.hidden = !active;
   });
-  navBtns.forEach((b) => b.classList.toggle('active', b.dataset.target === id));
+  drawerItems.forEach((b) => b.classList.toggle('active', b.dataset.target === id));
   if (title) screenTitle.textContent = title;
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (id === 'screen-home') updateHomeUI();
 }
 toMinutes.addEventListener('click', () => showScreen('screen-minutes', '議事録'));
+
+/* =========================================================
+ * ホーム画面の表示状態（最小構成: 待機はマイクと点滅案内のみ）
+ * =======================================================*/
+let homeProcessing = false;
+function updateHomeUI() {
+  const hasText = liveTranscript.value.trim().length > 0;
+  const hasAudio = !!recordedBlob;
+  const showWave = recording || homeProcessing;
+
+  waveWrap.hidden = !showWave;
+  timerEl.hidden = !recording;
+  recHint.hidden = !recording;
+  idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
+  transcriptPanel.hidden = !(recording || hasText || hasAudio);
+  toMinutes.hidden = !(!recording && !homeProcessing && hasText);
+
+  if (showWave) startWave(); else stopWave();
+}
 
 /* =========================================================
  * Web Worker（Whisper）
@@ -155,6 +202,7 @@ function setStatus(kind, text) {
   modelStatus.textContent = text;
   modelStatus.className = 'status-chip' + (kind ? ' ' + kind : '');
   if (kind === 'ready') progressWrap.hidden = true;
+  statusBar.hidden = !kind; // 待機（kind='')のときは非表示
 }
 
 /* =========================================================
@@ -221,24 +269,25 @@ async function startRecording() {
 
   recording = true;
   pendingChunks = [];
+  recordedBlob = null;
   audioWrap.hidden = true;
   recordBtn.classList.add('recording');
   recordBtn.setAttribute('aria-label', '録音停止');
-  recHint.textContent = '録音中… タップで停止';
 
   if (activeEngine === 'webspeech') {
     const ok = startWebSpeech();
-    setStatus(ok ? 'working' : '', ok ? 'Web Speech で認識中…' : '録音中（認識なし）');
+    setStatus('working', ok ? 'Web Speech で認識中…' : '録音中（音声認識が使えません）');
   } else if (useLive) {
     setStatus('working', '準備中…');
   } else {
-    setStatus('', '録音中');
+    setStatus('working', '録音中');
   }
+
+  updateHomeUI();
 
   startTime = Date.now();
   updateTimer();
   timerInterval = setInterval(updateTimer, 250);
-  drawWaveform();
   if (useLive) liveTimer = setInterval(() => maybeSendChunk(false), LIVE_INTERVAL_MS);
 }
 
@@ -246,10 +295,11 @@ async function stopRecording() {
   recording = false;
   recordBtn.classList.remove('recording');
   recordBtn.setAttribute('aria-label', '録音開始');
+  recHint.hidden = true;
+  timerEl.hidden = true;
 
   clearInterval(timerInterval);
   clearInterval(liveTimer); liveTimer = null;
-  cancelAnimationFrame(rafId);
 
   if (activeEngine === 'webspeech') stopWebSpeech();
 
@@ -272,13 +322,14 @@ async function stopRecording() {
   if (activeEngine === 'webspeech') {
     // Web Speech はリアルタイムで確定済み。高精度パスは行わない。
     setStatus('ready', '認識完了');
+    updateHomeUI();
   } else if (recordedBlob) {
     // Whisper: 音声全体を高精度で再処理して確定版に置き換え
     await runFinalPass(recordedBlob);
   } else {
     setStatus('ready', 'モデル準備完了');
+    updateHomeUI();
   }
-  recHint.textContent = 'タップして録音開始';
 }
 
 /* =========================================================
@@ -376,6 +427,8 @@ function teardownAudio() {
  */
 async function runFinalPass(blob) {
   recordBtn.disabled = true;
+  homeProcessing = true;
+  updateHomeUI();
   const procStart = Date.now();
   setStatus('working', '高精度で文字起こし中…');
   procTimer = setInterval(() => {
@@ -405,6 +458,8 @@ async function runFinalPass(blob) {
   } finally {
     clearInterval(procTimer); procTimer = null;
     recordBtn.disabled = false;
+    homeProcessing = false;
+    updateHomeUI();
   }
 }
 
@@ -492,35 +547,78 @@ function appendTranscript(text) {
   liveTranscript.value = cur ? cur + ' ' + text : text;
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
 }
-clearTranscript.addEventListener('click', () => { liveTranscript.value = ''; });
+clearTranscript.addEventListener('click', () => { liveTranscript.value = ''; updateHomeUI(); });
+liveTranscript.addEventListener('input', updateHomeUI);
 
-/* ===== タイマー & 波形 ===== */
+/* ===== タイマー ===== */
 function updateTimer() {
   const elapsed = Math.floor((Date.now() - startTime) / 1000);
   const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const s = String(elapsed % 60).padStart(2, '0');
   timerEl.textContent = `${m}:${s}`;
 }
-function drawWaveform() {
-  const ctx = waveform.getContext('2d');
-  const buf = new Uint8Array(analyser.fftSize);
-  const color = (getComputedStyle(document.documentElement).getPropertyValue('--brand1') || '#4f6ef7').trim();
-  const render = () => {
-    rafId = requestAnimationFrame(render);
-    const w = waveform.width, h = waveform.height;
-    analyser.getByteTimeDomainData(buf);
-    ctx.clearRect(0, 0, w, h);
-    ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.beginPath();
-    const slice = w / buf.length; let x = 0;
-    for (let i = 0; i < buf.length; i++) {
-      const y = (buf[i] / 128.0 * h) / 2;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      x += slice;
-    }
-    ctx.lineTo(w, h / 2); ctx.stroke();
-  };
-  render();
+
+/* ===== 上部のウェーブアニメーション ===== */
+let waveRAF = null, wavePhase = 0, waveLevel = 0.14, waveActive = false;
+const waveBuf = new Uint8Array(1024);
+function brandVar(n) { return (getComputedStyle(document.documentElement).getPropertyValue(n) || '').trim(); }
+function resizeWave() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = wave.getBoundingClientRect();
+  if (rect.width > 0) { wave.width = Math.round(rect.width * dpr); wave.height = Math.round(rect.height * dpr); }
 }
+function startWave() {
+  if (waveActive) return;
+  waveActive = true;
+  resizeWave();
+  waveLoop();
+}
+function stopWave() {
+  waveActive = false;
+  if (waveRAF) cancelAnimationFrame(waveRAF);
+  waveRAF = null;
+}
+function waveLoop() {
+  if (!waveActive) return;
+  waveRAF = requestAnimationFrame(waveLoop);
+  wavePhase += 0.035;
+  let target;
+  if (recording && analyser) {
+    analyser.getByteTimeDomainData(waveBuf);
+    let s = 0;
+    for (let i = 0; i < waveBuf.length; i++) { const x = (waveBuf[i] - 128) / 128; s += x * x; }
+    const r = Math.sqrt(s / waveBuf.length);
+    target = Math.max(0.12, Math.min(1, r * 4.5));
+  } else {
+    target = 0.16 + Math.sin(wavePhase * 1.4) * 0.05; // 処理中はゆるやかに揺れる
+  }
+  waveLevel += (target - waveLevel) * 0.15;
+  drawWaveFrame();
+}
+function drawWaveFrame() {
+  const ctx = wave.getContext('2d');
+  const w = wave.width, h = wave.height, mid = h / 2;
+  ctx.clearRect(0, 0, w, h);
+  const layers = [
+    { amp: 0.95, freq: 1.4, speed: 1.0, col: brandVar('--brand1') || '#4f6ef7', a: 0.9 },
+    { amp: 0.62, freq: 2.1, speed: -1.3, col: brandVar('--brand2') || '#7c5cf6', a: 0.5 },
+    { amp: 0.42, freq: 3.1, speed: 1.9, col: '#ec4899', a: 0.35 },
+  ];
+  const step = Math.max(2, w / 200);
+  for (const L of layers) {
+    ctx.beginPath();
+    for (let x = 0; x <= w; x += step) {
+      const t = x / w;
+      const y = mid + Math.sin(t * Math.PI * 2 * L.freq + wavePhase * L.speed) * (mid * 0.72 * L.amp * waveLevel);
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = L.col; ctx.globalAlpha = L.a;
+    ctx.lineWidth = Math.max(2, w * 0.0035); ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+window.addEventListener('resize', () => { if (waveActive) resizeWave(); });
 
 /* =========================================================
  * 議事録化（簡易ロジック / スタブ）
@@ -924,6 +1022,7 @@ if (!getSR()) {
   if (opt) opt.textContent = 'Web Speech API（このブラウザは非対応）';
 }
 applyEngineUI();
+updateHomeUI();
 seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
