@@ -581,18 +581,23 @@ function stopWave() {
 function waveLoop() {
   if (!waveActive) return;
   waveRAF = requestAnimationFrame(waveLoop);
-  wavePhase += 0.035;
+  // 大きいほど速く揺れる（静かなときはゆっくり）
+  wavePhase += 0.02 + waveLevel * 0.055;
   let target;
   if (recording && analyser) {
     analyser.getByteTimeDomainData(waveBuf);
     let s = 0;
     for (let i = 0; i < waveBuf.length; i++) { const x = (waveBuf[i] - 128) / 128; s += x * x; }
     const r = Math.sqrt(s / waveBuf.length);
-    target = Math.max(0.12, Math.min(1, r * 4.5));
+    // ノイズゲート＋ゲイン: 静かなら凪(0)、声が大きいほど大きく（0〜1）
+    const gated = Math.max(0, r - 0.008);
+    target = Math.min(1, gated * 8);
   } else {
-    target = 0.16 + Math.sin(wavePhase * 1.4) * 0.05; // 処理中はゆるやかに揺れる
+    target = 0.14 + Math.sin(wavePhase * 1.4) * 0.05; // 処理中はゆるやかに揺れる
   }
-  waveLevel += (target - waveLevel) * 0.15;
+  // アタックは速く、リリースはゆっくり → 自然な揺れ
+  const k = target > waveLevel ? 0.4 : 0.06;
+  waveLevel += (target - waveLevel) * k;
   drawWaveFrame();
 }
 function drawWaveFrame() {
@@ -613,7 +618,7 @@ function drawWaveFrame() {
       const t = x / w;
       const env = Math.sin(t * Math.PI);   // 端で0 → 中央でふくらむ（溶け込み）
       const y = mid + Math.sin(t * Math.PI * 2 * L.freq + wavePhase * L.speed)
-                    * (h * L.amp * (0.28 + waveLevel)) * env;
+                    * (h * L.amp * (0.05 + waveLevel)) * env;
       if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.strokeStyle = L.col; ctx.globalAlpha = L.a;
