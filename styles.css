@@ -59,12 +59,17 @@ a:hover { text-decoration: underline; }
   background: linear-gradient(180deg, #4f6ef7 0%, #7c5cf6 58%, #c74fbf 128%);
   border-bottom: none;
 }
-/* ヘッダー下端を content へブラーでスムーズに繋ぐ */
-.app-header::after {
-  content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 26px;
-  background: linear-gradient(to bottom, rgba(150, 92, 226, .30), rgba(150, 92, 226, 0));
-  -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px);
-  pointer-events: none;
+/* ヘッダー色が下へ伸びるカラーのブラーグロー。コンテンツの背面（z-index:-1）に
+   置くので文字は隠れず、録音中の表示等に被ってもOK。 */
+.header-glow {
+  position: fixed; top: 0; left: 0; right: 0; z-index: -1; pointer-events: none;
+  height: 190px;
+  background: linear-gradient(to bottom,
+    rgba(90, 100, 244, .60) 0%,
+    rgba(140, 96, 232, .42) 34%,
+    rgba(199, 79, 191, .22) 64%,
+    rgba(199, 79, 191, 0) 100%);
+  filter: blur(8px);
 }
 
 /* ハンバーガー（左に固定・グラデバーに合わせて白系） */
@@ -388,16 +393,19 @@ select:focus, input:focus, textarea:focus {
   display: flex; flex-direction: column; align-items: center; gap: 18px;
   pointer-events: none; text-align: center; padding: 0 24px;
 }
-.idle-text { color: var(--muted); font-size: 16px; font-weight: 700; animation: blinkText 1.6s ease-in-out infinite; }
+.idle-text { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 16px; font-weight: 700; animation: blinkText 1.6s ease-in-out infinite; }
+.idle-mic { width: 21px; height: 21px; flex: none; }
 .home-meeting-btn {
   pointer-events: auto;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  border: 1px solid color-mix(in srgb, var(--brand1) 32%, var(--border));
-  color: var(--brand1); font-weight: 700; font-size: 13px;
-  padding: 10px 18px; border-radius: 999px; cursor: pointer;
-  backdrop-filter: blur(8px); transition: .16s;
+  display: inline-flex; align-items: center; gap: 7px;
+  background: linear-gradient(135deg, var(--brand1), var(--brand2));
+  color: #fff; border: none; font-weight: 700; font-size: 13px;
+  padding: 10px 20px; border-radius: 999px; cursor: pointer;
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--brand1) 35%, transparent);
+  transition: .16s;
 }
-.home-meeting-btn:hover { border-color: var(--brand1); background: color-mix(in srgb, var(--brand1) 10%, var(--surface)); transform: translateY(-1px); }
+.home-meeting-btn:hover { transform: translateY(-1px); box-shadow: 0 9px 20px color-mix(in srgb, var(--brand1) 45%, transparent); }
+.edit-ico { width: 15px; height: 15px; flex: none; }
 @keyframes blinkText { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* ---------- Home: mic FAB ---------- */
@@ -438,7 +446,7 @@ select:focus, input:focus, textarea:focus {
 @media (max-width: 380px) {
   .mic-fab { width: 58px; height: 58px; }
   .mic-glyph { width: 26px; height: 26px; }
-  .mic-glyph-img { height: 28px; }
+  .fab-mic { height: 33px; }
   .wave-timer { font-size: 15px; }
 }
 
@@ -488,7 +496,7 @@ select:focus, input:focus, textarea:focus {
 
 /* ---------- FAB states ---------- */
 .fab-ico { display: none; }
-.fab-mic { height: 32px; width: auto; filter: drop-shadow(0 1px 3px rgba(0,0,0,.2)); }
+.fab-mic { height: 37px; width: auto; filter: drop-shadow(0 1px 3px rgba(0,0,0,.2)); }
 .fab-doc, .fab-mail { width: 30px; height: 30px; }
 .mic-fab[data-state="idle"] .fab-mic,
 .mic-fab[data-state="recording"] .fab-mic { display: block; }
