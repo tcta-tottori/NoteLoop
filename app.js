@@ -47,6 +47,14 @@ const saveMinutes    = $('saveMinutes');
 const historyList    = $('historyList');
 const screenTitle    = $('screenTitle');
 
+const claudeSend           = $('claudeSend');
+const claudeCopy           = $('claudeCopy');
+const claudeStatus         = $('claudeStatus');
+const claudeOpen           = $('claudeOpen');
+const claudePromptPreview  = $('claudePromptPreview');
+const claudeInstruction    = $('claudeInstruction');
+const claudeInstructionReset = $('claudeInstructionReset');
+
 /* ===== 状態 ===== */
 const SAMPLE_RATE = 16000;
 const CHUNK_MIN_SEC = 4;
@@ -658,6 +666,129 @@ saveMinutes.addEventListener('click', () => {
 });
 
 /* =========================================================
+ * Claude 連携（1クリックでプロンプトをコピー → Claudeを開く）
+ * =======================================================*/
+const CLAUDE_URL = 'https://claude.ai/new';
+const CLAUDE_INSTR_KEY = 'noteloop_claude_instruction';
+const DEFAULT_CLAUDE_INSTRUCTION =
+`以下の会議の文字起こしから、正確で読みやすい議事録を作成してください。
+
+【出力形式】この見出しで、箇条書き中心にまとめてください。
+## 要点・見出し
+## 決定事項
+## ToDo（担当・期限がわかれば「― 担当/期限」の形で併記）
+
+【作成の指示】
+- 文字起こしの誤変換・言い間違いは、文脈から自然に補正してください。
+- 重要な数値・固有名詞・日付・金額は必ず保持してください。
+- 相槌や言い直し、雑談は省き、簡潔にまとめてください。
+- 決定事項とToDo（未確定の宿題）は明確に区別してください。
+- 判断できない箇所は「（要確認）」と明記してください。`;
+
+function loadInstruction() {
+  return localStorage.getItem(CLAUDE_INSTR_KEY) || DEFAULT_CLAUDE_INSTRUCTION;
+}
+
+/** Claude に渡すプロンプトを組み立てる（指示 ＋ 会議情報 ＋ 下書き ＋ 文字起こし） */
+function buildClaudePrompt() {
+  const m = currentMinutes();
+  const transcript = liveTranscript.value.trim();
+  const instr = (claudeInstruction.value || DEFAULT_CLAUDE_INSTRUCTION).trim();
+
+  let draft = '';
+  if (m.summary.length || m.decisions.length || m.todos.length) {
+    draft = `\n\n【アプリの下書き（参考・必要なら修正してください）】\n` +
+      `■ 要点・見出し\n${m.summary.length ? toBullets(m.summary) : '（なし）'}\n` +
+      `■ 決定事項\n${m.decisions.length ? toBullets(m.decisions) : '（なし）'}\n` +
+      `■ ToDo\n${m.todos.length ? toBullets(m.todos) : '（なし）'}`;
+  }
+
+  return `${instr}
+
+【会議情報】
+会議名: ${m.name}
+日付: ${m.date}${draft}
+
+【文字起こし】
+${transcript}`;
+}
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) { /* フォールバックへ */ }
+  // 旧方式フォールバック
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (_) { return false; }
+}
+
+function setClaudeStatus(kind, html) {
+  claudeStatus.hidden = false;
+  claudeStatus.className = 'claude-status' + (kind ? ' ' + kind : '');
+  claudeStatus.innerHTML = html;
+}
+
+function ensureTranscript() {
+  const t = liveTranscript.value.trim();
+  if (!t) {
+    showError('文字起こしが空です。先に「録音」画面で録音するか、テキストを入力してください。');
+    showScreen('screen-home', '録音・文字起こし');
+    return false;
+  }
+  return true;
+}
+
+// コピーしてClaudeを開く
+claudeSend.addEventListener('click', async () => {
+  if (!ensureTranscript()) return;
+  hideError();
+  const prompt = buildClaudePrompt();
+  claudePromptPreview.value = prompt;
+  // ジェスチャーを保つため先にウィンドウを開く（noopener は付けず、参照取得後に opener を切る）
+  const win = window.open(CLAUDE_URL, '_blank');
+  if (win) { try { win.opener = null; } catch (_) {} }
+  claudeOpen.hidden = false; // 手動フォールバックのリンクは常に表示
+  const copied = await copyText(prompt);
+  if (!win) {
+    setClaudeStatus('warn', 'ポップアップがブロックされました。下の「→ Claudeを開く」を押してください（プロンプトはコピー済みです）。');
+  } else if (copied) {
+    setClaudeStatus('ok', '✓ プロンプトをコピーしました。開いた Claude の入力欄に <strong>貼り付け（⌘/Ctrl+V）→ 送信</strong> してください。');
+  } else {
+    setClaudeStatus('warn', '⚠ 自動コピーできませんでした。下の「送信するプロンプトを確認」を開いて、内容を手動でコピーしてください。');
+  }
+});
+
+// プロンプトをコピーのみ
+claudeCopy.addEventListener('click', async () => {
+  if (!ensureTranscript()) return;
+  hideError();
+  const prompt = buildClaudePrompt();
+  claudePromptPreview.value = prompt;
+  const copied = await copyText(prompt);
+  claudeOpen.hidden = false;
+  if (copied) setClaudeStatus('ok', '✓ プロンプトをコピーしました。「→ Claudeを開く」から貼り付けて送信してください。');
+  else setClaudeStatus('warn', '⚠ 自動コピーできませんでした。下の「送信するプロンプトを確認」から手動でコピーしてください。');
+});
+
+// 指示テンプレートの保存・リセット
+claudeInstruction.addEventListener('input', () => {
+  localStorage.setItem(CLAUDE_INSTR_KEY, claudeInstruction.value);
+});
+claudeInstructionReset.addEventListener('click', () => {
+  claudeInstruction.value = DEFAULT_CLAUDE_INSTRUCTION;
+  localStorage.setItem(CLAUDE_INSTR_KEY, DEFAULT_CLAUDE_INSTRUCTION);
+});
+
+/* =========================================================
  * 設定・エラー・初期化
  * =======================================================*/
 liveEnabled.addEventListener('change', () => { liveModelField.style.display = liveEnabled.checked ? '' : 'none'; });
@@ -669,6 +800,7 @@ meetingDate.value = todayStr();
 downloadAudio.disabled = true;
 downloadWav.disabled = true;
 liveModelField.style.display = liveEnabled.checked ? '' : 'none';
+claudeInstruction.value = loadInstruction();
 seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）

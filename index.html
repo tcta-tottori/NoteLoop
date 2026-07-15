@@ -116,6 +116,28 @@
         </div>
       </div>
 
+      <!-- Claude連携: 1クリックでプロンプトをコピーしてClaudeを開く -->
+      <div class="panel claude-card">
+        <div class="claude-head">
+          <span class="claude-badge" aria-hidden="true">🤖</span>
+          <div>
+            <h3 class="claude-title">Claudeで高精度な議事録に</h3>
+            <p class="claude-desc">会議情報＋文字起こし＋指示をまとめてコピーし、Claude（アプリ / Web版）を開きます。あとは<strong>貼り付け（⌘/Ctrl+V）→送信</strong>するだけ。</p>
+          </div>
+        </div>
+        <div class="claude-actions">
+          <button class="primary-btn" id="claudeSend" type="button"><span aria-hidden="true">📋</span> コピーしてClaudeを開く</button>
+          <button class="secondary-btn" id="claudeCopy" type="button"><span aria-hidden="true">⧉</span> プロンプトをコピー</button>
+        </div>
+        <div class="claude-status" id="claudeStatus" hidden></div>
+        <a class="claude-open-link" id="claudeOpen" href="https://claude.ai/new" target="_blank" rel="noopener" hidden>→ Claudeを開く</a>
+        <details class="claude-preview">
+          <summary>送信するプロンプトを確認 / 手動でコピー</summary>
+          <textarea id="claudePromptPreview" class="minutes-area" rows="8" readonly placeholder="「コピーしてClaudeを開く」を押すと、ここに内容が表示されます。"></textarea>
+        </details>
+        <p class="claude-note">※ Claudeはチャット上で音声(m4a)を直接処理できないため、この機能は<strong>文字起こしテキスト</strong>を渡します。音声は「録音」画面から別途保存してください。</p>
+      </div>
+
       <div class="panel">
         <span class="export-heading">書き出し</span>
         <div class="export-row">
@@ -167,6 +189,16 @@
             <option value="Xenova/whisper-tiny" selected>tiny（約40MB・最速）</option>
             <option value="Xenova/whisper-base">base（約80MB）</option>
           </select>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 class="settings-group-title">Claude連携</h3>
+        <div class="field settings-field">
+          <label for="claudeInstruction">議事録の指示（プロンプトの先頭に入ります・編集可）</label>
+          <textarea id="claudeInstruction" class="minutes-area" rows="8"></textarea>
+          <p class="field-hint">この指示文のあとに「会議名・日付・文字起こし」が自動で付きます。用途に合わせて自由に調整できます。</p>
+          <button class="chip-btn" id="claudeInstructionReset" type="button" style="margin-top:8px;">既定に戻す</button>
         </div>
       </div>
 
