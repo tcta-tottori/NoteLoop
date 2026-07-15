@@ -9,7 +9,7 @@
 const $ = (id) => document.getElementById(id);
 
 const recordBtn      = $('recordBtn');
-const recLabel       = recordBtn.querySelector('.rec-label');
+const recHint        = $('recHint');
 const timerEl        = $('timer');
 const waveform       = $('waveform');
 const modelStatus    = $('modelStatus');
@@ -18,6 +18,9 @@ const progressBar    = $('progressBar');
 const errorBox       = $('errorBox');
 const audioWrap      = $('audioWrap');
 const player         = $('player');
+const audioSize      = $('audioSize');
+const downloadAudio  = $('downloadAudio');
+const downloadWav    = $('downloadWav');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
 
@@ -56,6 +59,7 @@ let audioCtx = null;
 let sourceNode = null;
 let processorNode = null;
 let analyser = null;
+let recordedBlob = null;   // 録音した音声（再生・ダウンロード用）
 let rafId = null;
 let liveTimer = null;
 let startTime = 0;
@@ -204,7 +208,8 @@ async function startRecording() {
   finalizing = false;
   audioWrap.hidden = true;
   recordBtn.classList.add('recording');
-  recLabel.textContent = '録音停止';
+  recordBtn.setAttribute('aria-label', '録音停止');
+  recHint.textContent = '録音中… タップで停止';
 
   startTime = Date.now();
   updateTimer();
@@ -217,7 +222,8 @@ async function startRecording() {
 async function stopRecording() {
   recording = false;
   recordBtn.classList.remove('recording');
-  recLabel.textContent = '録音開始';
+  recordBtn.setAttribute('aria-label', '録音開始');
+  recHint.textContent = '文字起こしを処理中…';
 
   clearInterval(timerInterval);
   clearInterval(liveTimer);
@@ -227,9 +233,12 @@ async function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     await new Promise((res) => { mediaRecorder.onstop = res; mediaRecorder.stop(); });
     if (recordedBlobs.length) {
-      const blob = new Blob(recordedBlobs, { type: recordedBlobs[0].type || 'audio/webm' });
-      player.src = URL.createObjectURL(blob);
+      recordedBlob = new Blob(recordedBlobs, { type: recordedBlobs[0].type || 'audio/webm' });
+      player.src = URL.createObjectURL(recordedBlob);
+      audioSize.textContent = formatBytes(recordedBlob.size);
       audioWrap.hidden = false;
+      downloadAudio.disabled = false;
+      downloadWav.disabled = false;
     }
   }
 
@@ -245,6 +254,7 @@ async function stopRecording() {
     }
   });
   finalizing = false;
+  recHint.textContent = 'タップして録音開始';
 
   // オーディオ資源の解放
   teardownAudio();
@@ -516,6 +526,100 @@ exportMail.addEventListener('click', () => {
 });
 
 /* =========================================================
+ * 音声ファイルの出力（ネイティブ形式 / WAV 変換）
+ * =======================================================*/
+function formatBytes(bytes) {
+  if (!bytes) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0, n = bytes;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+function extFromMime(mime) {
+  if (!mime) return 'webm';
+  if (mime.includes('webm')) return 'webm';
+  if (mime.includes('ogg')) return 'ogg';
+  if (mime.includes('mp4') || mime.includes('m4a') || mime.includes('aac')) return 'm4a';
+  if (mime.includes('mpeg') || mime.includes('mp3')) return 'mp3';
+  if (mime.includes('wav')) return 'wav';
+  return 'webm';
+}
+
+// 録音した音声をそのままの形式でダウンロード
+downloadAudio.addEventListener('click', () => {
+  if (!recordedBlob) { showError('保存できる音声がありません。先に録音してください。'); return; }
+  hideError();
+  const m = currentMinutes();
+  const ext = extFromMime(recordedBlob.type);
+  download(`${safeFileName(m)}.${ext}`, recordedBlob, recordedBlob.type || 'audio/webm');
+});
+
+// 録音した音声を WAV に変換してダウンロード（互換性の高い形式）
+downloadWav.addEventListener('click', async () => {
+  if (!recordedBlob) { showError('変換できる音声がありません。先に録音してください。'); return; }
+  hideError();
+  const original = downloadWav.textContent;
+  downloadWav.disabled = true;
+  downloadWav.textContent = '変換中…';
+  try {
+    const arrayBuffer = await recordedBlob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+    const wavBlob = audioBufferToWav(audioBuffer);
+    ctx.close();
+    const m = currentMinutes();
+    download(`${safeFileName(m)}.wav`, wavBlob, 'audio/wav');
+  } catch (err) {
+    showError('WAV への変換に失敗しました: ' + (err && err.message ? err.message : err));
+  } finally {
+    downloadWav.disabled = false;
+    downloadWav.innerHTML = '<span aria-hidden="true">🎵</span> WAVに変換';
+  }
+});
+
+// AudioBuffer → WAV(16bit PCM) Blob
+function audioBufferToWav(buffer) {
+  const numCh = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const channels = [];
+  for (let c = 0; c < numCh; c++) channels.push(buffer.getChannelData(c));
+
+  const frames = buffer.length;
+  const bytesPerSample = 2;
+  const blockAlign = numCh * bytesPerSample;
+  const dataSize = frames * blockAlign;
+  const arr = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(arr);
+
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);        // PCM chunk size
+  view.setUint16(20, 1, true);         // format = PCM
+  view.setUint16(22, numCh, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);        // bits per sample
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < frames; i++) {
+    for (let c = 0; c < numCh; c++) {
+      let s = Math.max(-1, Math.min(1, channels[c][i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return new Blob([view], { type: 'audio/wav' });
+}
+
+/* =========================================================
  * 過去の議事録一覧（localStorage）
  * =======================================================*/
 const STORE_KEY = 'noteloop_minutes_v1';
@@ -635,4 +739,6 @@ function hideError() { errorBox.hidden = true; errorBox.textContent = ''; }
 
 // 初期化
 meetingDate.value = todayStr();
+downloadAudio.disabled = true;
+downloadWav.disabled = true;
 seedIfEmpty();
