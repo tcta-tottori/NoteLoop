@@ -62,16 +62,17 @@ const claudePromptPreview  = $('claudePromptPreview');
 const claudeInstruction    = $('claudeInstruction');
 const claudeInstructionReset = $('claudeInstructionReset');
 
-const appVersionEl   = $('appVersion');
+const drawerVerMain  = $('drawerVerMain');
+const drawerVerSub   = $('drawerVerSub');
 const partDept       = $('partDept');
 const partDeptOther  = $('partDeptOther');
 const partName       = $('partName');
 const partAdd        = $('partAdd');
 const partList       = $('partList');
 
-// バージョン / 更新日
-const APP_VERSION = 'v1.1';
-const APP_UPDATED = '2026/07/15 20:30';
+// バージョン / 更新日（メニュー上部に表示）
+const APP_VERSION = 'Ver.1.0';
+const APP_UPDATED = '2026.7.15 21:10';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -1242,7 +1243,8 @@ if (!getSR()) {
 applyEngineUI();
 updateHomeUI();
 renderParticipants();
-appVersionEl.innerHTML = `${APP_VERSION}<br>${APP_UPDATED}`;
+drawerVerMain.textContent = APP_VERSION;
+drawerVerSub.textContent = APP_UPDATED;
 seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）

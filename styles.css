@@ -84,8 +84,8 @@ a:hover { text-decoration: underline; }
 .drawer {
   position: fixed; top: 0; left: 0; bottom: 0; z-index: 50;
   width: min(78vw, 300px);
-  background: var(--surface);
-  border-right: 1px solid var(--border);
+  background: linear-gradient(160deg, #4f6ef7 0%, #7c5cf6 52%, #d24fbf 120%);
+  border-right: none;
   box-shadow: var(--shadow-lg);
   padding: max(16px, env(safe-area-inset-top)) 14px 16px;
   transform: translateX(-100%);
@@ -94,23 +94,24 @@ a:hover { text-decoration: underline; }
 }
 .drawer.open { transform: translateX(0); }
 .drawer-head {
-  display: flex; align-items: center; gap: 10px;
-  margin: calc(-1 * max(16px, env(safe-area-inset-top))) -14px 10px;
-  padding: max(20px, calc(env(safe-area-inset-top) + 16px)) 16px 16px;
-  background: linear-gradient(100deg, #4f6ef7 0%, #7c5cf6 60%, #ec4899 120%);
-  box-shadow: 0 6px 18px rgba(79, 110, 247, .25);
+  display: flex; align-items: center; gap: 12px;
+  margin: calc(-1 * max(16px, env(safe-area-inset-top))) -14px 14px;
+  padding: max(22px, calc(env(safe-area-inset-top) + 18px)) 18px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, .22);
 }
 .drawer-head .brand-mark { background: rgba(255, 255, 255, .22); box-shadow: none; }
-.drawer-brand { font-size: 18px; font-weight: 800; letter-spacing: .16em; color: #fff; }
+.drawer-ver { display: flex; flex-direction: column; line-height: 1.15; }
+.drawer-ver-main { font-size: 17px; font-weight: 800; letter-spacing: .06em; color: #fff; }
+.drawer-ver-sub { font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, .82); letter-spacing: .04em; margin-top: 2px; }
 .drawer-item {
   display: flex; align-items: center; gap: 12px;
   background: none; border: none; cursor: pointer; text-align: left;
-  padding: 13px 14px; border-radius: 12px; font-size: 15px; font-weight: 700; color: var(--muted);
+  padding: 13px 14px; border-radius: 12px; font-size: 15px; font-weight: 700; color: rgba(255, 255, 255, .9);
   transition: .16s;
 }
-.drawer-item .d-ico { width: 20px; height: 20px; flex: none; opacity: .85; }
-.drawer-item:hover { background: var(--surface-2); color: var(--text); }
-.drawer-item.active { background: color-mix(in srgb, var(--brand1) 10%, transparent); color: var(--brand1); }
+.drawer-item .d-ico { width: 20px; height: 20px; flex: none; opacity: .9; }
+.drawer-item:hover { background: rgba(255, 255, 255, .15); color: #fff; }
+.drawer-item.active { background: rgba(255, 255, 255, .24); color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .28); }
 .drawer-item.active .d-ico { opacity: 1; }
 .brand { display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
 .app-name {
@@ -135,11 +136,6 @@ a:hover { text-decoration: underline; }
 }
 /* ホームはマイクボタン固定分の余白を確保 */
 .home-screen { min-height: calc(100vh - 120px); padding-bottom: 120px; position: relative; }
-.app-version {
-  position: absolute; top: 6px; right: 4px; z-index: 6;
-  font-size: 10px; color: var(--faint); font-weight: 600; letter-spacing: .02em;
-  text-align: right; line-height: 1.4; pointer-events: none;
-}
 
 /* 参加者 */
 .participants-field { margin-top: 14px; }
