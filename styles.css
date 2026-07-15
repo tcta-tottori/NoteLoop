@@ -123,6 +123,11 @@ a:hover { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   #drawer > * { transition: opacity .2s ease, background .16s ease, color .16s ease; transform: none !important; }
 }
+/* 下部ロゴは時間差アニメの対象外（常時表示） */
+#drawer > .drawer-foot { opacity: 1 !important; transform: none !important; transition: none !important; }
+.brand-mic { height: 22px; width: auto; display: block; }
+.d-ico-mic { display: inline-flex; align-items: center; justify-content: center; }
+.d-ico-mic img { height: 20px; width: auto; }
 .drawer-head {
   display: flex; align-items: center; gap: 12px;
   margin: calc(-1 * max(16px, env(safe-area-inset-top))) -14px 14px;
@@ -155,7 +160,7 @@ a:hover { text-decoration: underline; }
 .app-subtitle {
   margin: -14px 0 0; font-size: 10px; color: rgba(255, 255, 255, .82); font-weight: 500;
   letter-spacing: .16em;
-  font-family: "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Times New Roman", serif;
+  font-family: "Yu Gothic", "YuGothic", "游ゴシック", "游ゴシック体", "Yu Gothic Medium", "Hiragino Sans", sans-serif;
 }
 .brand-mark {
   display: grid; place-items: center; flex: none;
@@ -374,13 +379,21 @@ select:focus, input:focus, textarea:focus {
 
 /* ---------- Home: idle prompt (blinking) ---------- */
 .idle-prompt {
-  position: fixed; left: 0; right: 0; top: 44%; z-index: 5;
+  position: fixed; left: 0; right: 0; top: 42%; z-index: 5;
   transform: translateY(-50%);
-  display: flex; flex-direction: column; align-items: center;
+  display: flex; flex-direction: column; align-items: center; gap: 18px;
   pointer-events: none; text-align: center; padding: 0 24px;
-  color: var(--muted); font-size: 16px; font-weight: 700;
-  animation: blinkText 1.6s ease-in-out infinite;
 }
+.idle-text { color: var(--muted); font-size: 16px; font-weight: 700; animation: blinkText 1.6s ease-in-out infinite; }
+.home-meeting-btn {
+  pointer-events: auto;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand1) 32%, var(--border));
+  color: var(--brand1); font-weight: 700; font-size: 13px;
+  padding: 10px 18px; border-radius: 999px; cursor: pointer;
+  backdrop-filter: blur(8px); transition: .16s;
+}
+.home-meeting-btn:hover { border-color: var(--brand1); background: color-mix(in srgb, var(--brand1) 10%, var(--surface)); transform: translateY(-1px); }
 @keyframes blinkText { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* ---------- Home: mic FAB ---------- */
@@ -421,4 +434,45 @@ select:focus, input:focus, textarea:focus {
   .mic-fab { width: 58px; height: 58px; }
   .mic-glyph { width: 26px; height: 26px; }
   .wave-timer { font-size: 15px; }
+}
+
+/* ---------- Meeting info button / summary ---------- */
+.meeting-info-btn {
+  width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text);
+  border-radius: var(--radius-sm); padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; transition: .16s;
+}
+.meeting-info-btn:hover { border-color: var(--brand1); color: var(--brand1); }
+.meeting-summary { font-size: 12.5px; color: var(--muted); margin: 10px 2px 4px; line-height: 1.6; }
+.meeting-summary:empty { display: none; }
+.meeting-summary .ms-title { font-weight: 700; color: var(--text); }
+
+/* ---------- Modal (会議情報ポップアップ) ---------- */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(20, 26, 40, .45);
+  opacity: 0; transition: opacity .25s ease;
+}
+.modal-overlay.show { opacity: 1; }
+.modal-card {
+  width: 100%; max-width: 540px; max-height: 88vh; overflow-y: auto;
+  background: var(--surface);
+  border-radius: 22px 22px 0 0;
+  box-shadow: var(--shadow-lg);
+  padding: 18px clamp(16px, 4vw, 24px) calc(20px + env(safe-area-inset-bottom));
+  transform: translateY(24px); transition: transform .28s cubic-bezier(.22, 1, .36, 1);
+}
+.modal-overlay.show .modal-card { transform: translateY(0); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.modal-head h3 { margin: 0; font-size: 16px; font-weight: 800; }
+.modal-close {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  width: 34px; height: 34px; font-size: 20px; line-height: 1; color: var(--muted); cursor: pointer;
+}
+.modal-close:hover { color: var(--danger); border-color: var(--danger); }
+.modal-foot { margin-top: 20px; display: flex; justify-content: flex-end; }
+@media (min-width: 600px) {
+  .modal-overlay { align-items: center; }
+  .modal-card { border-radius: 20px; }
 }

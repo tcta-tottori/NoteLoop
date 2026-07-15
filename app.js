@@ -69,6 +69,12 @@ const partDeptOther  = $('partDeptOther');
 const partName       = $('partName');
 const partAdd        = $('partAdd');
 const partList       = $('partList');
+const meetingModal   = $('meetingModal');
+const meetingModalClose = $('meetingModalClose');
+const meetingModalDone  = $('meetingModalDone');
+const openMeetingInfo     = $('openMeetingInfo');
+const openMeetingInfoHome = $('openMeetingInfoHome');
+const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
 const APP_VERSION = 'Ver.1.0';
@@ -936,6 +942,7 @@ function renderParticipants() {
     li.appendChild(btn);
     partList.appendChild(li);
   });
+  updateMeetingSummary();
 }
 partDept.addEventListener('change', () => {
   const other = partDept.value === '__other';
@@ -952,6 +959,35 @@ partAdd.addEventListener('click', () => {
   partName.value = ''; partDeptOther.value = ''; partDept.value = ''; partDeptOther.hidden = true;
 });
 partName.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); partAdd.click(); } });
+
+/* ===== 会議情報ポップアップ ===== */
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function updateMeetingSummary() {
+  const name = meetingName.value.trim();
+  const date = meetingDate.value;
+  const pt = participantsText(participants);
+  if (!name && !pt && !date) { meetingSummary.innerHTML = ''; return; }
+  let html = `<span class="ms-title">${escapeHtml(name || '（タイトル未設定）')}</span>`;
+  if (date) html += ` ・ ${escapeHtml(date)}`;
+  if (pt) html += `<br>参加者: ${escapeHtml(pt)}`;
+  meetingSummary.innerHTML = html;
+}
+function openMeetingModal() {
+  meetingModal.hidden = false;
+  requestAnimationFrame(() => meetingModal.classList.add('show'));
+}
+function closeMeetingModal() {
+  meetingModal.classList.remove('show');
+  setTimeout(() => { if (!meetingModal.classList.contains('show')) meetingModal.hidden = true; }, 260);
+  updateMeetingSummary();
+}
+openMeetingInfo.addEventListener('click', openMeetingModal);
+openMeetingInfoHome.addEventListener('click', openMeetingModal);
+meetingModalClose.addEventListener('click', closeMeetingModal);
+meetingModalDone.addEventListener('click', closeMeetingModal);
+meetingModal.addEventListener('click', (e) => { if (e.target === meetingModal) closeMeetingModal(); });
+meetingName.addEventListener('input', updateMeetingSummary);
+meetingDate.addEventListener('input', updateMeetingSummary);
 
 /* =========================================================
  * IndexedDB（録音音声の保存）
@@ -1059,6 +1095,7 @@ function openMinutes(item) {
   meetingDate.value = item.date || '';
   participants = (item.participants || []).map((p) => ({ dept: p.dept || '', name: p.name || '' }));
   renderParticipants();
+  updateMeetingSummary();
   fillMinutesUI({ summary: item.summary || [], decisions: item.decisions || [], todos: item.todos || [] });
   if (item.transcript) liveTranscript.value = item.transcript;
   showScreen('screen-minutes', '議事録');

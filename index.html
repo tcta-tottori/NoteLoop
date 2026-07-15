@@ -32,20 +32,14 @@
   <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
   <nav id="drawer" class="drawer" aria-label="メニュー">
     <div class="drawer-head">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
-          <path d="M19 10v1a7 7 0 0 1-14 0v-1"/>
-          <path d="M12 18v4"/>
-        </svg>
-      </span>
+      <span class="brand-mark" aria-hidden="true"><img class="brand-mic" src="./icons/mic-white.png" alt="" /></span>
       <div class="drawer-ver">
         <span class="drawer-ver-main" id="drawerVerMain">Ver.1.0</span>
         <span class="drawer-ver-sub" id="drawerVerSub">2026.7.15</span>
       </div>
     </div>
     <button class="drawer-item active" type="button" data-target="screen-home" data-title="録音・文字起こし・議事録作成">
-      <svg class="d-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
+      <span class="d-ico d-ico-mic" aria-hidden="true"><img src="./icons/mic-white.png" alt="" /></span>
       <span>録音</span>
     </button>
     <button class="drawer-item" type="button" data-target="screen-minutes" data-title="議事録">
@@ -110,9 +104,10 @@
         <button id="toMinutes" class="wide-btn" type="button" hidden>この文字起こしで議事録を作る <span aria-hidden="true">→</span></button>
       </div>
 
-      <!-- 中央: 点滅する案内（待機中のみ） -->
+      <!-- 中央: 点滅する案内＋会議情報ボタン（待機中のみ） -->
       <div class="idle-prompt" id="idlePrompt">
-        <span>マイクボタンで録音開始</span>
+        <span class="idle-text">マイクボタンで録音開始</span>
+        <button id="openMeetingInfoHome" class="home-meeting-btn" type="button">＋ タイトル・参加者を設定</button>
       </div>
 
       <!-- 中央下部に固定するマイクボタン -->
@@ -130,41 +125,10 @@
     <!-- ========== 議事録 ========== -->
     <section class="screen" id="screen-minutes" aria-labelledby="screenTitle" hidden>
       <div class="panel">
-        <div class="meta-grid">
-          <div class="field">
-            <label for="meetingName">タイトル（会議名）</label>
-            <input id="meetingName" type="text" placeholder="例: 定例ミーティング" />
-          </div>
-          <div class="field">
-            <label for="meetingDate">日付</label>
-            <input id="meetingDate" type="date" />
-          </div>
-        </div>
-
-        <div class="field participants-field">
-          <label>参加者（部署・氏名）</label>
-          <div class="participant-add">
-            <select id="partDept" aria-label="部署">
-              <option value="">部署を選択</option>
-              <option>営業企画部</option>
-              <option>経営企画部</option>
-              <option>生産管理部</option>
-              <option>商品部</option>
-              <option>技術部</option>
-              <option>品質保証部</option>
-              <option>製造技術部</option>
-              <option>プロセス技術部</option>
-              <option>化成品部</option>
-              <option>総務部</option>
-              <option>新建高</option>
-              <option value="__other">その他（手入力）</option>
-            </select>
-            <input id="partDeptOther" type="text" placeholder="部署名を入力" hidden />
-            <input id="partName" type="text" placeholder="氏名（任意）" />
-            <button id="partAdd" class="chip-btn" type="button">＋ 追加</button>
-          </div>
-          <ul id="partList" class="participant-list"></ul>
-        </div>
+        <button id="openMeetingInfo" class="meeting-info-btn" type="button">
+          <span aria-hidden="true">📝</span> 会議情報を編集（タイトル・参加者）
+        </button>
+        <div id="meetingSummary" class="meeting-summary"></div>
 
         <div class="gen-row">
           <button id="generateBtn" class="primary-btn" type="button"><span aria-hidden="true">✨</span> 議事録を生成</button>
@@ -289,6 +253,55 @@
     </section>
 
   </main>
+
+  <!-- 会議情報ポップアップ（タイトル・参加者） -->
+  <div id="meetingModal" class="modal-overlay" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="会議情報">
+      <div class="modal-head">
+        <h3>会議情報</h3>
+        <button id="meetingModalClose" class="modal-close" type="button" aria-label="閉じる">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="meta-grid">
+          <div class="field">
+            <label for="meetingName">タイトル（会議名）</label>
+            <input id="meetingName" type="text" placeholder="例: 定例ミーティング" />
+          </div>
+          <div class="field">
+            <label for="meetingDate">日付</label>
+            <input id="meetingDate" type="date" />
+          </div>
+        </div>
+        <div class="field participants-field">
+          <label>参加者（部署・氏名）</label>
+          <div class="participant-add">
+            <select id="partDept" aria-label="部署">
+              <option value="">部署を選択</option>
+              <option>営業企画部</option>
+              <option>経営企画部</option>
+              <option>生産管理部</option>
+              <option>商品部</option>
+              <option>技術部</option>
+              <option>品質保証部</option>
+              <option>製造技術部</option>
+              <option>プロセス技術部</option>
+              <option>化成品部</option>
+              <option>総務部</option>
+              <option>新建高</option>
+              <option value="__other">その他（手入力）</option>
+            </select>
+            <input id="partDeptOther" type="text" placeholder="部署名を入力" hidden />
+            <input id="partName" type="text" placeholder="氏名（任意）" />
+            <button id="partAdd" class="chip-btn" type="button">＋ 追加</button>
+          </div>
+          <ul id="partList" class="participant-list"></ul>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button id="meetingModalDone" class="primary-btn" type="button">完了</button>
+      </div>
+    </div>
+  </div>
 
   <!-- docx-js (Word 出力) を CDN から読み込み -->
   <script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"></script>
