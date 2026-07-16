@@ -47,6 +47,18 @@ const liveModel      = $('liveModel');
 const liveModelField = $('liveModelField');
 const keepAwake      = $('keepAwake');
 
+// マイク選択 / 入力レベル
+const openMicSelect       = $('openMicSelect');
+const micModal            = $('micModal');
+const micModalClose       = $('micModalClose');
+const micModalDone        = $('micModalDone');
+const micSelectHome       = $('micSelectHome');
+const micSelectSettings   = $('micSelectSettings');
+const micMeterHomeMask    = $('micMeterHomeMask');
+const micMeterSettingsMask= $('micMeterSettingsMask');
+const micPermNoteHome     = $('micPermNoteHome');
+const micPermNoteSettings = $('micPermNoteSettings');
+
 const meetingName    = $('meetingName');
 const meetingDate    = $('meetingDate');
 const generateBtn    = $('generateBtn');
@@ -95,8 +107,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.2.1';
-const APP_UPDATED = '2026.7.16 10:40';
+const APP_VERSION = 'Ver.2.2';
+const APP_UPDATED = '2026.7.16 12:00';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -184,6 +196,9 @@ function showScreen(id, title) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (id === 'screen-home') updateHomeUI();
   if (id === 'screen-minutes') refreshAudioPanel();
+  // 設定画面を開いている間だけマイクの入力レベルを表示する
+  if (id === 'screen-settings') activateSettingsMic();
+  else if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
 }
 
 /** 録音音声パネルの表示（音声の有無で再生カードと案内文を切替） */
@@ -364,6 +379,9 @@ recordBtn.addEventListener('click', async () => {
 
 async function startRecording() {
   hideError();
+  // 入力レベルメーターがマイクを掴んでいたら解放してから録音を開始
+  if (typeof homeMicMeter !== 'undefined') homeMicMeter.stop();
+  if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
   activeEngine = engineSelect.value;
   acquireWakeLock(); // 設定がONなら画面を常時オンに（ユーザー操作の直後に要求）
 
@@ -393,7 +411,7 @@ async function startRecording() {
 
   // --- Whisper: 録音（音声保存）＋停止後に高精度文字起こし ---
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaStream = await getMicStream();
   } catch (err) {
     if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
       showError('マイクの使用が許可されませんでした。ブラウザのマイク権限を許可してください（HTTPS または localhost が必要です）。');
@@ -464,7 +482,7 @@ async function startRecording() {
  */
 async function startWebSpeechAudioCapture() {
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaStream = await getMicStream();
   } catch (_) { mediaStream = null; return; } // 認識は Web Speech 側の独自マイクで継続
   recordedBlobs = [];
   try {
@@ -1348,6 +1366,176 @@ meetingModalDone.addEventListener('click', closeMeetingModal);
 meetingModal.addEventListener('click', (e) => { if (e.target === meetingModal) closeMeetingModal(); });
 meetingName.addEventListener('input', updateMeetingSummary);
 meetingDate.addEventListener('input', updateMeetingSummary);
+
+/* =========================================================
+ * マイク選択 / 入力レベル（ゲイン）表示
+ *   ・録音に使うマイクをユーザーが選べるようにする（端末に保存）
+ *   ・選択したマイクの入力レベルをリアルタイムのバーで表示
+ *   ・マイクボタンのポップアップと設定ページの両方で共通利用
+ * =======================================================*/
+const MIC_KEY = 'noteloop_mic_device';
+function getSavedMicId() { try { return localStorage.getItem(MIC_KEY) || ''; } catch (_) { return ''; } }
+function setSavedMicId(id) {
+  try { if (id) localStorage.setItem(MIC_KEY, id); else localStorage.removeItem(MIC_KEY); } catch (_) {}
+}
+
+/**
+ * 保存済みの選択マイクで録音用ストリームを取得する。
+ * 選択デバイスが使えない場合は既定マイクにフォールバックする。
+ */
+async function getMicStream() {
+  const id = getSavedMicId();
+  if (id) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: id } } });
+    } catch (err) {
+      // 選択したマイクが抜かれた等で使えない → 既定に戻して続行
+      if (err && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {
+        setSavedMicId('');
+        syncMicSelects();
+      } else {
+        throw err;
+      }
+    }
+  }
+  return await navigator.mediaDevices.getUserMedia({ audio: true });
+}
+
+/**
+ * 入力レベルメーターの生成。指定した mask 要素の幅で「右からの覆い」を動かし、
+ * 左からの塗り（＝入力レベル）を表現する。start(deviceId) でマイクを掴み、stop() で解放。
+ */
+function createMicMeter(maskEl) {
+  let ctx = null, stream = null, analyser = null, raf = null, buf = null, active = false;
+  function setLevel(level) {
+    if (!maskEl) return;
+    const pct = Math.max(0, Math.min(100, Math.round((1 - level) * 100)));
+    maskEl.style.width = pct + '%';
+  }
+  function loop() {
+    if (!active || !analyser) return;
+    raf = requestAnimationFrame(loop);
+    analyser.getByteTimeDomainData(buf);
+    let s = 0;
+    for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; s += x * x; }
+    const rms = Math.sqrt(s / buf.length);
+    setLevel(Math.min(1, Math.max(0, rms * 6))); // ゲイン: 通常の発話で見やすい範囲に増幅
+  }
+  async function start(deviceId) {
+    stop();
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(
+        deviceId ? { audio: { deviceId: { exact: deviceId } } } : { audio: true });
+    } catch (_) {
+      // 選択デバイスが使えなければ既定で再試行
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch (_2) { stream = null; setLevel(0); return false; }
+    }
+    try {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') await ctx.resume();
+      const src = ctx.createMediaStreamSource(stream);
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      src.connect(analyser);
+      buf = new Uint8Array(analyser.fftSize);
+      active = true;
+      loop();
+      return true;
+    } catch (_) { stop(); return false; }
+  }
+  function stop() {
+    active = false;
+    if (raf) cancelAnimationFrame(raf);
+    raf = null;
+    try { if (analyser) analyser.disconnect(); } catch (_) {}
+    try { if (ctx) ctx.close(); } catch (_) {}
+    ctx = analyser = buf = null;
+    if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+    setLevel(0);
+  }
+  return { start, stop, isActive: () => active };
+}
+
+const homeMicMeter = createMicMeter(micMeterHomeMask);
+const settingsMicMeter = createMicMeter(micMeterSettingsMask);
+
+/** 端末のマイク一覧を取得して両方の select を埋める（保存済みの選択を反映） */
+async function populateMicSelects() {
+  let devices = [];
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch (_) {}
+  const mics = devices.filter((d) => d.kind === 'audioinput');
+  const saved = getSavedMicId();
+  const want = saved && mics.some((m) => m.deviceId === saved) ? saved : '';
+  [micSelectHome, micSelectSettings].forEach((sel) => {
+    if (!sel) return;
+    sel.innerHTML = '';
+    const def = document.createElement('option');
+    def.value = ''; def.textContent = '既定のマイク（自動選択）';
+    sel.appendChild(def);
+    mics.forEach((d, i) => {
+      const o = document.createElement('option');
+      o.value = d.deviceId;
+      o.textContent = d.label || `マイク ${i + 1}`;
+      sel.appendChild(o);
+    });
+    sel.value = want;
+  });
+}
+
+/** 両方の select の表示値を保存済みの選択に合わせる */
+function syncMicSelects() {
+  const saved = getSavedMicId();
+  [micSelectHome, micSelectSettings].forEach((sel) => {
+    if (!sel) return;
+    const has = Array.from(sel.options).some((o) => o.value === saved);
+    sel.value = has ? saved : '';
+  });
+}
+
+/** 設定画面のマイク入力レベルを開始（権限取得→一覧更新） */
+async function activateSettingsMic() {
+  if (!micMeterSettingsMask) return;
+  const ok = await settingsMicMeter.start(getSavedMicId());
+  await populateMicSelects();
+  if (micPermNoteSettings) micPermNoteSettings.hidden = ok;
+}
+
+/* --- マイク選択ポップアップ --- */
+async function openMicModal() {
+  if (!micModal) return;
+  micModal.hidden = false;
+  requestAnimationFrame(() => micModal.classList.add('show'));
+  const ok = await homeMicMeter.start(getSavedMicId());
+  await populateMicSelects();
+  if (micPermNoteHome) micPermNoteHome.hidden = ok;
+}
+function closeMicModal() {
+  if (!micModal) return;
+  homeMicMeter.stop();
+  micModal.classList.remove('show');
+  setTimeout(() => { if (!micModal.classList.contains('show')) micModal.hidden = true; }, 260);
+}
+
+/** マイク選択が変わったら保存し、メーターを新しいデバイスで開始し直す */
+async function onMicSelected(value, meter, permNote) {
+  setSavedMicId(value);
+  syncMicSelects();
+  const ok = await meter.start(getSavedMicId());
+  if (permNote) permNote.hidden = ok;
+}
+
+if (openMicSelect) openMicSelect.addEventListener('click', openMicModal);
+if (micModalClose) micModalClose.addEventListener('click', closeMicModal);
+if (micModalDone) micModalDone.addEventListener('click', closeMicModal);
+if (micModal) micModal.addEventListener('click', (e) => { if (e.target === micModal) closeMicModal(); });
+if (micSelectHome) micSelectHome.addEventListener('change', () => onMicSelected(micSelectHome.value, homeMicMeter, micPermNoteHome));
+if (micSelectSettings) micSelectSettings.addEventListener('change', () => onMicSelected(micSelectSettings.value, settingsMicMeter, micPermNoteSettings));
+
+// マイクの抜き差し等でデバイス構成が変わったら一覧を更新
+if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
+  navigator.mediaDevices.addEventListener('devicechange', () => { populateMicSelects(); });
+}
 
 /* =========================================================
  * IndexedDB（録音音声の保存）

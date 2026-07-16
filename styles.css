@@ -443,8 +443,29 @@ select:focus, input:focus, textarea:focus {
   transition: .16s;
 }
 .home-meeting-btn:hover { transform: translateY(-1px); box-shadow: 0 9px 20px color-mix(in srgb, var(--brand1) 45%, transparent); }
+.home-meeting-btn.ghost {
+  background: var(--surface); color: var(--brand1);
+  border: 1px solid color-mix(in srgb, var(--brand1) 35%, var(--border));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--brand1) 18%, transparent);
+}
+.home-meeting-btn.ghost:hover { background: color-mix(in srgb, var(--brand1) 8%, var(--surface)); }
+.idle-actions { display: inline-flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; }
 .edit-ico { width: 15px; height: 15px; flex: none; }
 @keyframes blinkText { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ---------- マイク入力レベル（ゲイン）バー ---------- */
+.mic-meter {
+  position: relative; height: 16px; border-radius: 999px; overflow: hidden;
+  border: 1px solid var(--border-strong); margin-top: 2px;
+  background: linear-gradient(90deg, #16a34a 0%, #22c55e 38%, var(--amber) 72%, var(--danger) 100%);
+}
+/* 右側からトラック色でマスクし、左からの塗り＝入力レベルを表現 */
+.mic-meter-mask {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 100%;
+  background: var(--surface-3);
+  transition: width .05s linear;
+}
+.mic-perm-note { color: var(--danger); }
 
 /* ---------- Home: mic FAB ---------- */
 .mic-fab {
