@@ -69,28 +69,47 @@ self.onmessage = async (event) => {
   }
 
   if (msg.type === 'transcribe') {
+    const options = {
+      task: 'transcribe',
+      // 反復（「このように…」の暴走）を抑制する
+      no_repeat_ngram_size: 3,
+      repetition_penalty: 1.15,
+    };
+    if (msg.language && msg.language !== 'auto') options.language = msg.language;
+
+    // 30 秒を超える音声だけチャンク分割＋オーバーラップで文脈を保つ。
+    // 短い音声はチャンク/タイムスタンプを使わない方が安定する。
+    const durationSec = (msg.audio && msg.audio.length ? msg.audio.length : 0) / 16000;
+    if (msg.longform && durationSec > 28) {
+      options.chunk_length_s = 30;
+      options.stride_length_s = 5;
+      options.return_timestamps = true;
+    }
+
+    // WebGPU で推論する場合、モバイルGPU等で createBuffer 失敗が起きても
+    // WASM へフォールバックできるよう、入力音声のコピーを保持しておく。
+    const audioBackup = device === 'webgpu' ? msg.audio.slice() : null;
+
+    const runOn = async (dev, audio) => {
+      const { pipe, device: used } = await loadPipeline(msg.model, dev, onProgress);
+      const output = await pipe(audio, options);
+      return { text: (output && output.text ? output.text : '').trim(), used };
+    };
+
     try {
-      const { pipe, device: used } = await loadPipeline(msg.model, device, onProgress);
-      const options = {
-        task: 'transcribe',
-        // 反復（「このように…」の暴走）を抑制する
-        no_repeat_ngram_size: 3,
-        repetition_penalty: 1.15,
-      };
-      if (msg.language && msg.language !== 'auto') options.language = msg.language;
-
-      // 30 秒を超える音声だけチャンク分割＋オーバーラップで文脈を保つ。
-      // 短い音声はチャンク/タイムスタンプを使わない方が安定する。
-      const durationSec = (msg.audio && msg.audio.length ? msg.audio.length : 0) / 16000;
-      if (msg.longform && durationSec > 28) {
-        options.chunk_length_s = 30;
-        options.stride_length_s = 5;
-        options.return_timestamps = true;
+      let res;
+      try {
+        res = await runOn(device, msg.audio);
+      } catch (err) {
+        if (device === 'webgpu') {
+          // WebGPU の推論失敗（createBuffer 等）→ WASM で再試行
+          self.postMessage({ type: 'fallback', from: 'webgpu', to: 'wasm', message: String(err && err.message ? err.message : err) });
+          res = await runOn('wasm', audioBackup || msg.audio);
+        } else {
+          throw err;
+        }
       }
-
-      const output = await pipe(msg.audio, options);
-      const text = (output && output.text ? output.text : '').trim();
-      self.postMessage({ type: 'result', id: msg.id, mode: msg.mode, text, device: used });
+      self.postMessage({ type: 'result', id: msg.id, mode: msg.mode, text: res.text, device: res.used });
     } catch (err) {
       self.postMessage({ type: 'error', id: msg.id, mode: msg.mode, message: String(err && err.message ? err.message : err) });
     }

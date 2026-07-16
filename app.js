@@ -55,9 +55,6 @@ const keepAwake      = $('keepAwake');
 const homeActions         = $('homeActions');
 const openMicSelect       = $('openMicSelect');
 const micRecNote          = $('micRecNote');
-const micModal            = $('micModal');
-const micModalClose       = $('micModalClose');
-const micModalDone        = $('micModalDone');
 const micSelectHome       = $('micSelectHome');
 const micSelectSettings   = $('micSelectSettings');
 const micMeterHomeMask    = $('micMeterHomeMask');
@@ -117,7 +114,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.3.6';
+const APP_VERSION = 'Ver.3.7';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -140,7 +137,7 @@ let sttActivity = 0;     // Web Speech 用の波の活性度
 const SAMPLE_RATE = 16000;
 const CHUNK_MIN_SEC = 5;          // ライブは 5 秒ためてから送る（文脈が増え誤認識が減る）
 const LIVE_INTERVAL_MS = 3000;
-const MAX_LIVE_BACKLOG_SEC = 14;  // ライブの未処理音声の上限（超過分は捨てる＝確定パスで再処理）
+const MAX_LIVE_BACKLOG_SEC = 8;   // ライブの未処理音声の上限（超過分は捨てる＝確定パスで再処理）
 const LIVE_SILENCE_RMS = 0.006;   // これ未満のチャンクは無音とみなし送らない（「！」ハルシネーション回避）
 
 let recording = false;
@@ -169,14 +166,22 @@ let reqId = 0;
 let activeEngine = 'whisper';   // 録音開始時に確定
 let activeDevice = 'wasm';      // Whisper の実行バックエンド（webgpu / wasm）— 録音開始時に確定
 
+// タッチ端末（スマホ／タブレット）判定。モバイルのWebGPUはWhisper推論で
+// createBuffer 失敗などの不具合が出やすいため、自動選択では使わない。
+const IS_TOUCH_DEVICE = (navigator.maxTouchPoints || 0) > 0 &&
+  !(window.matchMedia && window.matchMedia('(pointer:fine)').matches);
+
 /**
  * WebGPU が実際に使えるか判定する。
- * pref: 'auto'（対応なら webgpu）/ 'webgpu'（強制・不可なら wasm）/ 'wasm'（強制）
- * 戻り値は 'webgpu' か 'wasm'。実際の初期化失敗時は worker 側でも wasm へ自動フォールバックする。
+ * pref: 'auto'（PCのみ webgpu / モバイルは wasm）/ 'webgpu'（強制・不可なら wasm）/ 'wasm'（強制）
+ * 戻り値は 'webgpu' か 'wasm'。実際の初期化・推論失敗時は worker 側でも wasm へ自動フォールバックする。
  */
 async function resolveDevice(pref) {
   if (pref === 'wasm') return 'wasm';
   if (!('gpu' in navigator) || !navigator.gpu) return 'wasm';
+  // 自動選択のときは、モバイルGPUのWebGPUは不安定なため WASM を使う。
+  // （WebGPUを試したい場合は設定で「WebGPU固定」を明示的に選ぶ）
+  if (pref === 'auto' && IS_TOUCH_DEVICE) return 'wasm';
   try {
     const adapter = await navigator.gpu.requestAdapter();
     return adapter ? 'webgpu' : 'wasm';
@@ -1508,43 +1513,39 @@ function updateMeetingSummary() {
   if (pt) html += `<br>参加者: ${escapeHtml(pt)}`;
   meetingSummary.innerHTML = html;
 }
-function openMeetingModal() {
+// 会議情報・マイク設定を1画面（モーダル）で開く。マイクのレベルメーターもここで開始/停止する。
+async function openMeetingModal() {
   meetingModal.hidden = false;
   requestAnimationFrame(() => meetingModal.classList.add('show'));
+  await populateMicSelects();
+  if (recording) {
+    // 録音中: 別ストリームは開かず、録音側 analyser でレベルを表示。
+    if (micPermNoteHome) micPermNoteHome.hidden = true;
+    if (micRecNote) {
+      micRecNote.hidden = false;
+      micRecNote.textContent = activeEngine === 'webspeech'
+        ? '録音中です。マイクを切り替えると録音音声に反映されます（音声認識のマイクはブラウザの既定が使われます）。'
+        : '録音中です。マイクを切り替えると、その場で録音に反映されます。';
+    }
+    startModalRecMeter();
+  } else {
+    if (micRecNote) micRecNote.hidden = true;
+    const ok = await homeMicMeter.start(getSavedMicId());
+    if (micPermNoteHome) micPermNoteHome.hidden = ok;
+  }
 }
 function closeMeetingModal() {
+  stopModalRecMeter();
+  homeMicMeter.stop();
   meetingModal.classList.remove('show');
   setTimeout(() => { if (!meetingModal.classList.contains('show')) meetingModal.hidden = true; }, 260);
   updateMeetingSummary();
 }
 openMeetingInfo.addEventListener('click', openMeetingModal);
 
-// ホーム右下のツールボタン（マイク設定＋会議情報編集を集約したメニュー）
-const homeToolsBtn  = $('homeToolsBtn');
-const homeToolsMenu = $('homeToolsMenu');
-const toolMicSettings = $('toolMicSettings');
-const toolEditInfo    = $('toolEditInfo');
-function closeHomeTools() {
-  if (!homeToolsMenu) return;
-  homeToolsMenu.hidden = true;
-  if (homeToolsBtn) homeToolsBtn.setAttribute('aria-expanded', 'false');
-}
-function toggleHomeTools() {
-  if (!homeToolsMenu) return;
-  const willOpen = homeToolsMenu.hidden;
-  homeToolsMenu.hidden = !willOpen;
-  if (homeToolsBtn) homeToolsBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
-}
-if (homeToolsBtn) homeToolsBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleHomeTools(); });
-if (toolMicSettings) toolMicSettings.addEventListener('click', () => { closeHomeTools(); openMicModal(); });
-if (toolEditInfo) toolEditInfo.addEventListener('click', () => { closeHomeTools(); openMeetingModal(); });
-// 外側クリック / Esc で閉じる
-document.addEventListener('click', (e) => {
-  if (homeToolsMenu && !homeToolsMenu.hidden && !homeToolsMenu.contains(e.target) && e.target !== homeToolsBtn && !(homeToolsBtn && homeToolsBtn.contains(e.target))) {
-    closeHomeTools();
-  }
-});
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHomeTools(); });
+// ホーム右下のツールボタン → 会議情報・マイク設定の1画面を開く
+const homeToolsBtn = $('homeToolsBtn');
+if (homeToolsBtn) homeToolsBtn.addEventListener('click', openMeetingModal);
 meetingModalClose.addEventListener('click', closeMeetingModal);
 meetingModalDone.addEventListener('click', closeMeetingModal);
 meetingModal.addEventListener('click', (e) => { if (e.target === meetingModal) closeMeetingModal(); });
@@ -1706,40 +1707,9 @@ function stopModalRecMeter() {
   modalRecMeterRaf = null;
 }
 
-/* --- マイク選択ポップアップ --- */
-async function openMicModal() {
-  if (!micModal) return;
-  micModal.hidden = false;
-  requestAnimationFrame(() => micModal.classList.add('show'));
-  await populateMicSelects();
-  if (recording) {
-    // 録音中: 別ストリームは開かず、録音側 analyser でレベルを表示。
-    if (micPermNoteHome) micPermNoteHome.hidden = true;
-    if (micRecNote) {
-      micRecNote.hidden = false;
-      micRecNote.textContent = activeEngine === 'webspeech'
-        ? '録音中です。マイクを切り替えると録音音声に反映されます（音声認識のマイクはブラウザの既定が使われます）。'
-        : '録音中です。マイクを切り替えると、その場で録音に反映されます。';
-    }
-    startModalRecMeter();
-  } else {
-    if (micRecNote) micRecNote.hidden = true;
-    const ok = await homeMicMeter.start(getSavedMicId());
-    if (micPermNoteHome) micPermNoteHome.hidden = ok;
-  }
-}
-function closeMicModal() {
-  if (!micModal) return;
-  stopModalRecMeter();
-  homeMicMeter.stop();
-  micModal.classList.remove('show');
-  setTimeout(() => { if (!micModal.classList.contains('show')) micModal.hidden = true; }, 260);
-}
-
-if (openMicSelect) openMicSelect.addEventListener('click', openMicModal);
-if (micModalClose) micModalClose.addEventListener('click', closeMicModal);
-if (micModalDone) micModalDone.addEventListener('click', closeMicModal);
-if (micModal) micModal.addEventListener('click', (e) => { if (e.target === micModal) closeMicModal(); });
+/* --- マイク設定は会議情報モーダルに統合（旧マイク単独モーダルは廃止） --- */
+// 設定画面等のマイク選択リンクからも同じ1画面を開く。
+if (openMicSelect) openMicSelect.addEventListener('click', openMeetingModal);
 
 // ポップアップのマイク選択: 録音中は録音マイクを差し替え、待機中はメーターを付け替え
 if (micSelectHome) micSelectHome.addEventListener('change', async () => {
@@ -2221,7 +2191,7 @@ liveEnabled.addEventListener('change', () => {
 });
 // モバイル（タッチ端末）では既定でライブ表示OFF（CPU負荷・ハルシネーション回避）。
 // 保存済みの設定があればそれを優先。
-const isMobileDevice = (navigator.maxTouchPoints || 0) > 0 && !window.matchMedia('(pointer:fine)').matches;
+const isMobileDevice = IS_TOUCH_DEVICE;
 {
   const savedLive = localStorage.getItem(LIVE_KEY);
   if (savedLive === '0' || savedLive === '1') liveEnabled.checked = savedLive === '1';
@@ -2257,13 +2227,17 @@ function applyBackendUI() {
   const v = backendSelect.value;
   if (backendHint) {
     if (v === 'auto') {
-      backendHint.textContent = webgpuAvailable
-        ? 'このブラウザは WebGPU 対応です。自動で GPU を使って高速に文字起こしします。'
-        : 'このブラウザは WebGPU 非対応のため、CPU（WASM）で処理します。';
+      backendHint.textContent = IS_TOUCH_DEVICE
+        ? 'スマホ／タブレットでは CPU（WASM）で処理します（モバイルのWebGPUはWhisperで不安定なため）。'
+        : (webgpuAvailable
+          ? 'このPCは WebGPU 対応です。自動で GPU を使って高速に文字起こしします。'
+          : 'このブラウザは WebGPU 非対応のため、CPU（WASM）で処理します。');
     } else if (v === 'webgpu') {
-      backendHint.textContent = webgpuAvailable
-        ? 'GPU を使って高速処理します（GPU / Apple Silicon 向け）。'
-        : '⚠ このブラウザは WebGPU 非対応です。実行時は自動的に CPU（WASM）へ切り替わります。';
+      backendHint.textContent = IS_TOUCH_DEVICE
+        ? '⚠ モバイルのWebGPUはWhisperで不具合（createBufferエラー等）が出やすく非推奨です。エラー時は自動でCPUに切り替わります。通常は「自動」を推奨。'
+        : (webgpuAvailable
+          ? 'GPU を使って高速処理します（GPU / Apple Silicon 向け）。'
+          : '⚠ このブラウザは WebGPU 非対応です。実行時は自動的に CPU（WASM）へ切り替わります。');
     } else {
       backendHint.textContent = 'CPU で処理します。低速ですが最も互換性が高い方式です。';
     }

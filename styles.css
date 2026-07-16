@@ -545,6 +545,8 @@ select:focus, input:focus, textarea:focus {
 @media (max-width: 380px) {
   .mic-tools-btn { width: 46px; height: 46px; }
 }
+/* 会議情報モーダル内に統合したマイク設定セクション（区切り線で分離） */
+.modal-mic-section { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border-strong); }
 
 /* ---------- Home: mic FAB ---------- */
 .mic-fab {
