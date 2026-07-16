@@ -362,12 +362,21 @@
           <div class="settings-field" style="margin-top:8px;">
             <label for="geminiModel" style="font-size:12px;color:var(--muted);">モデル</label>
             <select id="geminiModel">
-              <option value="gemini-2.5-flash" selected>gemini-2.5-flash（推奨・無料枠）</option>
-              <option value="gemini-2.5-pro">gemini-2.5-pro（高精度・要課金）</option>
-              <option value="gemini-flash-latest">gemini-flash-latest（最新Flash）</option>
+              <option value="gemini-3.5-flash" selected>gemini-3.5-flash（推奨・最新・無料枠）</option>
+              <option value="gemini-flash-latest">gemini-flash-latest（常に最新Flash）</option>
+              <option value="gemini-2.5-flash">gemini-2.5-flash（旧・安定）</option>
+              <option value="gemini-3.5-pro">gemini-3.5-pro（最高精度・要課金）</option>
             </select>
           </div>
           <p class="field-hint warn" id="geminiKeyStatus" hidden></p>
+          <div class="quota-box" id="geminiUsageBox" hidden>
+            <div class="quota-head">
+              <span>本日の利用（この端末での推定）</span>
+              <span id="geminiUsageCount" class="mono">0 / 1,500 回</span>
+            </div>
+            <div class="quota-bar"><div class="quota-fill" id="geminiUsageFill"></div></div>
+            <p class="field-hint" id="geminiUsageDetail" style="margin-top:6px;"></p>
+          </div>
         </div>
         <div class="field settings-field">
           <label for="geminiInstruction">A. 音声をAIに送る指示（Gemini等・編集可）</label>

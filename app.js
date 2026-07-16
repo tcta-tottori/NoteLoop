@@ -101,6 +101,10 @@ const geminiInstructionReset = $('geminiInstructionReset');
 const geminiApiKey         = $('geminiApiKey');
 const geminiModel          = $('geminiModel');
 const geminiKeyStatus      = $('geminiKeyStatus');
+const geminiUsageBox       = $('geminiUsageBox');
+const geminiUsageCount     = $('geminiUsageCount');
+const geminiUsageFill      = $('geminiUsageFill');
+const geminiUsageDetail    = $('geminiUsageDetail');
 const aiAutoBtn            = $('aiAutoBtn');
 const aiAutoStatus         = $('aiAutoStatus');
 const aiResultWrap         = $('aiResultWrap');
@@ -122,7 +126,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.4.3';
+const APP_VERSION = 'Ver.4.4';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -2144,7 +2148,40 @@ const GENAI_BASE = 'https://generativelanguage.googleapis.com';
 const GEMINI_INLINE_LIMIT = 18 * 1024 * 1024; // これ以下は inline、超えたら Files API
 
 function loadGeminiKey() { return (localStorage.getItem(GEMINI_KEY_KEY) || '').trim(); }
-function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || 'gemini-2.5-flash'; }
+function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || 'gemini-3.5-flash'; }
+
+/* --- 無料枠の使用状況（この端末での推定・毎日リセット）--- */
+const GEMINI_USAGE_KEY = 'noteloop_gemini_usage';
+const GEMINI_FREE_RPD = 1500; // 無料枠の1日あたりリクエスト上限
+function todayKey() { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+function loadUsage() {
+  let u;
+  try { u = JSON.parse(localStorage.getItem(GEMINI_USAGE_KEY) || '{}'); } catch (_) { u = {}; }
+  if (!u || u.date !== todayKey()) u = { date: todayKey(), requests: 0, tokens: 0 };
+  return u;
+}
+function recordUsage(tokens) {
+  const u = loadUsage();
+  u.requests += 1;
+  u.tokens += (tokens || 0);
+  localStorage.setItem(GEMINI_USAGE_KEY, JSON.stringify(u));
+  renderUsage();
+}
+function renderUsage() {
+  if (!geminiUsageBox) return;
+  if (!loadGeminiKey()) { geminiUsageBox.hidden = true; return; }
+  geminiUsageBox.hidden = false;
+  const u = loadUsage();
+  const pct = Math.min(100, Math.round((u.requests / GEMINI_FREE_RPD) * 100));
+  if (geminiUsageCount) geminiUsageCount.textContent = `${u.requests.toLocaleString()} / ${GEMINI_FREE_RPD.toLocaleString()} 回`;
+  if (geminiUsageFill) { geminiUsageFill.style.width = pct + '%'; geminiUsageFill.className = 'quota-fill' + (pct >= 80 ? ' warn' : ''); }
+  if (geminiUsageDetail) {
+    const remain = Math.max(0, GEMINI_FREE_RPD - u.requests);
+    const kt = Math.round(u.tokens / 1000);
+    geminiUsageDetail.innerHTML = `残り約 <strong>${remain.toLocaleString()}</strong> 回（本日の消費トークン 約 ${kt.toLocaleString()}k）。` +
+      `<br>※Googleの実際の枠はこの端末以外の利用も含みます。上限は太平洋時間の深夜にリセット。`;
+  }
+}
 
 function setAiAutoStatus(kind, html) {
   if (!aiAutoStatus) return;
@@ -2252,6 +2289,9 @@ async function geminiGenerateMinutes(onStage) {
   const cand = (data.candidates || [])[0] || {};
   const parts = (cand.content && cand.content.parts) || [];
   const text = parts.map((p) => p.text || '').join('').trim();
+  // 使用状況（推定）を記録：応答の usageMetadata からトークン数を加算
+  const used = (data.usageMetadata && data.usageMetadata.totalTokenCount) || 0;
+  recordUsage(used);
   if (!text) throw new Error('生成結果が空でした（安全性ブロックや指示文が原因の場合があります）。');
   return text;
 }
@@ -2276,7 +2316,8 @@ if (aiAutoBtn) aiAutoBtn.addEventListener('click', async () => {
     aiResultWrap.hidden = false;
     ensureAutoTitle();
     if (mailBody && !mailBody.value.trim()) mailBody.value = text;
-    setAiAutoStatus('ok', '✓ 議事録＋メール文面を生成しました。下で編集・コピーできます（メール本文にも反映済み）。');
+    const u = loadUsage();
+    setAiAutoStatus('ok', `✓ 議事録＋メール文面を生成しました（本日 ${u.requests}/${GEMINI_FREE_RPD}回・推定）。下で編集・コピー、メール本文にも反映済み。`);
   } catch (err) {
     if (err && err.noKey) setAiAutoStatus('warn', '⚠ APIキーが未設定です。設定→AI連携で入力してください。');
     else setAiAutoStatus('warn', '⚠ ' + (err && err.message ? err.message : err));
@@ -2306,6 +2347,7 @@ function updateGeminiKeyStatus() {
     geminiKeyStatus.className = 'field-hint';
     geminiKeyStatus.textContent = '✓ キーを保存しました（この端末内のみ）。「議事録」画面の「AIで議事録を作成（自動）」が使えます。';
   }
+  renderUsage();
 }
 if (geminiApiKey) {
   geminiApiKey.value = loadGeminiKey();
