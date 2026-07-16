@@ -114,11 +114,10 @@ const meetingModal   = $('meetingModal');
 const meetingModalClose = $('meetingModalClose');
 const meetingModalDone  = $('meetingModalDone');
 const openMeetingInfo     = $('openMeetingInfo');
-const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.3.4';
+const APP_VERSION = 'Ver.3.5';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1503,11 +1502,33 @@ function closeMeetingModal() {
   updateMeetingSummary();
 }
 openMeetingInfo.addEventListener('click', openMeetingModal);
-openMeetingInfoHome.addEventListener('click', openMeetingModal);
 
-// マイク設定ボタン: 使用するマイクの選択・入力レベル確認ポップアップを開く
-const micSettingsBtn = $('micSettingsBtn');
-if (micSettingsBtn) micSettingsBtn.addEventListener('click', openMicModal);
+// ホーム右下のツールボタン（マイク設定＋会議情報編集を集約したメニュー）
+const homeToolsBtn  = $('homeToolsBtn');
+const homeToolsMenu = $('homeToolsMenu');
+const toolMicSettings = $('toolMicSettings');
+const toolEditInfo    = $('toolEditInfo');
+function closeHomeTools() {
+  if (!homeToolsMenu) return;
+  homeToolsMenu.hidden = true;
+  if (homeToolsBtn) homeToolsBtn.setAttribute('aria-expanded', 'false');
+}
+function toggleHomeTools() {
+  if (!homeToolsMenu) return;
+  const willOpen = homeToolsMenu.hidden;
+  homeToolsMenu.hidden = !willOpen;
+  if (homeToolsBtn) homeToolsBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+}
+if (homeToolsBtn) homeToolsBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleHomeTools(); });
+if (toolMicSettings) toolMicSettings.addEventListener('click', () => { closeHomeTools(); openMicModal(); });
+if (toolEditInfo) toolEditInfo.addEventListener('click', () => { closeHomeTools(); openMeetingModal(); });
+// 外側クリック / Esc で閉じる
+document.addEventListener('click', (e) => {
+  if (homeToolsMenu && !homeToolsMenu.hidden && !homeToolsMenu.contains(e.target) && e.target !== homeToolsBtn && !(homeToolsBtn && homeToolsBtn.contains(e.target))) {
+    closeHomeTools();
+  }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeHomeTools(); });
 meetingModalClose.addEventListener('click', closeMeetingModal);
 meetingModalDone.addEventListener('click', closeMeetingModal);
 meetingModal.addEventListener('click', (e) => { if (e.target === meetingModal) closeMeetingModal(); });
