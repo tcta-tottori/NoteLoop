@@ -343,10 +343,18 @@ select:focus, input:focus, textarea:focus {
 .claude-inline-desc { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); line-height: 1.65; }
 .claude-inline-desc strong { color: var(--text); font-weight: 700; }
 
+/* 経路の見出し（A: 音声 / B: 文字起こし）— 説明は最小限 */
+.route-title { margin: 0 0 10px; font-size: 14px; font-weight: 800; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.route-badge { font-size: 10.5px; font-weight: 700; color: var(--brand1); background: color-mix(in srgb, var(--brand1) 12%, transparent); border-radius: 999px; padding: 2px 9px; letter-spacing: .02em; }
+.minutes-fields { margin-top: 16px; }
+.minutes-fields > summary { font-size: 12.5px; color: var(--brand1); cursor: pointer; font-weight: 600; margin-bottom: 10px; }
+
 /* Claudeを開く（大）とコピー（小）を1行で配置 */
 .claude-actions { display: flex; gap: 10px; flex-wrap: nowrap; margin-bottom: 8px; }
-.claude-actions #claudeSend { flex: 2 1 0; min-width: 0; justify-content: center; white-space: nowrap; }
-.claude-actions #claudeCopy { flex: 1 1 0; min-width: 0; justify-content: center; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
+.claude-actions #claudeSend,
+.claude-actions #aiAudioSend { flex: 2 1 0; min-width: 0; justify-content: center; white-space: nowrap; }
+.claude-actions #claudeCopy,
+.claude-actions #aiAudioCopy { flex: 1 1 0; min-width: 0; justify-content: center; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
 .claude-status { font-size: 13px; font-weight: 600; padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 8px; }
 .claude-status.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .claude-status.warn { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }

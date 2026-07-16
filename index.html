@@ -161,7 +161,7 @@
 
         <!-- A. 音声をAIに送る（Gemini等）— 文字起こし不要・高精度 -->
         <div class="ai-inline ai-audio">
-          <p class="claude-inline-desc"><strong>A. 音声をAIに送る（Gemini等・おすすめ）。</strong>録音した音声と指示を共有します。<strong>文字起こし不要</strong>で、Gemini が音声から直接、高精度な議事録＋メール文面を作成します（スマホでも高速）。</p>
+          <p class="route-title">音声をAIに送る <span class="route-badge">Gemini・おすすめ</span></p>
           <div class="claude-actions">
             <button class="primary-btn" id="aiAudioSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 音声をAIに送る</button>
             <button class="secondary-btn" id="aiAudioCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> 指示をコピー</button>
@@ -169,14 +169,14 @@
           <div class="claude-status" id="aiAudioStatus" hidden></div>
           <a class="claude-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
           <details class="claude-preview">
-            <summary>送る指示を確認（編集は 設定→AI連携）</summary>
+            <summary>送る指示を確認</summary>
             <textarea id="aiAudioPreview" class="minutes-area" rows="6" readonly placeholder="「音声をAIに送る」を押すと、共有する指示文がここに表示されます。"></textarea>
           </details>
         </div>
 
         <!-- B. 文字起こしをClaudeに送る（テキスト経路） -->
         <div class="claude-inline">
-          <p class="claude-inline-desc"><strong>B. 文字起こしをClaudeに送る。</strong>端末内で文字起こし済みのテキストを、会議情報とまとめてコピーし Claude を開きます。貼り付け（⌘/Ctrl+V）→送信するだけ。</p>
+          <p class="route-title">文字起こしをClaudeに送る</p>
           <div class="claude-actions">
             <button class="primary-btn" id="claudeSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピーしてClaudeを開く</button>
             <button class="secondary-btn" id="claudeCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー</button>
@@ -184,15 +184,16 @@
           <div class="claude-status" id="claudeStatus" hidden></div>
           <a class="claude-open-link" id="claudeOpen" href="https://claude.ai/new" target="_blank" rel="noopener" hidden>→ Claudeを開く</a>
           <details class="claude-preview">
-            <summary>送信するプロンプトを確認 / 手動でコピー</summary>
+            <summary>プロンプトを確認</summary>
             <textarea id="claudePromptPreview" class="minutes-area" rows="6" readonly placeholder="「コピーしてClaudeを開く」を押すと、ここに内容が表示されます。"></textarea>
           </details>
         </div>
 
-        <p class="field-hint" style="margin-top:14px;">下の欄は<strong>任意</strong>です。AIが作った議事録を貼り付ける、または手入力すると、下部のメール作成や書き出し（.txt / .md / Word）にそのまま使えます。</p>
+        <details class="minutes-fields">
+          <summary>議事録を貼り付け／編集（任意・メール/書き出し用）</summary>
         <div class="minutes-section">
           <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
-          <textarea id="secSummary" class="minutes-area" rows="4" placeholder="Claudeの議事録を貼り付け、または手入力（メール・書き出しに使われます）。"></textarea>
+          <textarea id="secSummary" class="minutes-area" rows="4" placeholder="AIの議事録を貼り付け、または手入力。"></textarea>
         </div>
         <div class="minutes-section">
           <label class="mini-label" for="secDecisions"><span class="tag tag-dec">決定事項</span></label>
@@ -202,6 +203,7 @@
           <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
           <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題を貼り付け／手入力。"></textarea>
         </div>
+        </details>
       </div>
 
       </div><!-- /minutes-col-left -->
