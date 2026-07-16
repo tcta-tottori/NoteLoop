@@ -47,8 +47,7 @@ const backendHint    = $('backendHint');
 const accuracyModel  = $('accuracyModel');
 const modelWarn      = $('modelWarn');
 const liveEnabled    = $('liveEnabled');
-const liveModel      = $('liveModel');
-const liveModelField = $('liveModelField');
+const liveHint       = $('liveHint');
 const keepAwake      = $('keepAwake');
 
 // マイク選択 / 入力レベル
@@ -114,7 +113,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.3.7';
+const APP_VERSION = 'Ver.4.0';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -163,7 +162,9 @@ let workerBusy = false;
 let reqId = 0;
 
 // エンジン / Web Speech API
-let activeEngine = 'whisper';   // 録音開始時に確定
+let activeEngine = 'whisper';   // 録音開始時に確定（互換用: Web Speech ライブ時は 'webspeech'）
+let liveMode = 'off';           // 録音中のライブ表示: 'webspeech' | 'off'
+let confirmMode = 'none';       // 停止後の確定文字起こし: 'none'(→Gemini) | 'whisper'
 let activeDevice = 'wasm';      // Whisper の実行バックエンド（webgpu / wasm）— 録音開始時に確定
 
 // タッチ端末（スマホ／タブレット）判定。モバイルのWebGPUはWhisper推論で
@@ -458,34 +459,17 @@ async function startRecording() {
   // 入力レベルメーターがマイクを掴んでいたら解放してから録音を開始
   if (typeof homeMicMeter !== 'undefined') homeMicMeter.stop();
   if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
-  activeEngine = engineSelect.value;
   acquireWakeLock(); // 設定がONなら画面を常時オンに（ユーザー操作の直後に要求）
 
-  // --- Web Speech: ライブ認識 ＋ 並行して音声録音 ---
-  if (activeEngine === 'webspeech') {
-    if (!getSR()) {
-      showError('このブラウザは Web Speech API（音声認識）に対応していません。設定でエンジンを「ブラウザ内Whisper」に切り替えてください。');
-      return;
-    }
-    recordedBlob = null;
-    setAudioAvailable(false);
-    // 先に録音用マイクを確保してから認識を開始する。
-    // （認識を先に始めてから getUserMedia するとブラウザによっては認識が止まり、
-    //   録音中のライブ文字起こしが動かなくなるため、この順序が重要）
-    await startWebSpeechAudioCapture();
-    const ok = startWebSpeech();
-    if (!ok) { teardownAudio(); return; } // 認識を開始できなければ後始末
-    recording = true;
-    sttActivity = 0.4;
-    setStatus('working', '認識中…（Web Speech）');
-    updateHomeUI();
-    startTime = Date.now();
-    updateTimer();
-    timerInterval = setInterval(updateTimer, 250);
-    return;
-  }
+  // 役割分離:
+  //  ・ライブ表示（録音中） = Web Speech（ストリーミング認識。対応時のみ）
+  //  ・確定（停止後）      = 音声→Gemini（既定 'none'）／ 任意で Whisper
+  confirmMode = (engineSelect.value === 'whisper') ? 'whisper' : 'none';
+  const speechAvailable = !!getSR();
+  liveMode = (liveEnabled.checked && speechAvailable) ? 'webspeech' : 'off';
+  activeEngine = (liveMode === 'webspeech') ? 'webspeech' : 'whisper'; // 互換（onSpeechEnd 等）
 
-  // --- Whisper: 録音（音声保存）＋停止後に高精度文字起こし ---
+  // マイク取得（録音用）。Web Speech は内部で独自にマイクを使うため並行動作する。
   try {
     mediaStream = await getMicStream();
   } catch (err) {
@@ -499,42 +483,22 @@ async function startRecording() {
     return;
   }
 
-  // Whisper の実行バックエンドを確定（自動判定 or 設定の固定値）
+  // 確定に Whisper を使う場合のバックエンドを確定
   activeDevice = await resolveDevice(backendSelect ? backendSelect.value : 'auto');
-
-  const useLive = liveEnabled.checked;
-  if (useLive) worker.postMessage({ type: 'load', model: liveModel.value, device: activeDevice });
 
   recordedBlobs = [];
   recordedBlob = null;
 
   // Web Audio: ネイティブレートのまま録音（保存音声の品質を維持）。
-  // MediaRecorder は合流点 recDest から録音するため、録音中でもマイクを差し替えられる。
-  // ライブ用 PCM は onaudioprocess 内で 16kHz にリサンプルして取り出す。
+  // 合流点 recDest から録音するため、録音中でもマイクを差し替えられる。
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 1024;
   recDest = audioCtx.createMediaStreamDestination();
-
-  if (useLive) {
-    liveResampleAcc = 0;
-    processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
-    processorNode.onaudioprocess = (e) => {
-      if (!recording) return;
-      pushLiveChunk(e.inputBuffer.getChannelData(0), audioCtx.sampleRate);
-    };
-    const silent = audioCtx.createGain();
-    silent.gain.value = 0;
-    processorNode.connect(silent);
-    silent.connect(audioCtx.destination);
-  }
-
-  // マイクを analyser / recDest /（ライブ時）processor に接続
   connectMicSource(mediaStream);
 
-  // MediaRecorder（再生・高精度再処理・音声出力用の音声を保持）
-  // AI で共有しやすい m4a を優先し、非対応ブラウザでは最適な形式にフォールバック
+  // MediaRecorder（再生・確定再処理・音声→AI 共有用の音声を保持）
   try {
     const mime = pickAudioMime();
     mediaRecorder = mime ? new MediaRecorder(recDest.stream, { mimeType: mime }) : new MediaRecorder(recDest.stream);
@@ -547,44 +511,20 @@ async function startRecording() {
 
   recording = true;
   pendingChunks = [];
-  recordedBlob = null;
   setAudioAvailable(false);
 
-  setStatus('working', useLive ? '準備中…' : '録音中');
+  // ライブ表示: Web Speech を開始（マイク取得の後に開始するのが安定）
+  if (liveMode === 'webspeech') {
+    const ok = startWebSpeech();
+    if (!ok) liveMode = 'off'; // 開始できなくても録音は継続
+  }
 
+  sttActivity = 0.4;
+  setStatus('working', liveMode === 'webspeech' ? '認識中…（ライブ）' : '録音中');
   updateHomeUI();
-
   startTime = Date.now();
   updateTimer();
   timerInterval = setInterval(updateTimer, 250);
-  if (useLive) liveTimer = setInterval(() => maybeSendChunk(false), LIVE_INTERVAL_MS);
-}
-
-/**
- * Web Speech 認識中に、音声を並行して録音する（確認・保存用）。
- * マイク取得や MediaRecorder に失敗した場合は録音なしで認識のみ継続。
- */
-async function startWebSpeechAudioCapture() {
-  try {
-    mediaStream = await getMicStream();
-  } catch (_) { mediaStream = null; return; } // 認識は Web Speech 側の独自マイクで継続
-  recordedBlobs = [];
-  // 波形表示 + 録音（合流点 recDest 経由でマイク切替に追従）
-  try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') await audioCtx.resume();
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024;
-    recDest = audioCtx.createMediaStreamDestination();
-    connectMicSource(mediaStream);
-  } catch (_) { analyser = null; recDest = null; }
-  try {
-    const recSrc = recDest ? recDest.stream : mediaStream;
-    const mime = pickAudioMime();
-    mediaRecorder = mime ? new MediaRecorder(recSrc, { mimeType: mime }) : new MediaRecorder(recSrc);
-    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
-    mediaRecorder.start();
-  } catch (_) { mediaRecorder = null; }
 }
 
 async function stopRecording() {
@@ -597,7 +537,7 @@ async function stopRecording() {
   clearRecordingNotification();
   releaseWakeLock();
 
-  if (activeEngine === 'webspeech') stopWebSpeech();
+  if (liveMode === 'webspeech') stopWebSpeech();
 
   // 録音した音声を確定
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -620,24 +560,20 @@ async function stopRecording() {
   finalCanceled = false;
   if (recordedBlob) await saveRecordingNow();
 
-  if (activeEngine === 'webspeech') {
-    const gotText = liveTranscript.value.trim().length > 0;
-    if (!gotText && recordedBlob) {
-      // Web Speech が何も返さなかった（ネット未接続・マイクの競合・端末非対応など）。
-      // 録音した音声をオフラインの Whisper で文字起こしし、必ず結果を出す。
-      hideError();
-      setStatus('working', '音声から文字起こし中…');
-      await runFinalPass(recordedBlob);
-    } else {
-      // Web Speech がリアルタイムで確定済み。高精度パスは行わない。
-      setStatus('ready', '認識完了');
-      updateHomeUI();
-    }
-  } else if (recordedBlob) {
-    // Whisper: 音声全体を高精度で再処理して確定版に置き換え
+  const gotLiveText = liveTranscript.value.trim().length > 0;
+  if (confirmMode === 'whisper' && recordedBlob) {
+    // 設定で「停止後に Whisper で文字起こし」→ 音声全体を再処理して確定版に置き換え
+    hideError();
+    setStatus('working', '音声から文字起こし中…');
+    await runFinalPass(recordedBlob);
+  } else if (!gotLiveText && recordedBlob) {
+    // ライブ文字が無い（Web Speech 非対応・オフライン・無音）→ 最低限 Whisper で一度だけ出す
+    hideError();
+    setStatus('working', '音声から文字起こし中…');
     await runFinalPass(recordedBlob);
   } else {
-    setStatus('ready', 'モデル準備完了');
+    // Web Speech のライブ文字をそのまま確定として使う（高精度化は「音声をAIに送る」で）
+    setStatus('ready', '文字起こし完了');
     updateHomeUI();
   }
   checkTerms(); // 登録用語（会社名など）が含まれていれば確認ポップアップ
@@ -734,9 +670,9 @@ function commitSttSegment() {
 
 function onSpeechEnd() {
   // 録音継続中に認識が切れたら、確定分をコミットして新インスタンスで再開
-  if (recording && activeEngine === 'webspeech') {
+  if (recording && liveMode === 'webspeech') {
     commitSttSegment();
-    setTimeout(() => { if (recording && activeEngine === 'webspeech') beginRecognition(); }, 200);
+    setTimeout(() => { if (recording && liveMode === 'webspeech') beginRecognition(); }, 200);
   }
 }
 
@@ -1013,21 +949,8 @@ function drainPending() {
   pendingChunks = [];
   return out;
 }
-function maybeSendChunk(force) {
-  if (workerBusy) return;
-  const len = totalSamples(pendingChunks);
-  if (len === 0) return;
-  if (!force && len / SAMPLE_RATE < CHUNK_MIN_SEC) return;
-  const audio = drainPending();
-  // 無音・ごく小音量のチャンクは送らない（Whisper が「！」等を捏造するのを防ぐ）
-  if (rms(audio) < LIVE_SILENCE_RMS) return;
-  workerBusy = true;
-  if (recording) setStatus('working', '文字起こし中…（暫定）');
-  worker.postMessage(
-    { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: liveModel.value, language: LANGUAGE, device: activeDevice },
-    [audio.buffer]
-  );
-}
+// ライブ表示は Web Speech に一本化したため、Whisper へのライブ送信は行わない（no-op）。
+function maybeSendChunk() { /* Whisper-live 廃止 */ }
 /** 記号・句読点だけ（「！！！」等のハルシネーション）かどうか */
 function isJunkChunk(text) {
   const t = (text || '').trim();
@@ -2186,16 +2109,28 @@ geminiInstructionReset.addEventListener('click', () => {
  * =======================================================*/
 const LIVE_KEY = 'noteloop_live_enabled';
 liveEnabled.addEventListener('change', () => {
-  liveModelField.style.display = liveEnabled.checked ? '' : 'none';
   localStorage.setItem(LIVE_KEY, liveEnabled.checked ? '1' : '0');
+  applyLiveUI();
 });
-// モバイル（タッチ端末）では既定でライブ表示OFF（CPU負荷・ハルシネーション回避）。
-// 保存済みの設定があればそれを優先。
 const isMobileDevice = IS_TOUCH_DEVICE;
+// ライブ表示（Web Speech）は既定ON。保存済みの設定があればそれを優先。
 {
   const savedLive = localStorage.getItem(LIVE_KEY);
   if (savedLive === '0' || savedLive === '1') liveEnabled.checked = savedLive === '1';
-  else if (isMobileDevice) liveEnabled.checked = false; // 初回モバイルは OFF
+}
+
+/** ライブ表示（Web Speech）の対応状況を反映。非対応なら無効化して案内。 */
+function applyLiveUI() {
+  if (!liveHint) return;
+  if (!getSR()) {
+    liveEnabled.checked = false;
+    liveEnabled.disabled = true;
+    liveHint.textContent = 'この端末／ブラウザはリアルタイム表示（Web Speech）に非対応です。録音後に「音声をAIに送る」か、下の「停止後の文字起こし」で作成してください。';
+  } else if (liveEnabled.checked) {
+    liveHint.textContent = '録音中にリアルタイムで文字が表示されます（音声はGoogleへ送信）。停止後は「音声をAIに送る」で高精度な議事録にできます。';
+  } else {
+    liveHint.textContent = 'ライブ表示はOFFです。録音のみ行い、停止後に「音声をAIに送る」または下の設定で文字起こしします。';
+  }
 }
 
 // 画面常時オン設定の保存 / 即時反映（録音中に切り替えたら取得・解放）
@@ -2206,14 +2141,14 @@ if (keepAwake) {
   });
 }
 
-const ENGINE_KEY = 'noteloop_engine';
+const ENGINE_KEY = 'noteloop_confirm_v2'; // 旧 'noteloop_engine' は意味が変わったため新キーに
 function applyEngineUI() {
-  const ws = engineSelect.value === 'webspeech';
-  whisperSettings.style.display = ws ? 'none' : '';
-  engineHint.textContent = ws
-    ? 'ブラウザ標準の音声認識。リアルタイムで高精度ですが、音声はブラウザ経由でクラウド（Chromeは Google、Edgeは Azure）へ送信され、インターネット接続が必要です。'
-    : '音声を端末内で処理します（外部送信なし・オフライン可）。初回はモデルをダウンロードします。';
-  if (!recording) setStatus('', ws ? 'Web Speech（要ネット）' : 'モデル未読み込み');
+  // engineSelect = 「停止後の文字起こし（確定）」: 'gemini'(=しない) | 'whisper'
+  const useWhisper = engineSelect.value === 'whisper';
+  whisperSettings.style.display = useWhisper ? '' : 'none';
+  engineHint.textContent = useWhisper
+    ? '停止後、録音音声を端末内Whisperで文字起こしします（外部送信なし・オフライン可）。初回はモデルをダウンロードします。長い録音・スマホでは時間がかかります。'
+    : '停止後の自動文字起こしは行いません。録音後に「音声をAIに送る（Gemini）」で高精度な議事録＋メールを作成します（推奨）。';
   localStorage.setItem(ENGINE_KEY, engineSelect.value);
 }
 engineSelect.addEventListener('change', applyEngineUI);
@@ -2272,17 +2207,11 @@ downloadAudio.disabled = true;
 downloadWav.disabled = true;
 setAudioAvailable(false);
 if (keepAwake) { const kw = localStorage.getItem(WAKE_KEY); if (kw === '0') keepAwake.checked = false; }
-liveModelField.style.display = liveEnabled.checked ? '' : 'none';
 claudeInstruction.value = loadInstruction();
 geminiInstruction.value = loadGeminiInstruction();
-// エンジンの復元 + Web Speech 非対応ブラウザの表示
+// 「停止後の文字起こし」の復元（gemini=しない / whisper）
 const savedEngine = localStorage.getItem(ENGINE_KEY);
-if (savedEngine === 'webspeech' || savedEngine === 'whisper') engineSelect.value = savedEngine;
-if (!getSR()) {
-  const opt = engineSelect.querySelector('option[value="webspeech"]');
-  if (opt) opt.textContent = 'Web Speech API（このブラウザは非対応）';
-  if (engineSelect.value === 'webspeech') engineSelect.value = 'whisper'; // 非対応なら Whisper に
-}
+if (savedEngine === 'gemini' || savedEngine === 'whisper') engineSelect.value = savedEngine;
 // バックエンドの復元
 if (backendSelect) {
   const savedBackend = localStorage.getItem(BACKEND_KEY);
@@ -2290,6 +2219,7 @@ if (backendSelect) {
   applyBackendUI();
 }
 applyEngineUI();
+applyLiveUI();  // ライブ表示（Web Speech）の対応状況を反映
 updateHomeUI();
 renderParticipants();
 loadTermDict();
@@ -2333,7 +2263,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !recording) return;
   try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch (_) {}
   // Web Speech が停止していれば再開
-  if (activeEngine === 'webspeech' && !recognition) { try { beginRecognition(); } catch (_) {} }
+  if (liveMode === 'webspeech' && !recognition) { try { beginRecognition(); } catch (_) {} }
   if (!wakeLock) acquireWakeLock(); // 画面復帰時にロックを取り直す（非表示中に自動解放されるため）
   notifLastSec = -1; // 次のtickで通知を更新
 });

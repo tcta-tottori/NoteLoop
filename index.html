@@ -278,12 +278,11 @@
           <div class="static-value">日本語（固定）</div>
         </div>
         <div class="field settings-field">
-          <label for="engineSelect">文字起こしエンジン</label>
-          <select id="engineSelect">
-            <option value="whisper" selected>ブラウザ内Whisper（オフライン・非公開 / WebGPU対応）</option>
-            <option value="webspeech">Web Speech API（クラウド・低負荷 / 要ネット）</option>
-          </select>
-          <p class="field-hint" id="engineHint"></p>
+          <label class="switch-row" for="liveEnabled">
+            <span>録音中のライブ表示（Web Speech）</span>
+            <input type="checkbox" id="liveEnabled" checked />
+          </label>
+          <p class="field-hint" id="liveHint"></p>
         </div>
         <div class="field settings-field">
           <label class="switch-row" for="keepAwake">
@@ -293,6 +292,14 @@
             </span>
             <input type="checkbox" id="keepAwake" checked />
           </label>
+        </div>
+        <div class="field settings-field">
+          <label for="engineSelect">停止後の文字起こし（確定）</label>
+          <select id="engineSelect">
+            <option value="gemini" selected>しない（音声をAIに送って作成・推奨）</option>
+            <option value="whisper">Whisperで文字起こし（オフライン可・停止後に処理）</option>
+          </select>
+          <p class="field-hint" id="engineHint"></p>
         </div>
         <div id="whisperSettings">
         <div class="field settings-field">
@@ -312,25 +319,8 @@
             <option value="onnx-community/whisper-small" selected>small（約250MB・おすすめ / 高精度）</option>
             <option value="onnx-community/whisper-large-v3-turbo">large-v3-turbo（約1.2GB・WebGPU/PC推奨 / 最速×最高精度・メモリ16GB＋）</option>
           </select>
-          <p class="field-hint">停止後に音声全体をこのモデルで再処理し、精度の高い確定版を作ります。大きいほど高精度で、初回はダウンロードに時間がかかります。WebGPUなら turbo でも高速です。</p>
+          <p class="field-hint">「確定」で Whisper を選んだ場合、停止後に音声全体をこのモデルで文字起こしします。大きいほど高精度で、初回はダウンロードに時間がかかります。WebGPUなら turbo でも高速です。</p>
           <p class="field-hint warn" id="modelWarn" hidden></p>
-        </div>
-        <div class="field settings-field">
-          <label class="switch-row" for="liveEnabled">
-            <span>
-              録音中のライブ表示
-              <span class="field-hint inline">録音しながら軽量モデルで暫定表示。停止後に高精度で置き換えます。</span>
-            </span>
-            <input type="checkbox" id="liveEnabled" checked />
-          </label>
-        </div>
-        <div class="field settings-field" id="liveModelField">
-          <label for="liveModel">ライブ表示用の軽量モデル</label>
-          <select id="liveModel">
-            <option value="onnx-community/whisper-base" selected>base（約80MB・おすすめ / 日本語が実用的）</option>
-            <option value="onnx-community/whisper-tiny">tiny（約40MB・最速 / 日本語は不正確）</option>
-          </select>
-          <p class="field-hint">tiny は日本語だと「！」等の誤認識が多いため、ライブ表示は base を推奨します。録音中の暫定表示より、停止後の確定文字起こし（small）や「音声をAIに送る」の方が高精度です。</p>
         </div>
         </div><!-- /#whisperSettings -->
       </div>
@@ -417,20 +407,20 @@
       </div>
 
       <div class="panel" id="man-engine">
-        <h3 class="settings-group-title">文字起こしエンジンの選び方</h3>
-        <p class="field-hint" style="margin-bottom:12px;">設定画面で切り替えられます。どちらでも録音音声の保存・Claude 連携・書き出しは使えます。</p>
+        <h3 class="settings-group-title">録音中の表示と、確定文字起こしの仕組み</h3>
+        <p class="field-hint" style="margin-bottom:12px;">「録音中のライブ表示」と「停止後の確定」は役割が分かれています（設定で切替）。</p>
         <div class="man-tablewrap">
           <table class="man-table">
-            <thead><tr><th>項目</th><th>ブラウザ内 Whisper（既定）</th><th>Web Speech API</th></tr></thead>
+            <thead><tr><th>役割</th><th>使う技術</th><th>特徴</th></tr></thead>
             <tbody>
-              <tr><td>精度・速度</td><td>停止後に高精度化（WebGPUなら高速）</td><td>リアルタイム・待ち時間ほぼ無し</td></tr>
-              <tr><td>動作場所</td><td>端末内で完結・外部送信なし</td><td>音声がクラウドへ（Chrome=Google / Edge=Azure）</td></tr>
-              <tr><td>ネット</td><td>不要（初回のモデルDLのみ）</td><td>必要</td></tr>
-              <tr><td>向いている用途</td><td>非公開データ・オフライン・高精度</td><td>手軽さ・端末負荷ゼロ</td></tr>
+              <tr><td>録音中のライブ表示</td><td>Web Speech（Chrome）</td><td>リアルタイム・高精度・端末負荷ほぼゼロ。録音中の音声はクラウド（Google）へ送信。要ネット。非対応時は自動でOFF。</td></tr>
+              <tr><td>記録</td><td>MediaRecorder</td><td>音声を m4a で保存。ライブと並行。</td></tr>
+              <tr><td>確定・議事録（推奨）</td><td>音声 → Gemini</td><td>停止後に「音声をAIに送る」。音声から直接、高精度な議事録＋メールを作成。</td></tr>
+              <tr><td>確定（任意）</td><td>Whisper（端末内）</td><td>設定で「停止後にWhisperで文字起こし」を選ぶと、オフラインでも確定文字起こし。長い録音・スマホでは時間がかかる。</td></tr>
             </tbody>
           </table>
         </div>
-        <div class="man-note"><b>精度・速度を上げたいとき（Whisper）：</b>設定の「実行バックエンド」を <b>WebGPU</b>（対応端末なら自動）にすると大幅に高速化します。精度は「高精度モデル」を small → large-v3-turbo に上げるほど向上します（turbo はメモリ16GB＋のPC推奨）。「このように…」等の反復が出る場合は、マイクに近づける・端末の録音音量を上げると改善します。</div>
+        <div class="man-note"><b>おすすめ（スマホ）：</b>録音中は「ライブ表示（Web Speech）」で文字を確認し、止めたら <b>「音声をAIに送る」</b> で議事録化。<b>完全オフライン</b>が必要なときだけ、ライブ表示OFF＋「停止後にWhisper」を使ってください。</div>
       </div>
 
       <div class="panel" id="man-claude">
