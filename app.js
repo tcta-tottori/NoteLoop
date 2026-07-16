@@ -26,6 +26,7 @@ const idlePrompt     = $('idlePrompt');
 const modelStatus    = $('modelStatus');
 const progressWrap   = $('progressWrap');
 const progressBar    = $('progressBar');
+const cancelProcBtn  = $('cancelProcBtn');
 const errorBox       = $('errorBox');
 const audioWrap      = $('audioWrap');
 const audioEmptyNote = $('audioEmptyNote');
@@ -110,8 +111,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.3.0';
-const APP_UPDATED = '2026.7.16 16:00';
+const APP_VERSION = 'Ver.3.1';
+const APP_UPDATED = '2026.7.16 18:30';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -276,10 +277,11 @@ function updateFabState() {
 /* =========================================================
  * Web Worker（Whisper）
  * =======================================================*/
-const worker = new Worker('./worker.js', { type: 'module' });
+let worker;
 let finalResolve = null;   // 高精度パス完了を待つ Promise
+let finalCanceled = false; // 高精度パスがユーザーによって中止されたか
 
-worker.onmessage = (e) => {
+function handleWorkerMessage(e) {
   const msg = e.data || {};
   switch (msg.type) {
     case 'progress':
@@ -316,7 +318,23 @@ worker.onmessage = (e) => {
       showError('文字起こしエラー: ' + msg.message);
       break;
   }
-};
+}
+
+function createWorker() {
+  worker = new Worker('./worker.js', { type: 'module' });
+  worker.onmessage = handleWorkerMessage;
+}
+createWorker();
+
+/** 実行中の高精度文字起こしを中止する（Worker を作り直して推論を止める） */
+function cancelFinalPass() {
+  finalCanceled = true;
+  workerBusy = false;
+  try { worker.terminate(); } catch (_) {}
+  createWorker();               // 次回のためにまっさらな Worker を用意
+  if (finalResolve) { finalResolve(); finalResolve = null; }
+}
+if (cancelProcBtn) cancelProcBtn.addEventListener('click', cancelFinalPass);
 
 function setModelLoading(progress) {
   setStatus('loading', 'モデル読み込み中…');
@@ -570,6 +588,11 @@ async function stopRecording() {
   }
   teardownAudio();
 
+  // ★ まず「録音音声＋会議情報」を履歴へ保存（文字起こしの成否に関わらずデータを残す）。
+  activeRecordingId = null;
+  finalCanceled = false;
+  if (recordedBlob) await saveRecordingNow();
+
   if (activeEngine === 'webspeech') {
     const gotText = liveTranscript.value.trim().length > 0;
     if (!gotText && recordedBlob) {
@@ -591,8 +614,8 @@ async function stopRecording() {
     updateHomeUI();
   }
   checkTerms(); // 登録用語（会社名など）が含まれていれば確認ポップアップ
-  // 文字起こし＋音声を自動的に履歴へ保存（最大10件）
-  await autoSaveRecording();
+  // 文字起こし結果を履歴エントリへ追記（無ければ新規作成）
+  await finalizeRecordingSave();
 }
 
 /* =========================================================
@@ -800,6 +823,12 @@ async function runFinalPass(blob) {
     const estTotal = Math.max(5, durationSec * factor);
     const procStart = Date.now();
     progressWrap.hidden = false;
+    if (cancelProcBtn) cancelProcBtn.hidden = false;
+
+    // 長い録音を CPU(WASM) で処理しようとしている場合は事前に警告
+    if (activeDevice !== 'webgpu' && durationSec > 600) {
+      showError('この録音は長め（約' + Math.round(durationSec / 60) + '分）で、CPU処理では非常に時間がかかります。録音音声は保存済みです。中止して、音声ファイルを Gemini 等のAIに直接渡すと速く議事録が作れます（「録音」画面→音声を保存）。');
+    }
 
     procTimer = setInterval(() => {
       const el = (Date.now() - procStart) / 1000;
@@ -821,11 +850,15 @@ async function runFinalPass(blob) {
       );
     });
 
-    procProgress = 1;
-    progressBar.style.width = '100%';
-    setStatus('ready', '文字起こし完了');
-    if (level < 0.008) {
-      showError('録音の音量がかなり小さいようです。マイクに近づける／端末の録音音量を上げると精度が上がります。');
+    if (finalCanceled) {
+      setStatus('ready', '文字起こしを中止しました（音声は履歴に保存済み）');
+    } else {
+      procProgress = 1;
+      progressBar.style.width = '100%';
+      setStatus('ready', '文字起こし完了');
+      if (level < 0.008) {
+        showError('録音の音量がかなり小さいようです。マイクに近づける／端末の録音音量を上げると精度が上がります。');
+      }
     }
   } catch (err) {
     showError('高精度処理に失敗しました: ' + (err && err.message ? err.message : err));
@@ -833,6 +866,7 @@ async function runFinalPass(blob) {
   } finally {
     clearInterval(procTimer); procTimer = null;
     progressWrap.hidden = true;
+    if (cancelProcBtn) cancelProcBtn.hidden = true;
     recordBtn.disabled = false;
     homeProcessing = false;
     procProgress = 0;
@@ -958,7 +992,15 @@ function maybeSendChunk(force) {
     [audio.buffer]
   );
 }
+/** 記号・句読点のみ（「！！！」等のハルシネーション）かどうか */
+function isJunkChunk(text) {
+  const t = (text || '').trim();
+  if (!t) return true;
+  // 日本語・英数字などの「意味のある文字」を含まなければ捨てる
+  return !/[\p{L}\p{N}]/u.test(t);
+}
 function appendTranscript(text) {
+  if (isJunkChunk(text)) return; // 「！！！」等の記号だけのチャンクは表示しない
   const cur = liveTranscript.value.trimEnd();
   liveTranscript.value = formatTranscript(cur ? cur + ' ' + text : text);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
@@ -1697,26 +1739,81 @@ function idbDel(key) { return idbOpen().then((db) => new Promise((res) => { cons
 /* =========================================================
  * 録音終了時の自動保存（文字起こし＋音声、最大10件）
  * =======================================================*/
-async function autoSaveRecording() {
-  const transcript = liveTranscript.value.trim();
-  if (!transcript) { updateHomeUI(); return; }
-  ensureAutoTitle();  // タイトル未設定なら文字起こしから自動生成
+let activeRecordingId = null; // 録音停止時に作成した履歴エントリの id（後で文字起こしを追記）
+
+/** 会議名が未入力のときの既定タイトル（録音日時ベース） */
+function defaultRecordingTitle() {
+  const name = meetingName.value.trim();
+  if (name) return name;
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `録音 ${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
+}
+
+/**
+ * 録音停止直後に、まず「録音音声＋会議情報」を履歴へ保存する。
+ * 文字起こしの成否に関わらずデータを残すのが目的（文字起こしは後から追記）。
+ */
+async function saveRecordingNow() {
+  const id = 'rec-' + Date.now() + '-' + Math.floor(performance.now());
+  activeRecordingId = id;
+  let audio = null;
+  if (recordedBlob) {
+    try { await idbPut(id, recordedBlob); audio = { ext: extFromMime(recordedBlob.type), size: recordedBlob.size }; }
+    catch (_) { audio = null; }
+  }
   const m = currentMinutes();
-  // 議事録の整形は Claude 側で行うため、自動保存では要点・決定事項・ToDo は空で保存する
-  // （文字起こしと音声を残すのが目的。議事録は後から編集画面で作成できる）
+  const entry = {
+    id, name: defaultRecordingTitle(), date: m.date, participants: m.participants,
+    transcript: liveTranscript.value.trim(), summary: [], decisions: [], todos: [],
+    audio, ts: Date.now(), auto: true,
+  };
+  const list = loadStore();
+  list.push(entry);
+  while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
+  saveStore(list);
+  renderHistory();
+}
+
+/**
+ * 文字起こし完了後に、保存済みエントリへ文字起こし（とタイトル）を追記する。
+ * saveRecordingNow で作成したエントリが無ければ（音声なしの Web Speech 等）新規作成する。
+ */
+async function finalizeRecordingSave() {
+  const transcript = liveTranscript.value.trim();
+  ensureAutoTitle();  // タイトル未設定なら文字起こしから自動生成
+  const list = loadStore();
+  const idx = activeRecordingId ? list.findIndex((e) => e.id === activeRecordingId) : -1;
+
+  if (idx >= 0) {
+    // 既存エントリを更新（文字起こしと、既定タイトルのままなら会議名を反映）
+    const entry = list[idx];
+    entry.transcript = transcript;
+    const nm = meetingName.value.trim();
+    if (nm) entry.name = nm;
+    else if (!transcript && !entry.transcript) entry.name = entry.name; // 変更なし
+    else if (transcript && /^録音 /.test(entry.name)) entry.name = autoTitleFromTranscript(transcript) || entry.name;
+    entry.date = meetingDate.value || entry.date;
+    entry.participants = participants.slice();
+    saveStore(list);
+    renderHistory();
+    updateHomeUI();
+    return;
+  }
+
+  // 新規（音声を保存していない Web Speech 等）。文字起こしが無ければ保存しない。
+  if (!transcript) { updateHomeUI(); return; }
+  const m = currentMinutes();
   const id = 'rec-' + Date.now() + '-' + Math.floor(performance.now());
   let audio = null;
   if (recordedBlob) {
     try { await idbPut(id, recordedBlob); audio = { ext: extFromMime(recordedBlob.type), size: recordedBlob.size }; }
     catch (_) { audio = null; }
   }
-  const entry = {
-    id, name: m.name, date: m.date, participants: m.participants,
+  list.push({ id, name: m.name, date: m.date, participants: m.participants,
     transcript, summary: m.summary, decisions: m.decisions, todos: m.todos,
-    audio, ts: Date.now(), auto: true,
-  };
-  const list = loadStore();
-  list.push(entry);
+    audio, ts: Date.now(), auto: true });
   while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
   saveStore(list);
   renderHistory();
@@ -1947,7 +2044,19 @@ claudeInstructionReset.addEventListener('click', () => {
 /* =========================================================
  * 設定・エラー・初期化
  * =======================================================*/
-liveEnabled.addEventListener('change', () => { liveModelField.style.display = liveEnabled.checked ? '' : 'none'; });
+const LIVE_KEY = 'noteloop_live_enabled';
+liveEnabled.addEventListener('change', () => {
+  liveModelField.style.display = liveEnabled.checked ? '' : 'none';
+  localStorage.setItem(LIVE_KEY, liveEnabled.checked ? '1' : '0');
+});
+// モバイル（タッチ端末）では既定でライブ表示OFF（CPU負荷・ハルシネーション回避）。
+// 保存済みの設定があればそれを優先。
+const isMobileDevice = (navigator.maxTouchPoints || 0) > 0 && !window.matchMedia('(pointer:fine)').matches;
+{
+  const savedLive = localStorage.getItem(LIVE_KEY);
+  if (savedLive === '0' || savedLive === '1') liveEnabled.checked = savedLive === '1';
+  else if (isMobileDevice) liveEnabled.checked = false; // 初回モバイルは OFF
+}
 
 // 画面常時オン設定の保存 / 即時反映（録音中に切り替えたら取得・解放）
 if (keepAwake) {
