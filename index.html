@@ -337,9 +337,10 @@
         <div class="field settings-field" id="liveModelField">
           <label for="liveModel">ライブ表示用の軽量モデル</label>
           <select id="liveModel">
-            <option value="onnx-community/whisper-tiny" selected>tiny（約40MB・最速）</option>
-            <option value="onnx-community/whisper-base">base（約80MB）</option>
+            <option value="onnx-community/whisper-base" selected>base（約80MB・おすすめ / 日本語が実用的）</option>
+            <option value="onnx-community/whisper-tiny">tiny（約40MB・最速 / 日本語は不正確）</option>
           </select>
+          <p class="field-hint">tiny は日本語だと「！」等の誤認識が多いため、ライブ表示は base を推奨します。録音中の暫定表示より、停止後の確定文字起こし（small）や「音声をAIに送る」の方が高精度です。</p>
         </div>
         </div><!-- /#whisperSettings -->
       </div>

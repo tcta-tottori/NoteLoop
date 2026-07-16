@@ -117,7 +117,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.3.5';
+const APP_VERSION = 'Ver.3.6';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -138,8 +138,10 @@ let sttActivity = 0;     // Web Speech 用の波の活性度
 
 /* ===== 状態 ===== */
 const SAMPLE_RATE = 16000;
-const CHUNK_MIN_SEC = 4;
+const CHUNK_MIN_SEC = 5;          // ライブは 5 秒ためてから送る（文脈が増え誤認識が減る）
 const LIVE_INTERVAL_MS = 3000;
+const MAX_LIVE_BACKLOG_SEC = 14;  // ライブの未処理音声の上限（超過分は捨てる＝確定パスで再処理）
+const LIVE_SILENCE_RMS = 0.006;   // これ未満のチャンクは無音とみなし送らない（「！」ハルシネーション回避）
 
 let recording = false;
 let mediaStream = null;
@@ -812,6 +814,13 @@ function pushLiveChunk(input, srcRate) {
   }
   liveResampleAcc = pos - input.length; // 端数を次ブロックへ持ち越し
   pendingChunks.push(out);
+  // バックログが溜まりすぎたら古い音声を捨てる（重いモデルでも録音UIが詰まらないように）。
+  // 捨てた分は停止後の高精度パスで必ず再処理される。
+  let backlog = totalSamples(pendingChunks);
+  const maxSamples = MAX_LIVE_BACKLOG_SEC * SAMPLE_RATE;
+  while (backlog > maxSamples && pendingChunks.length > 1) {
+    backlog -= pendingChunks.shift().length;
+  }
 }
 
 /**
@@ -1005,6 +1014,8 @@ function maybeSendChunk(force) {
   if (len === 0) return;
   if (!force && len / SAMPLE_RATE < CHUNK_MIN_SEC) return;
   const audio = drainPending();
+  // 無音・ごく小音量のチャンクは送らない（Whisper が「！」等を捏造するのを防ぐ）
+  if (rms(audio) < LIVE_SILENCE_RMS) return;
   workerBusy = true;
   if (recording) setStatus('working', '文字起こし中…（暫定）');
   worker.postMessage(
@@ -1012,9 +1023,14 @@ function maybeSendChunk(force) {
     [audio.buffer]
   );
 }
+/** 記号・句読点だけ（「！！！」等のハルシネーション）かどうか */
+function isJunkChunk(text) {
+  const t = (text || '').trim();
+  if (!t) return true;
+  return !/[\p{L}\p{N}]/u.test(t); // 文字・数字を含まなければ捨てる
+}
 function appendTranscript(text) {
-  // 精度が低くても録音中の文字起こしは表示する（記号だけのチャンクも隠さない）。
-  if (!(text || '').trim()) return; // 空のみスキップ
+  if (isJunkChunk(text)) return; // 記号だけの誤認識は表示しない（実語のみ表示）
   const cur = liveTranscript.value.trimEnd();
   liveTranscript.value = formatTranscript(cur ? cur + ' ' + text : text);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
