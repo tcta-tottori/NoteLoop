@@ -122,6 +122,8 @@
 
     <!-- ========== 議事録 ========== -->
     <section class="screen" id="screen-minutes" aria-labelledby="screenTitle" hidden>
+      <div class="minutes-grid">
+      <div class="minutes-col minutes-col-left">
       <!-- 録音した音声（再生・音声出力）— 議事録トップに配置 -->
       <div class="panel" id="audioPanel">
         <div class="section-head">
@@ -202,6 +204,8 @@
         </div>
       </div>
 
+      </div><!-- /minutes-col-left -->
+      <div class="minutes-col minutes-col-right">
       <!-- メール（作成・送信）— 議事録画面に集約 -->
       <div class="panel" id="mailPanel">
         <div class="section-head">
@@ -240,6 +244,8 @@
         </div>
         <p class="field-hint">Gmail / Outlook はWeb版の作成画面が新しいタブで開き、件名・本文が入った状態になります（各サービスへのログインが必要）。「既定メーラー」はThunderbird等の既定アプリを開きます。</p>
       </div>
+      </div><!-- /minutes-col-right -->
+      </div><!-- /minutes-grid -->
     </section>
 
     <!-- ========== 履歴 ========== -->

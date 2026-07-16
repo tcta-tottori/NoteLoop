@@ -95,8 +95,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.1.8';
-const APP_UPDATED = '2026.7.16 08:20';
+const APP_VERSION = 'Ver.1.9';
+const APP_UPDATED = '2026.7.16 08:45';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度

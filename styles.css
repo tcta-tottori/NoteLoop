@@ -158,7 +158,7 @@ a:hover { text-decoration: underline; }
 .drawer-logo { height: 27px; width: auto; max-width: 90%; opacity: .95; filter: drop-shadow(0 1px 5px rgba(0, 0, 0, .2)); }
 .brand { display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
 .header-logo {
-  display: block; height: 27px; width: auto; max-width: 58vw;
+  display: block; height: 24px; width: auto; max-width: 56vw;
   filter: drop-shadow(0 1px 6px rgba(0, 0, 0, .18));
 }
 .app-subtitle {
@@ -200,6 +200,9 @@ a:hover { text-decoration: underline; }
 .participant-chip button:hover { color: var(--danger); }
 .screen { display: none; }
 .screen.active { display: block; animation: fade .22s ease; }
+
+/* 議事録の2カラム配置（PCのみ有効。スマホでは縦積み） */
+.minutes-col > .panel:last-child { margin-bottom: 16px; }
 @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 .panel {
@@ -573,3 +576,41 @@ select:focus, input:focus, textarea:focus {
 .term-dict .t-apply { color: var(--brand1); }
 .term-dict .t-del { color: var(--danger); }
 .term-dict-empty { color: var(--faint); font-size: 12.5px; }
+
+/* =========================================================
+ * デスクトップ（PC）表示: メニューを常時左に展開、議事録は2カラム
+ * =======================================================*/
+@media (min-width: 1024px) {
+  /* 本文をサイドバー分だけ右へ寄せる（サイドバーは fixed で左に固定） */
+  body { padding-left: var(--sidebar-w, 288px); }
+
+  /* ハンバーガー非表示・ドロワーは常時展開 */
+  .menu-toggle { display: none; }
+  .drawer-backdrop { display: none !important; }
+  .drawer {
+    width: var(--sidebar-w, 288px);
+    transform: none !important;
+    transition: none;
+    box-shadow: none;
+    border-right: 1px solid rgba(255, 255, 255, .18);
+  }
+  #drawer > * { opacity: 1 !important; transform: none !important; transition: background .16s ease, color .16s ease; }
+  /* PCでは下部ロゴを非表示 */
+  .drawer-foot { display: none !important; }
+
+  /* ヘッダー・本文はサイドバーの右側に */
+  .app-main { max-width: 1000px; }
+  .header-glow { left: var(--sidebar-w, 288px); }
+
+  /* 固定配置の要素（マイクボタン・案内）もコンテンツ領域の中央へ */
+  .mic-fab { left: calc(50% + var(--sidebar-w, 288px) / 2); }
+  .mic-fab:hover { transform: translateX(-50%) translateY(-2px); }
+  .mic-fab:active { transform: translateX(-50%) scale(.95); }
+  .idle-prompt, .rec-hint { left: var(--sidebar-w, 288px); right: 0; }
+
+  /* 議事録: 左＝録音音声＋議事録、右＝メール */
+  #screen-minutes.active { display: block; }
+  .minutes-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: 18px; align-items: start; }
+  .minutes-col > .panel:last-child { margin-bottom: 0; }
+  .minutes-col-right .panel { position: sticky; top: 74px; }
+}
