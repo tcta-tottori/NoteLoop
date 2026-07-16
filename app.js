@@ -95,6 +95,13 @@ const claudeOpen           = $('claudeOpen');
 const claudePromptPreview  = $('claudePromptPreview');
 const claudeInstruction    = $('claudeInstruction');
 const claudeInstructionReset = $('claudeInstructionReset');
+const aiAudioSend          = $('aiAudioSend');
+const aiAudioCopy          = $('aiAudioCopy');
+const aiAudioStatus        = $('aiAudioStatus');
+const aiAudioOpen          = $('aiAudioOpen');
+const aiAudioPreview       = $('aiAudioPreview');
+const geminiInstruction    = $('geminiInstruction');
+const geminiInstructionReset = $('geminiInstructionReset');
 
 const drawerVerMain  = $('drawerVerMain');
 const drawerVerSub   = $('drawerVerSub');
@@ -111,8 +118,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.3.1';
-const APP_UPDATED = '2026.7.16 18:30';
+const APP_VERSION = 'Ver.3.2';
+const APP_UPDATED = '2026.7.16 19:30';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -2042,6 +2049,124 @@ claudeInstructionReset.addEventListener('click', () => {
 });
 
 /* =========================================================
+ * A. 音声をAIに送る（Gemini等）— OS共有シートで音声＋指示を渡す
+ * =======================================================*/
+const GEMINI_URL = 'https://gemini.google.com/app';
+const GEMINI_INSTR_KEY = 'noteloop_gemini_instruction';
+const DEFAULT_GEMINI_INSTRUCTION =
+`添付した会議の音声を日本語で文字起こしし、正確で読みやすい「議事録」と、そのまま送れる「メール文面」を作成してください。
+
+【1. 議事録】次の見出しで、箇条書き中心にまとめてください。
+■日時 ／ ■場所 ／ ■参加者 ／ ■決定事項 ／ ■To-Do（担当・期限がわかれば併記） ／ ■要旨・議論の内容
+
+【2. メール文面】次の形式で作成してください。
+件名：【議事録】[会議名]
+本文：
+関係各位
+お疲れ様です。[氏名]です。
+[会議名]の議事録を共有致します。
+（上記の議事録を ■日時／■場所／■参加者／■決定事項／■To-Do／■要旨 の順で本文に展開）
+上記内容になります。よろしくお願い致します。
+
+【作成の指示】
+- 聞き取りにくい箇所や誤変換は文脈から自然に補正してください。
+- 重要な数値・固有名詞・日付・金額・型番は必ず保持してください。
+- 相槌・言い直し・雑談は省き簡潔に。決定事項とTo-Do（未確定の宿題）は明確に区別してください。
+- 判断できない箇所は「（要確認）」と明記してください。`;
+
+function loadGeminiInstruction() {
+  return localStorage.getItem(GEMINI_INSTR_KEY) || DEFAULT_GEMINI_INSTRUCTION;
+}
+
+/** 音声と一緒に渡す指示文（指示 ＋ 会議情報）。文字起こしは音声側が担うので付けない。 */
+function buildAudioPrompt() {
+  const m = currentMinutes();
+  const instr = (geminiInstruction.value || DEFAULT_GEMINI_INSTRUCTION).trim();
+  const partLine = (m.participants && m.participants.length) ? `\n参加者: ${participantsText(m.participants)}` : '';
+  return `${instr}
+
+【会議情報】
+会議名: ${m.name}
+日付: ${formatDateJp(m.date)}${partLine}`;
+}
+
+function setAiAudioStatus(kind, html) {
+  aiAudioStatus.hidden = false;
+  aiAudioStatus.className = 'claude-status' + (kind ? ' ' + kind : '');
+  aiAudioStatus.innerHTML = html;
+}
+
+/** 共有用のファイル名（会議名・日付から生成） */
+function audioShareName() {
+  const m = currentMinutes();
+  const safe = (m.name || '録音').replace(/[\\/:*?"<>|]/g, '_').slice(0, 40);
+  const ext = recordedBlob ? extFromMime(recordedBlob.type) : 'm4a';
+  return `${safe}_${m.date || todayStr()}.${ext}`;
+}
+
+// 音声をAIに送る（共有シート → Gemini等 / 非対応環境はDL＋Geminiを開く）
+aiAudioSend.addEventListener('click', async () => {
+  hideError();
+  if (!recordedBlob) {
+    setAiAudioStatus('warn', '⚠ 録音した音声がありません。「録音」画面で録音してから、この操作を行ってください。');
+    return;
+  }
+  const prompt = buildAudioPrompt();
+  aiAudioPreview.value = prompt;
+  const file = new File([recordedBlob], audioShareName(), { type: recordedBlob.type || 'audio/mp4' });
+
+  // 指示文は先にクリップボードへ（共有先が本文を受け取らない場合の保険）
+  const copied = await copyText(prompt);
+
+  // 1) OS共有シート（音声ファイル＋指示文）
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], text: prompt, title: '会議音声（議事録作成用）' });
+      setAiAudioStatus('ok', '✓ 共有しました。Gemini（や対応AIアプリ）を選び、指示文が入っていなければ<strong>貼り付け（コピー済み）→送信</strong>してください。');
+      return;
+    } catch (err) {
+      if (err && err.name === 'AbortError') { setAiAudioStatus('', '共有をキャンセルしました。'); return; }
+      // それ以外は下のフォールバックへ
+    }
+  }
+
+  // 2) フォールバック（PC等）：音声をダウンロード＋Geminiを新しいタブで開く
+  try {
+    const url = URL.createObjectURL(recordedBlob);
+    const a = document.createElement('a');
+    a.href = url; a.download = audioShareName();
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (_) {}
+  const win = window.open(GEMINI_URL, '_blank');
+  if (win) { try { win.opener = null; } catch (_) {} }
+  aiAudioOpen.hidden = false;
+  setAiAudioStatus(copied ? 'ok' : 'warn',
+    'この端末は音声の直接共有に非対応のため、<strong>音声ファイルをダウンロード</strong>し <strong>Gemini</strong> を開きました。Geminiで音声を添付し、' +
+    (copied ? '指示文を<strong>貼り付け（コピー済み）</strong>' : '下の「送る指示を確認」からコピーした指示文を貼り付け') +
+    '→送信してください。');
+});
+
+// 指示だけコピー
+aiAudioCopy.addEventListener('click', async () => {
+  hideError();
+  const prompt = buildAudioPrompt();
+  aiAudioPreview.value = prompt;
+  const copied = await copyText(prompt);
+  if (copied) setAiAudioStatus('ok', '✓ 指示文をコピーしました。Geminiに音声を添付し、貼り付けて送信してください。');
+  else setAiAudioStatus('warn', '⚠ 自動コピーできませんでした。「送る指示を確認」から手動でコピーしてください。');
+});
+
+// Gemini 指示テンプレートの保存・リセット
+geminiInstruction.addEventListener('input', () => {
+  localStorage.setItem(GEMINI_INSTR_KEY, geminiInstruction.value);
+});
+geminiInstructionReset.addEventListener('click', () => {
+  geminiInstruction.value = DEFAULT_GEMINI_INSTRUCTION;
+  localStorage.setItem(GEMINI_INSTR_KEY, DEFAULT_GEMINI_INSTRUCTION);
+});
+
+/* =========================================================
  * 設定・エラー・初期化
  * =======================================================*/
 const LIVE_KEY = 'noteloop_live_enabled';
@@ -2130,6 +2255,7 @@ setAudioAvailable(false);
 if (keepAwake) { const kw = localStorage.getItem(WAKE_KEY); if (kw === '0') keepAwake.checked = false; }
 liveModelField.style.display = liveEnabled.checked ? '' : 'none';
 claudeInstruction.value = loadInstruction();
+geminiInstruction.value = loadGeminiInstruction();
 // エンジンの復元 + Web Speech 非対応ブラウザの表示
 const savedEngine = localStorage.getItem(ENGINE_KEY);
 if (savedEngine === 'webspeech' || savedEngine === 'whisper') engineSelect.value = savedEngine;

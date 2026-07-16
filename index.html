@@ -159,9 +159,24 @@
         </button>
         <div id="meetingSummary" class="meeting-summary"></div>
 
-        <!-- Claude連携（議事録作成のメイン導線） -->
+        <!-- A. 音声をAIに送る（Gemini等）— 文字起こし不要・高精度 -->
+        <div class="ai-inline ai-audio">
+          <p class="claude-inline-desc"><strong>A. 音声をAIに送る（Gemini等・おすすめ）。</strong>録音した音声と指示を共有します。<strong>文字起こし不要</strong>で、Gemini が音声から直接、高精度な議事録＋メール文面を作成します（スマホでも高速）。</p>
+          <div class="claude-actions">
+            <button class="primary-btn" id="aiAudioSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 音声をAIに送る</button>
+            <button class="secondary-btn" id="aiAudioCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> 指示をコピー</button>
+          </div>
+          <div class="claude-status" id="aiAudioStatus" hidden></div>
+          <a class="claude-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
+          <details class="claude-preview">
+            <summary>送る指示を確認（編集は 設定→AI連携）</summary>
+            <textarea id="aiAudioPreview" class="minutes-area" rows="6" readonly placeholder="「音声をAIに送る」を押すと、共有する指示文がここに表示されます。"></textarea>
+          </details>
+        </div>
+
+        <!-- B. 文字起こしをClaudeに送る（テキスト経路） -->
         <div class="claude-inline">
-          <p class="claude-inline-desc"><strong>① Claudeで議事録を作成。</strong>会議情報＋文字起こしをまとめてコピーし、Claudeを開きます。あとは貼り付け（⌘/Ctrl+V）→送信するだけで、高精度な議事録が得られます。</p>
+          <p class="claude-inline-desc"><strong>B. 文字起こしをClaudeに送る。</strong>端末内で文字起こし済みのテキストを、会議情報とまとめてコピーし Claude を開きます。貼り付け（⌘/Ctrl+V）→送信するだけ。</p>
           <div class="claude-actions">
             <button class="primary-btn" id="claudeSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピーしてClaudeを開く</button>
             <button class="secondary-btn" id="claudeCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー</button>
@@ -174,7 +189,7 @@
           </details>
         </div>
 
-        <p class="field-hint" style="margin-top:14px;">② 下の欄は<strong>任意</strong>です。Claudeが作った議事録を貼り付ける、または手入力すると、下部のメール作成や書き出し（.txt / .md / Word）にそのまま使えます。</p>
+        <p class="field-hint" style="margin-top:14px;">下の欄は<strong>任意</strong>です。AIが作った議事録を貼り付ける、または手入力すると、下部のメール作成や書き出し（.txt / .md / Word）にそのまま使えます。</p>
         <div class="minutes-section">
           <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
           <textarea id="secSummary" class="minutes-area" rows="4" placeholder="Claudeの議事録を貼り付け、または手入力（メール・書き出しに使われます）。"></textarea>
@@ -340,9 +355,15 @@
       </div>
 
       <div class="panel">
-        <h3 class="settings-group-title">Claude連携</h3>
+        <h3 class="settings-group-title">AI連携</h3>
         <div class="field settings-field">
-          <label for="claudeInstruction">議事録の指示（プロンプトの先頭に入ります・編集可）</label>
+          <label for="geminiInstruction">A. 音声をAIに送る指示（Gemini等・編集可）</label>
+          <textarea id="geminiInstruction" class="minutes-area" rows="8"></textarea>
+          <p class="field-hint">録音音声と一緒に共有される指示文です。音声から議事録＋メール文面（件名/本文）まで作らせます。このあとに会議名・日付・参加者が自動で付きます。</p>
+          <button class="chip-btn" id="geminiInstructionReset" type="button" style="margin-top:8px;">既定に戻す</button>
+        </div>
+        <div class="field settings-field">
+          <label for="claudeInstruction">B. 文字起こしをClaudeに送る指示（編集可）</label>
           <textarea id="claudeInstruction" class="minutes-area" rows="8"></textarea>
           <p class="field-hint">この指示文のあとに「会議名・日付・文字起こし」が自動で付きます。用途に合わせて自由に調整できます。</p>
           <button class="chip-btn" id="claudeInstructionReset" type="button" style="margin-top:8px;">既定に戻す</button>
