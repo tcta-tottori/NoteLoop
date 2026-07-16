@@ -98,6 +98,15 @@ const aiAudioOpen          = $('aiAudioOpen');
 const aiAudioPreview       = $('aiAudioPreview');
 const geminiInstruction    = $('geminiInstruction');
 const geminiInstructionReset = $('geminiInstructionReset');
+const geminiApiKey         = $('geminiApiKey');
+const geminiModel          = $('geminiModel');
+const geminiKeyStatus      = $('geminiKeyStatus');
+const aiAutoBtn            = $('aiAutoBtn');
+const aiAutoStatus         = $('aiAutoStatus');
+const aiResultWrap         = $('aiResultWrap');
+const aiResult             = $('aiResult');
+const aiResultCopy         = $('aiResultCopy');
+const aiResultToMail       = $('aiResultToMail');
 
 const drawerVerMain  = $('drawerVerMain');
 const drawerVerSub   = $('drawerVerSub');
@@ -113,7 +122,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.4.2';
+const APP_VERSION = 'Ver.4.3';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -2123,6 +2132,190 @@ geminiInstructionReset.addEventListener('click', () => {
   geminiInstruction.value = DEFAULT_GEMINI_INSTRUCTION;
   localStorage.setItem(GEMINI_INSTR_KEY, DEFAULT_GEMINI_INSTRUCTION);
 });
+
+/* =========================================================
+ * Gemini API 自動議事録生成（BYOK: 自分のAPIキーでブラウザから直接呼ぶ）
+ *   録音音声 → Gemini（音声理解）→ 議事録＋メール文面 を一発生成。
+ *   キーは端末内（localStorage）にのみ保存する。
+ * =======================================================*/
+const GEMINI_KEY_KEY = 'noteloop_gemini_apikey';
+const GEMINI_MODEL_KEY = 'noteloop_gemini_model';
+const GENAI_BASE = 'https://generativelanguage.googleapis.com';
+const GEMINI_INLINE_LIMIT = 18 * 1024 * 1024; // これ以下は inline、超えたら Files API
+
+function loadGeminiKey() { return (localStorage.getItem(GEMINI_KEY_KEY) || '').trim(); }
+function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || 'gemini-2.5-flash'; }
+
+function setAiAutoStatus(kind, html) {
+  if (!aiAutoStatus) return;
+  aiAutoStatus.hidden = false;
+  aiAutoStatus.className = 'claude-status' + (kind ? ' ' + kind : '');
+  aiAutoStatus.innerHTML = html;
+}
+
+function blobToBase64(blob) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1] || '');
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+/** 録音 Blob を 16kHz モノラル WAV（Gemini 対応形式）へ変換 */
+async function toWav16kMono(blob) {
+  const f32 = await decodeTo16kMono(blob); // Float32 @16kHz mono
+  const frames = f32.length, dataSize = frames * 2;
+  const arr = new ArrayBuffer(44 + dataSize), view = new DataView(arr);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 16000, true); view.setUint32(28, 16000 * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ws(36, 'data'); view.setUint32(40, dataSize, true);
+  let o = 44;
+  for (let i = 0; i < frames; i++) { const s = Math.max(-1, Math.min(1, f32[i])); view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2; }
+  return new Blob([view], { type: 'audio/wav' });
+}
+
+/** Files API（大きい音声）へレジューム可能アップロードして fileUri を得る */
+async function geminiUploadFile(blob, key) {
+  const size = blob.size, mime = blob.type || 'audio/wav';
+  const startRes = await fetch(`${GENAI_BASE}/upload/v1beta/files?key=${encodeURIComponent(key)}`, {
+    method: 'POST',
+    headers: {
+      'X-Goog-Upload-Protocol': 'resumable',
+      'X-Goog-Upload-Command': 'start',
+      'X-Goog-Upload-Header-Content-Length': String(size),
+      'X-Goog-Upload-Header-Content-Type': mime,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ file: { display_name: 'meeting-audio' } }),
+  });
+  if (!startRes.ok) throw new Error('音声アップロードの開始に失敗しました（' + startRes.status + '）');
+  const uploadUrl = startRes.headers.get('X-Goog-Upload-URL');
+  if (!uploadUrl) throw new Error('アップロードURLを取得できませんでした（ブラウザ制限の可能性）');
+  const upRes = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'X-Goog-Upload-Command': 'upload, finalize', 'X-Goog-Upload-Offset': '0' },
+    body: blob,
+  });
+  if (!upRes.ok) throw new Error('音声アップロードに失敗しました（' + upRes.status + '）');
+  const info = await upRes.json();
+  let file = info.file;
+  for (let i = 0; i < 30 && file && file.state === 'PROCESSING'; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const st = await fetch(`${GENAI_BASE}/v1beta/${file.name}?key=${encodeURIComponent(key)}`);
+      file = await st.json();
+    } catch (_) { break; }
+  }
+  if (!file || file.state === 'FAILED') throw new Error('アップロードした音声の処理に失敗しました');
+  return { uri: file.uri, mime };
+}
+
+/** 録音音声を Gemini に送り、議事録＋メール文面テキストを返す */
+async function geminiGenerateMinutes(onStage) {
+  const key = loadGeminiKey();
+  if (!key) { const e = new Error('APIキー未設定'); e.noKey = true; throw e; }
+  if (!recordedBlob) throw new Error('録音音声がありません。「録音モード」（設定でライブ字幕をOFF）で録音してからお試しください。');
+  const model = loadGeminiModel();
+  const prompt = buildAudioPrompt();
+
+  onStage && onStage('音声を準備中…');
+  const wav = await toWav16kMono(recordedBlob); // 形式問題を避けるため WAV 16kHz mono に統一
+
+  let audioPart;
+  if (wav.size <= GEMINI_INLINE_LIMIT) {
+    const b64 = await blobToBase64(wav);
+    audioPart = { inlineData: { mimeType: 'audio/wav', data: b64 } };
+  } else {
+    onStage && onStage('音声をアップロード中…（長い録音は時間がかかります）');
+    const up = await geminiUploadFile(wav, key);
+    audioPart = { fileData: { mimeType: up.mime, fileUri: up.uri } };
+  }
+
+  onStage && onStage('Geminiが議事録を作成中…');
+  const body = { contents: [{ parts: [{ text: prompt }, audioPart] }] };
+  const res = await fetch(`${GENAI_BASE}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let msg = String(res.status);
+    try { const e = await res.json(); msg = (e.error && e.error.message) || msg; } catch (_) {}
+    if (res.status === 400 && /API key|API_KEY/i.test(msg)) throw new Error('APIキーが無効です。設定→AI連携 のキーを確認してください。');
+    if (res.status === 429) throw new Error('利用上限に達しました（無料枠の1分/1日の上限など）。少し待つか、モデルを見直してください。');
+    throw new Error('Gemini APIエラー: ' + msg);
+  }
+  const data = await res.json();
+  const cand = (data.candidates || [])[0] || {};
+  const parts = (cand.content && cand.content.parts) || [];
+  const text = parts.map((p) => p.text || '').join('').trim();
+  if (!text) throw new Error('生成結果が空でした（安全性ブロックや指示文が原因の場合があります）。');
+  return text;
+}
+
+// 「AIで議事録を作成（自動）」
+if (aiAutoBtn) aiAutoBtn.addEventListener('click', async () => {
+  hideError();
+  if (!loadGeminiKey()) {
+    setAiAutoStatus('warn', '⚠ Gemini APIキーが未設定です。<strong>設定 → AI連携</strong> でキーを入力してください（<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">無料で取得</a>）。または下の「手動でGeminiに渡す」をご利用ください。');
+    return;
+  }
+  if (!recordedBlob) {
+    setAiAutoStatus('warn', '⚠ 録音音声がありません。設定で<strong>ライブ字幕モードをOFF（録音モード）</strong>にして録音してからお試しください。');
+    return;
+  }
+  aiAutoBtn.disabled = true;
+  const orig = aiAutoBtn.innerHTML;
+  aiAutoBtn.textContent = 'AIが作成中…';
+  try {
+    const text = await geminiGenerateMinutes((s) => setAiAutoStatus('', s));
+    aiResult.value = text;
+    aiResultWrap.hidden = false;
+    ensureAutoTitle();
+    if (mailBody && !mailBody.value.trim()) mailBody.value = text;
+    setAiAutoStatus('ok', '✓ 議事録＋メール文面を生成しました。下で編集・コピーできます（メール本文にも反映済み）。');
+  } catch (err) {
+    if (err && err.noKey) setAiAutoStatus('warn', '⚠ APIキーが未設定です。設定→AI連携で入力してください。');
+    else setAiAutoStatus('warn', '⚠ ' + (err && err.message ? err.message : err));
+  } finally {
+    aiAutoBtn.disabled = false;
+    aiAutoBtn.innerHTML = orig;
+  }
+});
+if (aiResultCopy) aiResultCopy.addEventListener('click', async () => {
+  const ok = await copyText(aiResult.value);
+  setAiAutoStatus(ok ? 'ok' : 'warn', ok ? '✓ コピーしました。' : '⚠ コピーできませんでした。');
+});
+if (aiResultToMail) aiResultToMail.addEventListener('click', () => {
+  if (mailBody) { mailBody.value = aiResult.value; setAiAutoStatus('ok', '✓ メール本文に反映しました。下部「メールを作成」から送信できます。'); }
+});
+
+// Gemini APIキー / モデルの保存・状態表示
+function updateGeminiKeyStatus() {
+  if (!geminiKeyStatus) return;
+  const k = loadGeminiKey();
+  if (!k) { geminiKeyStatus.hidden = true; return; }
+  geminiKeyStatus.hidden = false;
+  if (!/^AIza[\w-]{10,}$/.test(k)) {
+    geminiKeyStatus.className = 'field-hint warn';
+    geminiKeyStatus.textContent = '⚠ キーの形式が想定と異なります（通常 AIza… で始まります）。';
+  } else {
+    geminiKeyStatus.className = 'field-hint';
+    geminiKeyStatus.textContent = '✓ キーを保存しました（この端末内のみ）。「議事録」画面の「AIで議事録を作成（自動）」が使えます。';
+  }
+}
+if (geminiApiKey) {
+  geminiApiKey.value = loadGeminiKey();
+  geminiApiKey.addEventListener('input', () => { localStorage.setItem(GEMINI_KEY_KEY, geminiApiKey.value.trim()); updateGeminiKeyStatus(); });
+}
+if (geminiModel) {
+  geminiModel.value = loadGeminiModel();
+  geminiModel.addEventListener('change', () => localStorage.setItem(GEMINI_MODEL_KEY, geminiModel.value));
+}
+updateGeminiKeyStatus();
 
 /* =========================================================
  * 設定・エラー・初期化

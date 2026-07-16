@@ -154,18 +154,29 @@
         </button>
         <div id="meetingSummary" class="meeting-summary"></div>
 
-        <!-- A. 音声をAIに送る（Gemini等）— 文字起こし不要・高精度 -->
+        <!-- A. 音声をAIに送る（Gemini）— 文字起こし不要・高精度 -->
         <div class="ai-inline ai-audio">
-          <p class="route-title">音声をAIに送る <span class="route-badge">Gemini・おすすめ</span></p>
-          <div class="claude-actions">
-            <button class="primary-btn" id="aiAudioSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 音声をAIに送る</button>
-            <button class="secondary-btn" id="aiAudioCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> 指示をコピー</button>
+          <p class="route-title">録音音声から議事録を作成 <span class="route-badge">Gemini・おすすめ</span></p>
+          <button class="primary-btn ai-auto-btn" id="aiAutoBtn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/><path d="M19 3v4M21 5h-4"/></svg> AIで議事録を作成（自動）</button>
+          <div class="claude-status" id="aiAutoStatus" hidden></div>
+          <div class="ai-result-wrap" id="aiResultWrap" hidden>
+            <label class="mini-label" for="aiResult"><span class="tag tag-sum">AI議事録＋メール（編集可）</span></label>
+            <textarea id="aiResult" class="minutes-area" rows="12" placeholder="生成された議事録とメール文面がここに表示されます。"></textarea>
+            <div class="claude-actions" style="margin-top:8px;">
+              <button class="secondary-btn" id="aiResultCopy" type="button">コピー</button>
+              <button class="secondary-btn" id="aiResultToMail" type="button">メール本文に使う</button>
+            </div>
           </div>
-          <div class="claude-status" id="aiAudioStatus" hidden></div>
-          <a class="claude-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
-          <details class="claude-preview">
-            <summary>送る指示を確認</summary>
-            <textarea id="aiAudioPreview" class="minutes-area" rows="6" readonly placeholder="「音声をAIに送る」を押すと、共有する指示文がここに表示されます。"></textarea>
+          <details class="claude-preview" style="margin-top:12px;">
+            <summary>APIキーを使わず手動でGeminiに渡す</summary>
+            <p class="field-hint" style="margin:8px 0;">録音音声をダウンロード＆共有し、指示文を貼り付けてGeminiに渡します（APIキー不要）。</p>
+            <div class="claude-actions">
+              <button class="secondary-btn" id="aiAudioSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 音声を共有</button>
+              <button class="secondary-btn" id="aiAudioCopy" type="button">指示をコピー</button>
+            </div>
+            <div class="claude-status" id="aiAudioStatus" hidden></div>
+            <a class="claude-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
+            <textarea id="aiAudioPreview" class="minutes-area" rows="4" readonly placeholder="「指示をコピー」で共有する指示文がここに表示されます。"></textarea>
           </details>
         </div>
 
@@ -344,6 +355,20 @@
 
       <div class="panel">
         <h3 class="settings-group-title">AI連携</h3>
+        <div class="field settings-field">
+          <label for="geminiApiKey">Gemini API キー（自動生成に使用・任意）</label>
+          <input id="geminiApiKey" type="password" autocomplete="off" placeholder="AIza… で始まるキーを貼り付け" />
+          <p class="field-hint">これを設定すると、議事録画面の <strong>「AIで議事録を作成（自動）」</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
+          <div class="settings-field" style="margin-top:8px;">
+            <label for="geminiModel" style="font-size:12px;color:var(--muted);">モデル</label>
+            <select id="geminiModel">
+              <option value="gemini-2.5-flash" selected>gemini-2.5-flash（推奨・無料枠）</option>
+              <option value="gemini-2.5-pro">gemini-2.5-pro（高精度・要課金）</option>
+              <option value="gemini-flash-latest">gemini-flash-latest（最新Flash）</option>
+            </select>
+          </div>
+          <p class="field-hint warn" id="geminiKeyStatus" hidden></p>
+        </div>
         <div class="field settings-field">
           <label for="geminiInstruction">A. 音声をAIに送る指示（Gemini等・編集可）</label>
           <textarea id="geminiInstruction" class="minutes-area" rows="8"></textarea>
