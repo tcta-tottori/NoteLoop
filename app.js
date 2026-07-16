@@ -113,7 +113,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.4.0';
+const APP_VERSION = 'Ver.4.1';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -461,15 +461,38 @@ async function startRecording() {
   if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
   acquireWakeLock(); // 設定がONなら画面を常時オンに（ユーザー操作の直後に要求）
 
-  // 役割分離:
-  //  ・ライブ表示（録音中） = Web Speech（ストリーミング認識。対応時のみ）
-  //  ・確定（停止後）      = 音声→Gemini（既定 'none'）／ 任意で Whisper
   confirmMode = (engineSelect.value === 'whisper') ? 'whisper' : 'none';
   const speechAvailable = !!getSR();
   liveMode = (liveEnabled.checked && speechAvailable) ? 'webspeech' : 'off';
   activeEngine = (liveMode === 'webspeech') ? 'webspeech' : 'whisper'; // 互換（onSpeechEnd 等）
 
-  // マイク取得（録音用）。Web Speech は内部で独自にマイクを使うため並行動作する。
+  recordedBlobs = [];
+  recordedBlob = null;
+
+  // === ライブ字幕モード（Web Speech）===
+  // Android では getUserMedia（録音）と Web Speech が同時にマイクを使えず、
+  // 録音を並行させると認識が音を拾えない（「認識中」のまま無反応）。
+  // 確実にライブ表示するため、このモードではマイクを Web Speech に専有させ、
+  // 音声録音は行わない（確定は「ライブ文字 → Claude」）。
+  if (liveMode === 'webspeech') {
+    const ok = startWebSpeech();
+    if (ok) {
+      recording = true;
+      setAudioAvailable(false);
+      sttActivity = 0.4;
+      setStatus('working', '認識中…（ライブ字幕）');
+      updateHomeUI();
+      startTime = Date.now();
+      updateTimer();
+      timerInterval = setInterval(updateTimer, 250);
+      return;
+    }
+    // 認識を開始できない → 録音モードにフォールバック
+    liveMode = 'off';
+    activeEngine = 'whisper';
+  }
+
+  // === 録音モード（音声保存 → 停止後に 音声→Gemini / Whisper）===
   try {
     mediaStream = await getMicStream();
   } catch (err) {
@@ -486,11 +509,7 @@ async function startRecording() {
   // 確定に Whisper を使う場合のバックエンドを確定
   activeDevice = await resolveDevice(backendSelect ? backendSelect.value : 'auto');
 
-  recordedBlobs = [];
-  recordedBlob = null;
-
   // Web Audio: ネイティブレートのまま録音（保存音声の品質を維持）。
-  // 合流点 recDest から録音するため、録音中でもマイクを差し替えられる。
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
   analyser = audioCtx.createAnalyser();
@@ -512,15 +531,8 @@ async function startRecording() {
   recording = true;
   pendingChunks = [];
   setAudioAvailable(false);
-
-  // ライブ表示: Web Speech を開始（マイク取得の後に開始するのが安定）
-  if (liveMode === 'webspeech') {
-    const ok = startWebSpeech();
-    if (!ok) liveMode = 'off'; // 開始できなくても録音は継続
-  }
-
-  sttActivity = 0.4;
-  setStatus('working', liveMode === 'webspeech' ? '認識中…（ライブ）' : '録音中');
+  sttActivity = 0.2;
+  setStatus('working', '録音中');
   updateHomeUI();
   startTime = Date.now();
   updateTimer();
@@ -2125,11 +2137,12 @@ function applyLiveUI() {
   if (!getSR()) {
     liveEnabled.checked = false;
     liveEnabled.disabled = true;
-    liveHint.textContent = 'この端末／ブラウザはリアルタイム表示（Web Speech）に非対応です。録音後に「音声をAIに送る」か、下の「停止後の文字起こし」で作成してください。';
+    liveHint.innerHTML = 'この端末／ブラウザはリアルタイム字幕（Web Speech）に非対応です。<strong>録音モード</strong>で動作します（停止後に「音声をAIに送る」で議事録化）。';
   } else if (liveEnabled.checked) {
-    liveHint.textContent = '録音中にリアルタイムで文字が表示されます（音声はGoogleへ送信）。停止後は「音声をAIに送る」で高精度な議事録にできます。';
+    liveHint.innerHTML = '<strong>ON = ライブ字幕モード。</strong>録音中にリアルタイムで文字が出ます（音声はGoogleへ送信）。' +
+      '<br>※スマホでは、字幕表示中は<strong>録音音声は保存されません</strong>（マイクを字幕認識が使うため）。議事録は停止後に<strong>「Claudeに送る」</strong>で作成します。';
   } else {
-    liveHint.textContent = 'ライブ表示はOFFです。録音のみ行い、停止後に「音声をAIに送る」または下の設定で文字起こしします。';
+    liveHint.innerHTML = '<strong>OFF = 録音モード。</strong>字幕は出ませんが<strong>音声を保存</strong>します。停止後に<strong>「音声をAIに送る（Gemini）」</strong>で高精度な議事録＋メールを作成（推奨）。';
   }
 }
 
