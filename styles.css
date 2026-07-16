@@ -330,6 +330,11 @@ select:focus, input:focus, textarea:focus {
 .claude-badge svg { width: 22px; height: 22px; }
 .claude-title { margin: 0 0 3px; font-size: 15px; font-weight: 800; }
 .claude-desc { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+/* 議事録カード内に置くClaude連携（下部） */
+.claude-inline { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border-strong); }
+.claude-inline-desc { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+.claude-inline-desc strong { color: var(--text); font-weight: 700; }
+
 /* Claudeを開く（大）とコピー（小）を1行で配置 */
 .claude-actions { display: flex; gap: 10px; flex-wrap: nowrap; margin-bottom: 8px; }
 .claude-actions #claudeSend { flex: 2 1 0; min-width: 0; justify-content: center; white-space: nowrap; }
@@ -598,8 +603,8 @@ select:focus, input:focus, textarea:focus {
   /* PCでは下部ロゴを非表示 */
   .drawer-foot { display: none !important; }
 
-  /* ヘッダー・本文はサイドバーの右側に */
-  .app-main { max-width: 1000px; }
+  /* ヘッダー・本文はサイドバーの右側に。議事録を画面いっぱいに使う */
+  .app-main { max-width: none; padding-left: clamp(20px, 2.2vw, 40px); padding-right: clamp(20px, 2.2vw, 40px); }
   .header-glow { left: var(--sidebar-w, 288px); }
 
   /* 固定配置の要素（マイクボタン・案内）もコンテンツ領域の中央へ */
@@ -608,9 +613,8 @@ select:focus, input:focus, textarea:focus {
   .mic-fab:active { transform: translateX(-50%) scale(.95); }
   .idle-prompt, .rec-hint { left: var(--sidebar-w, 288px); right: 0; }
 
-  /* 議事録: 左＝録音音声＋議事録、右＝メール */
+  /* 議事録: 左＝録音音声＋議事録(Claude含む)、右＝書き出し＋メール */
   #screen-minutes.active { display: block; }
-  .minutes-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: 18px; align-items: start; }
+  .minutes-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 20px; align-items: start; }
   .minutes-col > .panel:last-child { margin-bottom: 0; }
-  .minutes-col-right .panel { position: sticky; top: 74px; }
 }

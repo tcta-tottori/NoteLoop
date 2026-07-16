@@ -163,29 +163,26 @@
           <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
           <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題がここに入ります。"></textarea>
         </div>
-      </div>
 
-      <!-- Claude連携: 1クリックでプロンプトをコピーしてClaudeを開く -->
-      <div class="panel claude-card">
-        <div class="claude-head">
-          <span class="claude-badge" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V5"/><circle cx="12" cy="3.5" r="1.2"/><path d="M2 13v2M22 13v2"/><circle cx="9" cy="14" r="1.1"/><circle cx="15" cy="14" r="1.1"/></svg></span>
-          <div>
-            <h3 class="claude-title">Claudeで高精度な議事録に</h3>
+        <!-- Claude連携（議事録カード内・下部） -->
+        <div class="claude-inline">
+          <p class="claude-inline-desc"><strong>Claudeでさらに高精度な議事録に。</strong>会議情報＋文字起こしをまとめてコピーし、Claudeを開きます。あとは貼り付け（⌘/Ctrl+V）→送信するだけ。</p>
+          <div class="claude-actions">
+            <button class="primary-btn" id="claudeSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピーしてClaudeを開く</button>
+            <button class="secondary-btn" id="claudeCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー</button>
           </div>
+          <div class="claude-status" id="claudeStatus" hidden></div>
+          <a class="claude-open-link" id="claudeOpen" href="https://claude.ai/new" target="_blank" rel="noopener" hidden>→ Claudeを開く</a>
+          <details class="claude-preview">
+            <summary>送信するプロンプトを確認 / 手動でコピー</summary>
+            <textarea id="claudePromptPreview" class="minutes-area" rows="6" readonly placeholder="「コピーしてClaudeを開く」を押すと、ここに内容が表示されます。"></textarea>
+          </details>
         </div>
-        <div class="claude-actions">
-          <button class="primary-btn" id="claudeSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピーしてClaudeを開く</button>
-          <button class="secondary-btn" id="claudeCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー</button>
-        </div>
-        <div class="claude-status" id="claudeStatus" hidden></div>
-        <a class="claude-open-link" id="claudeOpen" href="https://claude.ai/new" target="_blank" rel="noopener" hidden>→ Claudeを開く</a>
-        <details class="claude-preview">
-          <summary>送信するプロンプトを確認 / 手動でコピー</summary>
-          <textarea id="claudePromptPreview" class="minutes-area" rows="8" readonly placeholder="「コピーしてClaudeを開く」を押すと、ここに内容が表示されます。"></textarea>
-        </details>
-        <p class="claude-note">※ Claudeはチャット上で音声(m4a)を直接処理できないため、この機能は<strong>文字起こしテキスト</strong>を渡します。音声は上の「録音した音声」から保存できます。</p>
       </div>
 
+      </div><!-- /minutes-col-left -->
+      <div class="minutes-col minutes-col-right">
+      <!-- 書き出し（右カラム上部） -->
       <div class="panel">
         <span class="export-heading">書き出し</span>
         <div class="export-row">
@@ -204,8 +201,6 @@
         </div>
       </div>
 
-      </div><!-- /minutes-col-left -->
-      <div class="minutes-col minutes-col-right">
       <!-- メール（作成・送信）— 議事録画面に集約 -->
       <div class="panel" id="mailPanel">
         <div class="section-head">
