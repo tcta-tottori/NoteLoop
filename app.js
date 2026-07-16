@@ -41,7 +41,10 @@ const LANGUAGE       = 'japanese';   // 日本語固定
 const engineSelect   = $('engineSelect');
 const engineHint     = $('engineHint');
 const whisperSettings= $('whisperSettings');
+const backendSelect  = $('backendSelect');
+const backendHint    = $('backendHint');
 const accuracyModel  = $('accuracyModel');
+const modelWarn      = $('modelWarn');
 const liveEnabled    = $('liveEnabled');
 const liveModel      = $('liveModel');
 const liveModelField = $('liveModelField');
@@ -63,8 +66,6 @@ const micPermNoteSettings = $('micPermNoteSettings');
 
 const meetingName    = $('meetingName');
 const meetingDate    = $('meetingDate');
-const generateBtn    = $('generateBtn');
-const regenerateBtn  = $('regenerateBtn');
 const secSummary     = $('secSummary');
 const secDecisions   = $('secDecisions');
 const secTodos       = $('secTodos');
@@ -109,8 +110,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.2.3';
-const APP_UPDATED = '2026.7.16 14:00';
+const APP_VERSION = 'Ver.3.0';
+const APP_UPDATED = '2026.7.16 16:00';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -144,6 +145,23 @@ let reqId = 0;
 
 // エンジン / Web Speech API
 let activeEngine = 'whisper';   // 録音開始時に確定
+let activeDevice = 'wasm';      // Whisper の実行バックエンド（webgpu / wasm）— 録音開始時に確定
+
+/**
+ * WebGPU が実際に使えるか判定する。
+ * pref: 'auto'（対応なら webgpu）/ 'webgpu'（強制・不可なら wasm）/ 'wasm'（強制）
+ * 戻り値は 'webgpu' か 'wasm'。実際の初期化失敗時は worker 側でも wasm へ自動フォールバックする。
+ */
+async function resolveDevice(pref) {
+  if (pref === 'wasm') return 'wasm';
+  if (!('gpu' in navigator) || !navigator.gpu) return 'wasm';
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    return adapter ? 'webgpu' : 'wasm';
+  } catch (_) {
+    return 'wasm';
+  }
+}
 let recognition = null;
 let sttBase = '';       // 録音開始時点の既存テキスト
 let sttSegs = [];       // 確定済みセグメント（過去の認識インスタンス分）
@@ -268,9 +286,16 @@ worker.onmessage = (e) => {
       if (msg.data && typeof msg.data.progress === 'number') { lastDlProgress = performance.now(); setModelLoading(msg.data.progress); }
       break;
     case 'ready':
-      setStatus('ready', 'モデル準備完了');
+      if (msg.device) activeDevice = msg.device;
+      setStatus('ready', 'モデル準備完了' + (msg.device === 'webgpu' ? '（WebGPU）' : ''));
+      break;
+    case 'fallback':
+      // WebGPU 初期化に失敗 → WASM(CPU) へ自動フォールバック
+      activeDevice = 'wasm';
+      showError('WebGPU を初期化できなかったため、CPU（WASM）処理に切り替えました。設定でバックエンドを「WASM固定」にすると次回から高速に開始できます。');
       break;
     case 'result':
+      if (msg.device) activeDevice = msg.device;
       if (msg.mode === 'final') {
         // 高精度パスの結果で置き換え（反復除去＋句点で改行）
         if (msg.text) liveTranscript.value = formatTranscript(cleanupTranscript(msg.text));
@@ -429,8 +454,11 @@ async function startRecording() {
     return;
   }
 
+  // Whisper の実行バックエンドを確定（自動判定 or 設定の固定値）
+  activeDevice = await resolveDevice(backendSelect ? backendSelect.value : 'auto');
+
   const useLive = liveEnabled.checked;
-  if (useLive) worker.postMessage({ type: 'load', model: liveModel.value });
+  if (useLive) worker.postMessage({ type: 'load', model: liveModel.value, device: activeDevice });
 
   recordedBlobs = [];
   recordedBlob = null;
@@ -758,9 +786,17 @@ async function runFinalPass(blob) {
     const audio = await decodeTo16kMono(blob);
     const level = rms(audio); // 音量チェック（無音だと誤認識・反復が起きやすい）
 
-    // 所要時間を推定（音声長 × モデル係数）してETA表示に使う
+    // 所要時間を推定（音声長 × モデル係数 ÷ バックエンド係数）してETA表示に使う
     const durationSec = audio.length / SAMPLE_RATE;
-    const factor = { 'Xenova/whisper-base': 2, 'Xenova/whisper-small': 4, 'Xenova/whisper-medium': 8 }[accuracyModel.value] || 4;
+    const modelFactor = {
+      'onnx-community/whisper-tiny': 1,
+      'onnx-community/whisper-base': 2,
+      'onnx-community/whisper-small': 4,
+      'onnx-community/whisper-large-v3-turbo': 9,
+    }[accuracyModel.value] || 4;
+    // WebGPU はおおむね数倍速い
+    const speedup = activeDevice === 'webgpu' ? 5 : 1;
+    const factor = modelFactor / speedup;
     const estTotal = Math.max(5, durationSec * factor);
     const procStart = Date.now();
     progressWrap.hidden = false;
@@ -780,7 +816,7 @@ async function runFinalPass(blob) {
       finalResolve = resolve;
       worker.postMessage(
         { type: 'transcribe', id: ++reqId, mode: 'final', longform: true,
-          audio, model: accuracyModel.value, language: LANGUAGE },
+          audio, model: accuracyModel.value, language: LANGUAGE, device: activeDevice },
         [audio.buffer]
       );
     });
@@ -918,7 +954,7 @@ function maybeSendChunk(force) {
   workerBusy = true;
   if (recording) setStatus('working', '文字起こし中…（暫定）');
   worker.postMessage(
-    { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: liveModel.value, language: LANGUAGE },
+    { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: liveModel.value, language: LANGUAGE, device: activeDevice },
     [audio.buffer]
   );
 }
@@ -1070,45 +1106,16 @@ function drawWaveFrame() {
 window.addEventListener('resize', () => { if (waveActive) resizeWave(); });
 
 /* =========================================================
- * 議事録化（簡易ロジック / スタブ）
- *   本番ではこの generateMinutes をサーバの Claude 呼び出しに差し替える。
+ * 議事録の下書き欄（要点 / 決定事項 / ToDo）
+ *   アプリ内のルールベース整形は廃止。議事録は Claude で生成し、
+ *   この欄には手入力または Claude の出力を貼り付けて使う（メール・書き出しの入力元）。
  * =======================================================*/
-function generateMinutes(transcript) {
-  const text = (transcript || '').replace(/\s+/g, ' ').trim();
-  if (!text) return { summary: [], decisions: [], todos: [] };
-  const sentences = text.split(/(?<=[。．！？!?])\s*/).map((s) => s.trim()).filter(Boolean);
-
-  const decisionKw = ['決定', '決めた', '決めま', '決まり', '合意', '承認', '方針', 'することにし', '確定', '採用'];
-  const todoKw = ['ToDo', 'タスク', '対応し', '確認し', '準備', '実施', '送付', '送りま', '連絡', '作成', '提出',
-                  'までに', '期限', 'お願いし', 'してくださ', '担当', '進めま', '検討し', 'フォロー', '共有し'];
-
-  const decisions = [], todos = [], rest = [];
-  for (const s of sentences) {
-    if (decisionKw.some((k) => s.includes(k))) decisions.push(s);
-    else if (todoKw.some((k) => s.includes(k))) todos.push(s);
-    else rest.push(s);
-  }
-  let summary = rest.slice(0, 5);
-  if (summary.length === 0) summary = sentences.slice(0, 3);
-  return { summary: dedupe(summary), decisions: dedupe(decisions), todos: dedupe(todos) };
-}
-function dedupe(arr) {
-  const seen = new Set();
-  return arr.filter((x) => { const k = x.trim(); if (seen.has(k)) return false; seen.add(k); return true; });
-}
 function toBullets(arr) { return arr.map((x) => '・' + x).join('\n'); }
 function fromBullets(str) { return (str || '').split('\n').map((l) => l.replace(/^[・\-*•]\s*/, '').trim()).filter(Boolean); }
 function fillMinutesUI(m) {
   secSummary.value = toBullets(m.summary);
   secDecisions.value = toBullets(m.decisions);
   secTodos.value = toBullets(m.todos);
-}
-function runGenerate() {
-  const src = liveTranscript.value.trim();
-  if (!src) { showError('文字起こしが空です。先に録音するか、テキストを入力してください。'); showScreen('screen-home', '録音・文字起こし'); return; }
-  hideError();
-  ensureAutoTitle();  // タイトル未設定なら文字起こしから自動生成
-  fillMinutesUI(generateMinutes(src));
 }
 
 /** 文字起こしの内容から短い会議タイトルを作る */
@@ -1126,8 +1133,6 @@ function ensureAutoTitle() {
   const t = autoTitleFromTranscript(liveTranscript.value);
   if (t) { meetingName.value = t; updateMeetingSummary(); }
 }
-generateBtn.addEventListener('click', runGenerate);
-regenerateBtn.addEventListener('click', runGenerate);
 
 /* =========================================================
  * 出力（txt / md / docx / mailto）
@@ -1697,7 +1702,8 @@ async function autoSaveRecording() {
   if (!transcript) { updateHomeUI(); return; }
   ensureAutoTitle();  // タイトル未設定なら文字起こしから自動生成
   const m = currentMinutes();
-  const gen = generateMinutes(transcript);
+  // 議事録の整形は Claude 側で行うため、自動保存では要点・決定事項・ToDo は空で保存する
+  // （文字起こしと音声を残すのが目的。議事録は後から編集画面で作成できる）
   const id = 'rec-' + Date.now() + '-' + Math.floor(performance.now());
   let audio = null;
   if (recordedBlob) {
@@ -1706,7 +1712,7 @@ async function autoSaveRecording() {
   }
   const entry = {
     id, name: m.name, date: m.date, participants: m.participants,
-    transcript, summary: gen.summary, decisions: gen.decisions, todos: gen.todos,
+    transcript, summary: m.summary, decisions: m.decisions, todos: m.todos,
     audio, ts: Date.now(), auto: true,
   };
   const list = loadStore();
@@ -1963,6 +1969,48 @@ function applyEngineUI() {
 }
 engineSelect.addEventListener('change', applyEngineUI);
 
+/* --- 実行バックエンド（WebGPU / WASM）と モデルのメモリ警告 --- */
+const BACKEND_KEY = 'noteloop_backend';
+const webgpuAvailable = ('gpu' in navigator) && !!navigator.gpu;
+
+function applyBackendUI() {
+  if (!backendSelect) return;
+  const v = backendSelect.value;
+  if (backendHint) {
+    if (v === 'auto') {
+      backendHint.textContent = webgpuAvailable
+        ? 'このブラウザは WebGPU 対応です。自動で GPU を使って高速に文字起こしします。'
+        : 'このブラウザは WebGPU 非対応のため、CPU（WASM）で処理します。';
+    } else if (v === 'webgpu') {
+      backendHint.textContent = webgpuAvailable
+        ? 'GPU を使って高速処理します（GPU / Apple Silicon 向け）。'
+        : '⚠ このブラウザは WebGPU 非対応です。実行時は自動的に CPU（WASM）へ切り替わります。';
+    } else {
+      backendHint.textContent = 'CPU で処理します。低速ですが最も互換性が高い方式です。';
+    }
+  }
+  localStorage.setItem(BACKEND_KEY, v);
+  updateModelWarn();
+}
+if (backendSelect) backendSelect.addEventListener('change', applyBackendUI);
+
+/** 大きいモデル×低メモリ端末のときに警告を出す */
+function updateModelWarn() {
+  if (!modelWarn) return;
+  const isTurbo = accuracyModel.value === 'onnx-community/whisper-large-v3-turbo';
+  const mem = navigator.deviceMemory; // GB（対応ブラウザのみ）
+  const backend = backendSelect ? backendSelect.value : 'auto';
+  let warn = '';
+  if (isTurbo) {
+    if (mem && mem < 8) warn = '⚠ この端末はメモリが少なめです（約' + mem + 'GB）。turbo は 16GB 以上の PC を推奨します。動作が重い場合は small / base に下げてください。';
+    else if (backend === 'wasm' || (!webgpuAvailable && backend !== 'wasm')) warn = '⚠ turbo を CPU（WASM）で回すと非常に低速です。WebGPU 対応環境での利用を推奨します。';
+    else warn = 'turbo は約1.2GB のダウンロードが発生します（初回のみ）。メモリ 16GB 以上の PC を推奨します。';
+  }
+  modelWarn.textContent = warn;
+  modelWarn.hidden = !warn;
+}
+accuracyModel.addEventListener('change', updateModelWarn);
+
 function showError(msg) { errorBox.textContent = msg; errorBox.hidden = false; }
 function hideError() { errorBox.hidden = true; errorBox.textContent = ''; }
 
@@ -1980,6 +2028,12 @@ if (!getSR()) {
   const opt = engineSelect.querySelector('option[value="webspeech"]');
   if (opt) opt.textContent = 'Web Speech API（このブラウザは非対応）';
   if (engineSelect.value === 'webspeech') engineSelect.value = 'whisper'; // 非対応なら Whisper に
+}
+// バックエンドの復元
+if (backendSelect) {
+  const savedBackend = localStorage.getItem(BACKEND_KEY);
+  if (savedBackend === 'auto' || savedBackend === 'webgpu' || savedBackend === 'wasm') backendSelect.value = savedBackend;
+  applyBackendUI();
 }
 applyEngineUI();
 updateHomeUI();

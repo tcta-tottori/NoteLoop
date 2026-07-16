@@ -158,27 +158,9 @@
         </button>
         <div id="meetingSummary" class="meeting-summary"></div>
 
-        <div class="gen-row">
-          <button id="generateBtn" class="primary-btn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/><path d="M19 3v4M21 5h-4"/></svg> 議事録を生成</button>
-          <button id="regenerateBtn" class="secondary-btn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg> 再生成</button>
-        </div>
-
-        <div class="minutes-section">
-          <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
-          <textarea id="secSummary" class="minutes-area" rows="4" placeholder="会議の要点がここに入ります。"></textarea>
-        </div>
-        <div class="minutes-section">
-          <label class="mini-label" for="secDecisions"><span class="tag tag-dec">決定事項</span></label>
-          <textarea id="secDecisions" class="minutes-area" rows="4" placeholder="決まったことがここに入ります。"></textarea>
-        </div>
-        <div class="minutes-section">
-          <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
-          <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題がここに入ります。"></textarea>
-        </div>
-
-        <!-- Claude連携（議事録カード内・下部） -->
+        <!-- Claude連携（議事録作成のメイン導線） -->
         <div class="claude-inline">
-          <p class="claude-inline-desc"><strong>Claudeでさらに高精度な議事録に。</strong>会議情報＋文字起こしをまとめてコピーし、Claudeを開きます。あとは貼り付け（⌘/Ctrl+V）→送信するだけ。</p>
+          <p class="claude-inline-desc"><strong>① Claudeで議事録を作成。</strong>会議情報＋文字起こしをまとめてコピーし、Claudeを開きます。あとは貼り付け（⌘/Ctrl+V）→送信するだけで、高精度な議事録が得られます。</p>
           <div class="claude-actions">
             <button class="primary-btn" id="claudeSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピーしてClaudeを開く</button>
             <button class="secondary-btn" id="claudeCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー</button>
@@ -189,6 +171,20 @@
             <summary>送信するプロンプトを確認 / 手動でコピー</summary>
             <textarea id="claudePromptPreview" class="minutes-area" rows="6" readonly placeholder="「コピーしてClaudeを開く」を押すと、ここに内容が表示されます。"></textarea>
           </details>
+        </div>
+
+        <p class="field-hint" style="margin-top:14px;">② 下の欄は<strong>任意</strong>です。Claudeが作った議事録を貼り付ける、または手入力すると、下部のメール作成や書き出し（.txt / .md / Word）にそのまま使えます。</p>
+        <div class="minutes-section">
+          <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
+          <textarea id="secSummary" class="minutes-area" rows="4" placeholder="Claudeの議事録を貼り付け、または手入力（メール・書き出しに使われます）。"></textarea>
+        </div>
+        <div class="minutes-section">
+          <label class="mini-label" for="secDecisions"><span class="tag tag-dec">決定事項</span></label>
+          <textarea id="secDecisions" class="minutes-area" rows="4" placeholder="決まったことを貼り付け／手入力。"></textarea>
+        </div>
+        <div class="minutes-section">
+          <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
+          <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題を貼り付け／手入力。"></textarea>
         </div>
       </div>
 
@@ -271,8 +267,8 @@
         <div class="field settings-field">
           <label for="engineSelect">文字起こしエンジン</label>
           <select id="engineSelect">
-            <option value="webspeech" selected>Web Speech API（無料・高精度 / 要ネット）</option>
-            <option value="whisper">ブラウザ内Whisper（オフライン・非公開）</option>
+            <option value="whisper" selected>ブラウザ内Whisper（オフライン・非公開 / WebGPU対応）</option>
+            <option value="webspeech">Web Speech API（クラウド・低負荷 / 要ネット）</option>
           </select>
           <p class="field-hint" id="engineHint"></p>
         </div>
@@ -287,13 +283,24 @@
         </div>
         <div id="whisperSettings">
         <div class="field settings-field">
+          <label for="backendSelect">実行バックエンド</label>
+          <select id="backendSelect">
+            <option value="auto" selected>自動（推奨）— WebGPU対応なら高速、非対応はCPU</option>
+            <option value="webgpu">WebGPU固定（GPU / Apple Silicon 向け・高速）</option>
+            <option value="wasm">WASM固定（CPU処理・互換性優先）</option>
+          </select>
+          <p class="field-hint" id="backendHint"></p>
+        </div>
+        <div class="field settings-field">
           <label for="accuracyModel">高精度モデル（録音停止後の再処理）</label>
           <select id="accuracyModel">
-            <option value="Xenova/whisper-base">base（約80MB・速い / 精度標準）</option>
-            <option value="Xenova/whisper-small" selected>small（約250MB・おすすめ / 高精度・遅い）</option>
-            <option value="Xenova/whisper-medium">medium（約500MB・PC推奨 / 最高精度・かなり遅い）</option>
+            <option value="onnx-community/whisper-tiny">tiny（超軽量・最速 / 精度は控えめ）</option>
+            <option value="onnx-community/whisper-base">base（約80MB・速い / 精度標準）</option>
+            <option value="onnx-community/whisper-small" selected>small（約250MB・おすすめ / 高精度）</option>
+            <option value="onnx-community/whisper-large-v3-turbo">large-v3-turbo（約1.2GB・WebGPU/PC推奨 / 最速×最高精度・メモリ16GB＋）</option>
           </select>
-          <p class="field-hint">停止後に音声全体をこのモデルで再処理し、精度の高い確定版を作ります。大きいほど高精度・低速で、初回はダウンロードに時間がかかります。</p>
+          <p class="field-hint">停止後に音声全体をこのモデルで再処理し、精度の高い確定版を作ります。大きいほど高精度で、初回はダウンロードに時間がかかります。WebGPUなら turbo でも高速です。</p>
+          <p class="field-hint warn" id="modelWarn" hidden></p>
         </div>
         <div class="field settings-field">
           <label class="switch-row" for="liveEnabled">
@@ -307,8 +314,8 @@
         <div class="field settings-field" id="liveModelField">
           <label for="liveModel">ライブ表示用の軽量モデル</label>
           <select id="liveModel">
-            <option value="Xenova/whisper-tiny" selected>tiny（約40MB・最速）</option>
-            <option value="Xenova/whisper-base">base（約80MB）</option>
+            <option value="onnx-community/whisper-tiny" selected>tiny（約40MB・最速）</option>
+            <option value="onnx-community/whisper-base">base（約80MB）</option>
           </select>
         </div>
         </div><!-- /#whisperSettings -->
@@ -373,7 +380,7 @@
         <ol class="man-steps">
           <li><span class="man-n">1</span><div><b>録音する</b><p>「録音」画面の中央下にある丸いマイクボタンをタップ。マイクの使用を許可すると録音が始まり、話しながら文字起こしが画面に表示されます。</p></div></li>
           <li><span class="man-n">2</span><div><b>停止する</b><p>もう一度ボタンをタップで停止。文字起こしが整い、下部に「録音した音声」の再生・保存が表示されます。誤変換のループは自動で除去されます。</p></div></li>
-          <li><span class="man-n">3</span><div><b>議事録を作る</b><p>「議事録へ」または録音ボタンから議事録画面へ。<b>議事録を生成</b>で 要点・決定事項・ToDo に整形されます（編集・再生成できます）。タイトルは内容から自動で付きます。</p></div></li>
+          <li><span class="man-n">3</span><div><b>議事録を作る</b><p>「議事録へ」または録音ボタンから議事録画面へ。<b>「コピーしてClaudeを開く」</b>で会議情報＋文字起こしをコピーし、開いた Claude に貼り付け（⌘/Ctrl+V）→送信すると高精度な議事録ができます。結果は下の欄に貼り付けると、メールや書き出しに使えます。タイトルは内容から自動で付きます。</p></div></li>
           <li><span class="man-n">4</span><div><b>出力・共有する</b><p>txt / Word / メールで書き出し、または <b>Claude</b> に渡してさらに高精度な議事録に。<b>一覧に保存</b>で履歴に残せます。</p></div></li>
         </ol>
       </div>
@@ -384,7 +391,7 @@
           <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と波形、ライブ文字起こしを表示。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
           <li><b>議事録</b><span>録音した音声の再生・保存、議事録本文（要点／決定事項／ToDo）、Claude 連携、書き出し、メール作成をまとめた画面です。</span></li>
           <li><b>履歴</b><span>保存した議事録をカードで一覧。カードをタップで開き、右下のアイコンで削除・音声保存。最大10件を保存します。</span></li>
-          <li><b>設定</b><span>文字起こしエンジンの切替、高精度モデル、録音中の画面常時オン、Claude の指示テンプレートを設定できます。</span></li>
+          <li><b>設定</b><span>文字起こしエンジンの切替、<b>実行バックエンド（WebGPU / WASM）</b>、高精度モデル（tiny〜large-v3-turbo）、録音中の画面常時オン、Claude の指示テンプレートを設定できます。</span></li>
           <li><b>メニュー</b><span>左上の三本線（PC では常時左側）から各画面へ移動。上部に現在のバージョンを表示します。</span></li>
         </ul>
       </div>
@@ -394,16 +401,16 @@
         <p class="field-hint" style="margin-bottom:12px;">設定画面で切り替えられます。どちらでも録音音声の保存・Claude 連携・書き出しは使えます。</p>
         <div class="man-tablewrap">
           <table class="man-table">
-            <thead><tr><th>項目</th><th>Web Speech API（既定）</th><th>ブラウザ内 Whisper</th></tr></thead>
+            <thead><tr><th>項目</th><th>ブラウザ内 Whisper（既定）</th><th>Web Speech API</th></tr></thead>
             <tbody>
-              <tr><td>精度・速度</td><td>リアルタイム・待ち時間ほぼ無し</td><td>停止後に高精度化（やや遅い）</td></tr>
-              <tr><td>動作場所</td><td>音声がクラウドへ（Chrome=Google / Edge=Azure）</td><td>端末内で完結・外部送信なし</td></tr>
-              <tr><td>ネット</td><td>必要</td><td>不要（初回のモデルDLのみ）</td></tr>
-              <tr><td>向いている用途</td><td>手軽さ・リアルタイム重視</td><td>非公開データ・オフライン</td></tr>
+              <tr><td>精度・速度</td><td>停止後に高精度化（WebGPUなら高速）</td><td>リアルタイム・待ち時間ほぼ無し</td></tr>
+              <tr><td>動作場所</td><td>端末内で完結・外部送信なし</td><td>音声がクラウドへ（Chrome=Google / Edge=Azure）</td></tr>
+              <tr><td>ネット</td><td>不要（初回のモデルDLのみ）</td><td>必要</td></tr>
+              <tr><td>向いている用途</td><td>非公開データ・オフライン・高精度</td><td>手軽さ・端末負荷ゼロ</td></tr>
             </tbody>
           </table>
         </div>
-        <div class="man-note"><b>精度を上げたいとき（Whisper）：</b>設定の「高精度モデル」を small → medium に上げると精度が上がります（遅くなります）。「このように…」等の反復が出る場合は、マイクに近づける・端末の録音音量を上げると大きく改善します。</div>
+        <div class="man-note"><b>精度・速度を上げたいとき（Whisper）：</b>設定の「実行バックエンド」を <b>WebGPU</b>（対応端末なら自動）にすると大幅に高速化します。精度は「高精度モデル」を small → large-v3-turbo に上げるほど向上します（turbo はメモリ16GB＋のPC推奨）。「このように…」等の反復が出る場合は、マイクに近づける・端末の録音音量を上げると改善します。</div>
       </div>
 
       <div class="panel" id="man-claude">
@@ -449,7 +456,7 @@
       <div class="panel" id="man-faq">
         <h3 class="settings-group-title">困ったとき（FAQ）</h3>
         <details class="man-faq"><summary>録音中に文字起こしが表示されない</summary><p>マイクの許可を確認してください。Web Speech はインターネット接続が必要です。うまくいかない場合は設定でエンジンを切り替えるか、ページを再読み込みしてください。</p></details>
-        <details class="man-faq"><summary>同じ言葉が繰り返される・精度が低い</summary><p>マイクに近づき、はっきり話すと改善します。Whisper では高精度モデル（small / medium）に上げてください。反復は自動である程度除去されます。</p></details>
+        <details class="man-faq"><summary>同じ言葉が繰り返される・精度が低い</summary><p>マイクに近づき、はっきり話すと改善します。Whisper では高精度モデル（small / large-v3-turbo）に上げてください。反復は自動である程度除去されます。</p></details>
         <details class="man-faq"><summary>画面を消すと録音が止まる</summary><p>スマホのブラウザは仕様上バックグラウンドで止まることがあります。設定の「録音中は画面を常時オン」を有効にすると安定します。</p></details>
         <details class="man-faq"><summary>最新版に更新されない</summary><p>通常は自動更新されます。反映されない場合はページを再読み込み（2回）するか、ブラウザのサイトデータを消去してください。メニュー上部のバージョン表示で確認できます。</p></details>
         <details class="man-faq"><summary>Word 出力ができない</summary><p>Word 出力は外部ライブラリを使うため、オンライン環境で再読み込みしてからお試しください。</p></details>
