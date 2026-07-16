@@ -113,7 +113,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.4.1';
+const APP_VERSION = 'Ver.4.2';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -469,27 +469,35 @@ async function startRecording() {
   recordedBlobs = [];
   recordedBlob = null;
 
-  // === ライブ字幕モード（Web Speech）===
-  // Android では getUserMedia（録音）と Web Speech が同時にマイクを使えず、
-  // 録音を並行させると認識が音を拾えない（「認識中」のまま無反応）。
-  // 確実にライブ表示するため、このモードではマイクを Web Speech に専有させ、
-  // 音声録音は行わない（確定は「ライブ文字 → Claude」）。
+  // === ライブ字幕モード（Web Speech）＋ 音声録音を並行 ===
+  // 先に録音用マイクを確保（getUserMedia → MediaRecorder）してから認識を開始する。
+  // AudioContext は認識を阻害しうるため使わず、MediaRecorder で直接録音する
+  // （軽量にして Web Speech と共存させる）。録音に失敗しても字幕は継続する。
   if (liveMode === 'webspeech') {
+    try {
+      mediaStream = await getMicStream();
+      recordedBlobs = [];
+      const mime = pickAudioMime();
+      try {
+        mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
+        mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
+        mediaRecorder.start();
+      } catch (_) { mediaRecorder = null; }
+    } catch (_) { mediaStream = null; mediaRecorder = null; } // 録音不可でも字幕は続行
+
     const ok = startWebSpeech();
-    if (ok) {
-      recording = true;
-      setAudioAvailable(false);
-      sttActivity = 0.4;
-      setStatus('working', '認識中…（ライブ字幕）');
-      updateHomeUI();
-      startTime = Date.now();
-      updateTimer();
-      timerInterval = setInterval(updateTimer, 250);
-      return;
-    }
-    // 認識を開始できない → 録音モードにフォールバック
-    liveMode = 'off';
-    activeEngine = 'whisper';
+    if (!ok) { liveMode = 'off'; activeEngine = 'whisper'; } // 認識を開始できない → 録音のみ
+
+    recording = true;
+    pendingChunks = [];
+    setAudioAvailable(false);
+    sttActivity = 0.4;
+    setStatus('working', liveMode === 'webspeech' ? '認識中…（ライブ字幕）' : '録音中');
+    updateHomeUI();
+    startTime = Date.now();
+    updateTimer();
+    timerInterval = setInterval(updateTimer, 250);
+    return;
   }
 
   // === 録音モード（音声保存 → 停止後に 音声→Gemini / Whisper）===
@@ -2140,9 +2148,10 @@ function applyLiveUI() {
     liveHint.innerHTML = 'この端末／ブラウザはリアルタイム字幕（Web Speech）に非対応です。<strong>録音モード</strong>で動作します（停止後に「音声をAIに送る」で議事録化）。';
   } else if (liveEnabled.checked) {
     liveHint.innerHTML = '<strong>ON = ライブ字幕モード。</strong>録音中にリアルタイムで文字が出ます（音声はGoogleへ送信）。' +
-      '<br>※スマホでは、字幕表示中は<strong>録音音声は保存されません</strong>（マイクを字幕認識が使うため）。議事録は停止後に<strong>「Claudeに送る」</strong>で作成します。';
+      '対応端末では<strong>音声も同時に保存</strong>します。停止後は「音声をAIに送る（Gemini）」または「Claudeに送る」で議事録化。' +
+      '<br>※もし字幕が出ない端末では、このモードをOFF（録音のみ）にしてください。';
   } else {
-    liveHint.innerHTML = '<strong>OFF = 録音モード。</strong>字幕は出ませんが<strong>音声を保存</strong>します。停止後に<strong>「音声をAIに送る（Gemini）」</strong>で高精度な議事録＋メールを作成（推奨）。';
+    liveHint.innerHTML = '<strong>OFF = 録音モード。</strong>字幕は出ませんが<strong>音声を確実に保存</strong>します。停止後に<strong>「音声をAIに送る（Gemini）」</strong>で高精度な議事録＋メールを作成（推奨）。';
   }
 }
 
