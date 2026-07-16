@@ -446,10 +446,31 @@ select:focus, input:focus, textarea:focus {
 .edit-ico { width: 15px; height: 15px; flex: none; }
 @keyframes blinkText { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 
+/* ---------- Home: mic dock (左:マイク設定 / 中央:録音 / 右:編集) ---------- */
+.mic-dock {
+  position: fixed; left: 0; right: 0; z-index: 35;
+  bottom: calc(env(safe-area-inset-bottom) + 24px);
+  display: flex; align-items: center; justify-content: center; gap: 26px;
+  pointer-events: none; padding: 0 16px;
+}
+.mic-dock > * { pointer-events: auto; }
+/* マイクを挟む左右の丸ピルボタン */
+.mic-side-btn {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 4px;
+  min-width: 62px; padding: 8px 10px; border-radius: 16px; cursor: pointer;
+  background: color-mix(in srgb, var(--brand1) 10%, #fff);
+  color: var(--brand1); border: 1px solid color-mix(in srgb, var(--brand1) 22%, transparent);
+  font-size: 11.5px; font-weight: 700; line-height: 1;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--brand1) 14%, transparent);
+  transition: transform .12s ease, box-shadow .2s ease, background .2s ease;
+}
+.mic-side-btn svg { width: 22px; height: 22px; }
+.mic-side-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 18px color-mix(in srgb, var(--brand1) 22%, transparent); }
+.mic-side-btn:active { transform: scale(.96); }
+
 /* ---------- Home: mic FAB ---------- */
 .mic-fab {
-  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 28px); z-index: 35;
-  transform: translateX(-50%);
+  position: relative; flex: none; z-index: 1;
   width: 64px; height: 64px; border-radius: 50%; border: none; cursor: pointer; padding: 0;
   /* 赤ベースのグラデーション＋差し色（オレンジ / ピンク） */
   background: linear-gradient(135deg, #ff2d6b 0%, #ff5a5f 45%, #ff9d4d 100%);
@@ -457,8 +478,8 @@ select:focus, input:focus, textarea:focus {
   display: grid; place-items: center;
   transition: transform .12s ease, box-shadow .2s ease, background .3s ease;
 }
-.mic-fab:hover { transform: translateX(-50%) translateY(-2px); }
-.mic-fab:active { transform: translateX(-50%) scale(.95); }
+.mic-fab:hover { transform: translateY(-2px); }
+.mic-fab:active { transform: scale(.95); }
 .mic-fab:disabled { opacity: .55; cursor: default; }
 .mic-glyph { width: 29px; height: 29px; color: #fff; }
 .mic-glyph-img { height: 32px; width: auto; display: block; filter: drop-shadow(0 1px 3px rgba(0,0,0,.2)); }
@@ -607,10 +628,8 @@ select:focus, input:focus, textarea:focus {
   .app-main { max-width: none; padding-left: clamp(20px, 2.2vw, 40px); padding-right: clamp(20px, 2.2vw, 40px); }
   .header-glow { left: var(--sidebar-w, 288px); }
 
-  /* 固定配置の要素（マイクボタン・案内）もコンテンツ領域の中央へ */
-  .mic-fab { left: calc(50% + var(--sidebar-w, 288px) / 2); }
-  .mic-fab:hover { transform: translateX(-50%) translateY(-2px); }
-  .mic-fab:active { transform: translateX(-50%) scale(.95); }
+  /* 固定配置の要素（マイクドック・案内）もコンテンツ領域の中央へ */
+  .mic-dock { left: var(--sidebar-w, 288px); right: 0; }
   .idle-prompt, .rec-hint { left: var(--sidebar-w, 288px); right: 0; }
 
   /* 議事録: 左＝録音音声＋議事録(Claude含む)、右＝書き出し＋メール */

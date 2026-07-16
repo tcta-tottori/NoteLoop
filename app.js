@@ -513,9 +513,18 @@ async function stopRecording() {
   teardownAudio();
 
   if (activeEngine === 'webspeech') {
-    // Web Speech はリアルタイムで確定済み。高精度パスは行わない。
-    setStatus('ready', '認識完了');
-    updateHomeUI();
+    const gotText = liveTranscript.value.trim().length > 0;
+    if (!gotText && recordedBlob) {
+      // Web Speech が何も返さなかった（ネット未接続・マイクの競合・端末非対応など）。
+      // 録音した音声をオフラインの Whisper で文字起こしし、必ず結果を出す。
+      hideError();
+      setStatus('working', '音声から文字起こし中…');
+      await runFinalPass(recordedBlob);
+    } else {
+      // Web Speech がリアルタイムで確定済み。高精度パスは行わない。
+      setStatus('ready', '認識完了');
+      updateHomeUI();
+    }
   } else if (recordedBlob) {
     // Whisper: 音声全体を高精度で再処理して確定版に置き換え
     await runFinalPass(recordedBlob);
@@ -1343,6 +1352,13 @@ function closeMeetingModal() {
 }
 openMeetingInfo.addEventListener('click', openMeetingModal);
 openMeetingInfoHome.addEventListener('click', openMeetingModal);
+
+// マイク設定ボタン: 設定画面の「文字起こし（エンジン）」までスクロール
+const micSettingsBtn = $('micSettingsBtn');
+if (micSettingsBtn) micSettingsBtn.addEventListener('click', () => {
+  showScreen('screen-settings', '設定');
+  scrollToEl('sttSettingsPanel');
+});
 meetingModalClose.addEventListener('click', closeMeetingModal);
 meetingModalDone.addEventListener('click', closeMeetingModal);
 meetingModal.addEventListener('click', (e) => { if (e.target === meetingModal) closeMeetingModal(); });
