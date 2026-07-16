@@ -377,6 +377,16 @@
             <div class="quota-bar"><div class="quota-fill" id="geminiUsageFill"></div></div>
             <p class="field-hint" id="geminiUsageDetail" style="margin-top:6px;"></p>
           </div>
+          <details class="key-help">
+            <summary>無料枠だけで使う設定手順（課金されない使い方）</summary>
+            <ol class="key-help-steps">
+              <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio のAPIキー画面</a>を開き、Googleアカウントでログイン（<strong>クレジットカード不要</strong>）。</li>
+              <li>「Create API key」でキーを作成。<strong>請求（Billing）は絶対に有効化しない</strong>。有効化するとそのプロジェクトは無料枠が消え、1トークン目から課金対象になります。</li>
+              <li>できた <code>AIza…</code> を上の欄に貼り付け。モデルは <strong>gemini-3.5-flash</strong>（<strong>Flashのみ無料</strong>。Proは選ばない）。</li>
+              <li>無料枠は <strong>10回/分・1,500回/日</strong>。超えても課金ではなく <strong>エラー（429）で止まるだけ</strong>なので、無料枠だけで安全に使えます。</li>
+            </ol>
+            <p class="field-hint warn">⚠ プライバシー：無料枠は入力/出力が <strong>Googleの製品改善に使われる・人間が確認する場合</strong>があります。機密性の高い会議音声の送信は避けてください（学習利用を止めるには有料契約が必要＝無料枠ではなくなります）。</p>
+          </details>
         </div>
         <div class="field settings-field">
           <label for="geminiInstruction">A. 音声をAIに送る指示（Gemini等・編集可）</label>
