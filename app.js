@@ -118,8 +118,21 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.3.3';
-const APP_UPDATED = '2026.7.16 20:30';
+const APP_VERSION = 'Ver.3.4';
+// 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
+// （手動だと実時刻より先の時間になり得るため）
+function computeUpdatedString() {
+  try {
+    const d = new Date(document.lastModified);
+    if (!isNaN(d.getTime()) && d.getFullYear() > 2000) {
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()} ${hh}:${mm}`;
+    }
+  } catch (_) { /* フォールバックへ */ }
+  return '2026.7.16';
+}
+const APP_UPDATED = computeUpdatedString();
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -245,7 +258,8 @@ let homeProcessing = false;
 function updateHomeUI() {
   const hasText = liveTranscript.value.trim().length > 0;
   const hasAudio = !!recordedBlob;
-  const showWave = recording || homeProcessing;
+  // 文字起こし中はゲージを1本（進捗バー）だけにするため、波形は録音中のみ表示。
+  const showWave = recording;
 
   waveWrap.hidden = !showWave;
   timerEl.hidden = !recording;
@@ -999,15 +1013,9 @@ function maybeSendChunk(force) {
     [audio.buffer]
   );
 }
-/** 記号・句読点のみ（「！！！」等のハルシネーション）かどうか */
-function isJunkChunk(text) {
-  const t = (text || '').trim();
-  if (!t) return true;
-  // 日本語・英数字などの「意味のある文字」を含まなければ捨てる
-  return !/[\p{L}\p{N}]/u.test(t);
-}
 function appendTranscript(text) {
-  if (isJunkChunk(text)) return; // 「！！！」等の記号だけのチャンクは表示しない
+  // 精度が低くても録音中の文字起こしは表示する（記号だけのチャンクも隠さない）。
+  if (!(text || '').trim()) return; // 空のみスキップ
   const cur = liveTranscript.value.trimEnd();
   liveTranscript.value = formatTranscript(cur ? cur + ' ' + text : text);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
