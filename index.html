@@ -55,6 +55,10 @@
       <svg class="d-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       <span>設定</span>
     </button>
+    <button class="drawer-item" type="button" data-target="screen-manual" data-title="マニュアル">
+      <svg class="d-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="9" y1="7" x2="15" y2="7"/><line x1="9" y1="11" x2="15" y2="11"/></svg>
+      <span>マニュアル</span>
+    </button>
     <div class="drawer-foot">
       <img class="drawer-logo" src="./icons/wordmark-white.png" alt="NOTELOOP" />
     </div>
@@ -316,6 +320,127 @@
         <h3 class="settings-group-title">このアプリについて</h3>
         <p>録音・文字起こし・議事録化・出力をすべて<strong>ブラウザ内で完結</strong>するPoCサンプルです。音声は外部へ送信されません。文字起こしは <a href="https://github.com/xenova/transformers.js" target="_blank" rel="noopener">Transformers.js</a> の Whisper を利用しています。</p>
         <p class="field-hint">初回はモデル（数十MB〜数百MB）のダウンロードが発生します。Wi-Fi環境での初回利用を推奨します。</p>
+      </div>
+    </section>
+
+    <!-- ========== マニュアル ========== -->
+    <section class="screen" id="screen-manual" aria-labelledby="screenTitle" hidden>
+      <div class="panel man-intro">
+        <div class="section-head">
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="9" y1="7" x2="15" y2="7"/></svg> 使い方マニュアル</span>
+        </div>
+        <p class="man-lead">NOTELOOP は、会議の<strong>録音 → 文字起こし → 議事録づくり → 共有</strong>を 1 つの画面でつなぐアプリです。録音ボタンを押すだけで始められます。以下は各機能の使い方です。</p>
+        <div class="man-toc">
+          <button type="button" data-goto="man-start">はじめの4ステップ</button>
+          <button type="button" data-goto="man-screens">画面の説明</button>
+          <button type="button" data-goto="man-engine">文字起こしエンジン</button>
+          <button type="button" data-goto="man-claude">Claude連携</button>
+          <button type="button" data-goto="man-export">書き出し・メール</button>
+          <button type="button" data-goto="man-tips">便利な機能</button>
+          <button type="button" data-goto="man-privacy">データとプライバシー</button>
+          <button type="button" data-goto="man-faq">困ったとき</button>
+          <button type="button" data-goto="man-env">対応環境</button>
+        </div>
+      </div>
+
+      <div class="panel" id="man-start">
+        <h3 class="settings-group-title">はじめの4ステップ</h3>
+        <ol class="man-steps">
+          <li><span class="man-n">1</span><div><b>録音する</b><p>「録音」画面の中央下にある丸いマイクボタンをタップ。マイクの使用を許可すると録音が始まり、話しながら文字起こしが画面に表示されます。</p></div></li>
+          <li><span class="man-n">2</span><div><b>停止する</b><p>もう一度ボタンをタップで停止。文字起こしが整い、下部に「録音した音声」の再生・保存が表示されます。誤変換のループは自動で除去されます。</p></div></li>
+          <li><span class="man-n">3</span><div><b>議事録を作る</b><p>「議事録へ」または録音ボタンから議事録画面へ。<b>議事録を生成</b>で 要点・決定事項・ToDo に整形されます（編集・再生成できます）。タイトルは内容から自動で付きます。</p></div></li>
+          <li><span class="man-n">4</span><div><b>出力・共有する</b><p>txt / Word / メールで書き出し、または <b>Claude</b> に渡してさらに高精度な議事録に。<b>一覧に保存</b>で履歴に残せます。</p></div></li>
+        </ol>
+      </div>
+
+      <div class="panel" id="man-screens">
+        <h3 class="settings-group-title">画面の説明</h3>
+        <ul class="man-def">
+          <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と波形、ライブ文字起こしを表示。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
+          <li><b>議事録</b><span>録音した音声の再生・保存、議事録本文（要点／決定事項／ToDo）、Claude 連携、書き出し、メール作成をまとめた画面です。</span></li>
+          <li><b>履歴</b><span>保存した議事録をカードで一覧。カードをタップで開き、右下のアイコンで削除・音声保存。最大10件を保存します。</span></li>
+          <li><b>設定</b><span>文字起こしエンジンの切替、高精度モデル、録音中の画面常時オン、Claude の指示テンプレートを設定できます。</span></li>
+          <li><b>メニュー</b><span>左上の三本線（PC では常時左側）から各画面へ移動。上部に現在のバージョンを表示します。</span></li>
+        </ul>
+      </div>
+
+      <div class="panel" id="man-engine">
+        <h3 class="settings-group-title">文字起こしエンジンの選び方</h3>
+        <p class="field-hint" style="margin-bottom:12px;">設定画面で切り替えられます。どちらでも録音音声の保存・Claude 連携・書き出しは使えます。</p>
+        <div class="man-tablewrap">
+          <table class="man-table">
+            <thead><tr><th>項目</th><th>Web Speech API（既定）</th><th>ブラウザ内 Whisper</th></tr></thead>
+            <tbody>
+              <tr><td>精度・速度</td><td>リアルタイム・待ち時間ほぼ無し</td><td>停止後に高精度化（やや遅い）</td></tr>
+              <tr><td>動作場所</td><td>音声がクラウドへ（Chrome=Google / Edge=Azure）</td><td>端末内で完結・外部送信なし</td></tr>
+              <tr><td>ネット</td><td>必要</td><td>不要（初回のモデルDLのみ）</td></tr>
+              <tr><td>向いている用途</td><td>手軽さ・リアルタイム重視</td><td>非公開データ・オフライン</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="man-note"><b>精度を上げたいとき（Whisper）：</b>設定の「高精度モデル」を small → medium に上げると精度が上がります（遅くなります）。「このように…」等の反復が出る場合は、マイクに近づける・端末の録音音量を上げると大きく改善します。</div>
+      </div>
+
+      <div class="panel" id="man-claude">
+        <h3 class="settings-group-title">Claude 連携で高精度な議事録に</h3>
+        <ol class="man-steps">
+          <li><span class="man-n">1</span><div><p>議事録画面の下部「<b>コピーしてClaudeを開く</b>」をタップ。会議情報＋文字起こしが自動コピーされ、Claude が開きます。</p></div></li>
+          <li><span class="man-n">2</span><div><p>開いた Claude の入力欄に <b>貼り付け（<kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>V</kbd>）→ 送信</b> するだけ。</p></div></li>
+          <li><span class="man-n">3</span><div><p>Claude が要点・決定事項・ToDo を整理した議事録を作成します。</p></div></li>
+        </ol>
+        <div class="man-note">渡す指示文は <b>設定 → Claude連携</b> で編集できます。Claude はチャット上で音声を直接処理できないため、渡すのは<b>文字起こしテキスト</b>です（音声は「録音した音声」から別途保存）。</div>
+      </div>
+
+      <div class="panel" id="man-export">
+        <h3 class="settings-group-title">書き出し・メール</h3>
+        <ul class="man-def">
+          <li><b>ファイル</b><span>議事録を <b>.txt / .md / Word（.docx）</b> で保存できます。</span></li>
+          <li><b>メール</b><span>議事録から本文を自動作成し、<b>既定メーラー / Gmail / Outlook / .eml / 本文コピー</b> で送信・書き出し。Gmail・Outlook は Web 作成画面が件名・本文入りで開きます。</span></li>
+          <li><b>録音音声</b><span><b>音声を保存</b>（m4a 等）と <b>WAVに変換</b>。AI への共有や記録用に使えます。</span></li>
+          <li><b>履歴に保存</b><span>「一覧に保存」で議事録を履歴に残し、あとから開けます。</span></li>
+        </ul>
+      </div>
+
+      <div class="panel" id="man-tips">
+        <h3 class="settings-group-title">便利な機能</h3>
+        <ul class="man-def">
+          <li><b>用語の修正・辞書</b><span>文字起こし上部の「用語修正」で、会社名など誤変換されやすい語を一括置換。辞書に登録すると録音後に自動でチェックします。</span></li>
+          <li><b>会議情報</b><span>タイトル・日付・参加者（部署＋氏名）を録音の前・最中・後いつでも入力でき、出力にも反映されます。</span></li>
+          <li><b>録音中の通知</b><span>録音中は通知を表示。画面を消していても通知の「停止」から録音を止められます（対応環境）。</span></li>
+          <li><b>画面の常時オン</b><span>設定でオンにすると、録音中に画面が消えません（バッテリー消費は増えます）。</span></li>
+          <li><b>アプリのインストール（PWA）</b><span>ブラウザのメニューから「アプリをインストール／ホーム画面に追加」で独立アプリとして起動できます。新しい版は自動で反映されます。</span></li>
+        </ul>
+      </div>
+
+      <div class="panel" id="man-privacy">
+        <h3 class="settings-group-title">データとプライバシー</h3>
+        <ul class="man-def">
+          <li><b>処理場所</b><span>録音音声・文字起こしはブラウザ内で処理し、アプリ側のサーバへは送信しません。</span></li>
+          <li><b>保存先</b><span>議事録・設定は端末の localStorage、録音音声は IndexedDB に保存されます（この端末内のみ）。</span></li>
+          <li><b>Web Speech 選択時</b><span>認識のため音声がブラウザ経由でクラウド（Chrome=Google / Edge=Azure）へ送られます。外部送信を避けたい場合は Whisper を選んでください。</span></li>
+        </ul>
+      </div>
+
+      <div class="panel" id="man-faq">
+        <h3 class="settings-group-title">困ったとき（FAQ）</h3>
+        <details class="man-faq"><summary>録音中に文字起こしが表示されない</summary><p>マイクの許可を確認してください。Web Speech はインターネット接続が必要です。うまくいかない場合は設定でエンジンを切り替えるか、ページを再読み込みしてください。</p></details>
+        <details class="man-faq"><summary>同じ言葉が繰り返される・精度が低い</summary><p>マイクに近づき、はっきり話すと改善します。Whisper では高精度モデル（small / medium）に上げてください。反復は自動である程度除去されます。</p></details>
+        <details class="man-faq"><summary>画面を消すと録音が止まる</summary><p>スマホのブラウザは仕様上バックグラウンドで止まることがあります。設定の「録音中は画面を常時オン」を有効にすると安定します。</p></details>
+        <details class="man-faq"><summary>最新版に更新されない</summary><p>通常は自動更新されます。反映されない場合はページを再読み込み（2回）するか、ブラウザのサイトデータを消去してください。メニュー上部のバージョン表示で確認できます。</p></details>
+        <details class="man-faq"><summary>Word 出力ができない</summary><p>Word 出力は外部ライブラリを使うため、オンライン環境で再読み込みしてからお試しください。</p></details>
+      </div>
+
+      <div class="panel" id="man-env">
+        <h3 class="settings-group-title">対応環境・注意</h3>
+        <ul class="man-def">
+          <li><b>推奨ブラウザ</b><span>Chrome 系を推奨。マイク利用には HTTPS（または localhost）が必要です。</span></li>
+          <li><b>外部ライブラリ</b><span>Word 出力・Whisper は CDN からライブラリを取得します（初回はオンラインが必要）。</span></li>
+          <li><b>メール下書き</b><span>既定メーラー（mailto:）は本文長に制限があり、長い議事録は末尾が省略される場合があります（全文は txt / Word を利用）。</span></li>
+        </ul>
+        <div class="man-ver">
+          <span>NOTELOOP</span>
+          <span id="manVer" class="mono">Ver.—</span>
+        </div>
       </div>
     </section>
 

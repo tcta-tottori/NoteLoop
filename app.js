@@ -95,8 +95,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.2.0';
-const APP_UPDATED = '2026.7.16 10:15';
+const APP_VERSION = 'Ver.2.1';
+const APP_UPDATED = '2026.7.16 10:40';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -1664,6 +1664,11 @@ renderParticipants();
 loadTermDict();
 drawerVerMain.textContent = APP_VERSION;
 drawerVerSub.textContent = APP_UPDATED;
+const manVer = $('manVer'); if (manVer) manVer.textContent = `${APP_VERSION} ・ ${APP_UPDATED}`;
+// マニュアルの目次: クリックで該当セクションへスクロール
+document.querySelectorAll('.man-toc button[data-goto]').forEach((b) => {
+  b.addEventListener('click', () => scrollToEl(b.dataset.goto));
+});
 seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
