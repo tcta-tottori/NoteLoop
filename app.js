@@ -48,7 +48,9 @@ const liveModelField = $('liveModelField');
 const keepAwake      = $('keepAwake');
 
 // マイク選択 / 入力レベル
+const homeActions         = $('homeActions');
 const openMicSelect       = $('openMicSelect');
+const micRecNote          = $('micRecNote');
 const micModal            = $('micModal');
 const micModalClose       = $('micModalClose');
 const micModalDone        = $('micModalDone');
@@ -107,8 +109,8 @@ const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.2.2';
-const APP_UPDATED = '2026.7.16 12:00';
+const APP_VERSION = 'Ver.2.3';
+const APP_UPDATED = '2026.7.16 14:00';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -127,6 +129,7 @@ let audioCtx = null;
 let sourceNode = null;
 let processorNode = null;
 let analyser = null;
+let recDest = null;       // 録音の合流点（MediaStreamAudioDestinationNode）: マイク切替に追従
 let rafId = null;
 let liveTimer = null;
 let startTime = 0;
@@ -135,6 +138,7 @@ let procTimer = null;   // 高精度処理の経過時間表示
 
 // ライブ文字起こし用の PCM バッファ
 let pendingChunks = [];
+let liveResampleAcc = 0;  // ライブPCMを16kHzへリサンプルする際の端数キャリー
 let workerBusy = false;
 let reqId = 0;
 
@@ -220,6 +224,8 @@ function updateHomeUI() {
   waveWrap.hidden = !showWave;
   timerEl.hidden = !recording;
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
+  // マイク選択・編集バー: 録音中、または待機（結果なし）のときに表示
+  if (homeActions) homeActions.hidden = !(recording || (!homeProcessing && !hasText && !hasAudio));
   transcriptPanel.hidden = !(recording || hasText || hasAudio);
   transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
   if (goMinutesFromHome) goMinutesFromHome.hidden = !(hasAudio && !recording && !homeProcessing); // 録音後は議事録への導線を出す
@@ -426,39 +432,44 @@ async function startRecording() {
   const useLive = liveEnabled.checked;
   if (useLive) worker.postMessage({ type: 'load', model: liveModel.value });
 
-  // MediaRecorder（再生・高精度再処理・音声出力用の音声を保持）
-  // AI で共有しやすい m4a を優先し、非対応ブラウザでは最適な形式にフォールバック
   recordedBlobs = [];
   recordedBlob = null;
-  try {
-    const mime = pickAudioMime();
-    mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
-    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
-    mediaRecorder.start();
-  } catch (_) {
-    try { mediaRecorder = new MediaRecorder(mediaStream); mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); }; mediaRecorder.start(); }
-    catch (_2) { mediaRecorder = null; }
-  }
 
-  // Web Audio（波形表示 + ライブ用 PCM を 16kHz で取得）
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+  // Web Audio: ネイティブレートのまま録音（保存音声の品質を維持）。
+  // MediaRecorder は合流点 recDest から録音するため、録音中でもマイクを差し替えられる。
+  // ライブ用 PCM は onaudioprocess 内で 16kHz にリサンプルして取り出す。
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (audioCtx.state === 'suspended') await audioCtx.resume();
-  sourceNode = audioCtx.createMediaStreamSource(mediaStream);
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 1024;
-  sourceNode.connect(analyser);
+  recDest = audioCtx.createMediaStreamDestination();
 
   if (useLive) {
+    liveResampleAcc = 0;
     processorNode = audioCtx.createScriptProcessor(4096, 1, 1);
     processorNode.onaudioprocess = (e) => {
       if (!recording) return;
-      pendingChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      pushLiveChunk(e.inputBuffer.getChannelData(0), audioCtx.sampleRate);
     };
     const silent = audioCtx.createGain();
     silent.gain.value = 0;
-    sourceNode.connect(processorNode);
     processorNode.connect(silent);
     silent.connect(audioCtx.destination);
+  }
+
+  // マイクを analyser / recDest /（ライブ時）processor に接続
+  connectMicSource(mediaStream);
+
+  // MediaRecorder（再生・高精度再処理・音声出力用の音声を保持）
+  // AI で共有しやすい m4a を優先し、非対応ブラウザでは最適な形式にフォールバック
+  try {
+    const mime = pickAudioMime();
+    mediaRecorder = mime ? new MediaRecorder(recDest.stream, { mimeType: mime }) : new MediaRecorder(recDest.stream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
+    mediaRecorder.start();
+  } catch (_) {
+    try { mediaRecorder = new MediaRecorder(recDest.stream); mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); }; mediaRecorder.start(); }
+    catch (_2) { mediaRecorder = null; }
   }
 
   recording = true;
@@ -485,21 +496,22 @@ async function startWebSpeechAudioCapture() {
     mediaStream = await getMicStream();
   } catch (_) { mediaStream = null; return; } // 認識は Web Speech 側の独自マイクで継続
   recordedBlobs = [];
-  try {
-    const mime = pickAudioMime();
-    mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
-    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
-    mediaRecorder.start();
-  } catch (_) { mediaRecorder = null; }
-  // 波形を実際の音声レベルで動かす（取得できたときのみ）
+  // 波形表示 + 録音（合流点 recDest 経由でマイク切替に追従）
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') await audioCtx.resume();
-    sourceNode = audioCtx.createMediaStreamSource(mediaStream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
-    sourceNode.connect(analyser);
-  } catch (_) { analyser = null; }
+    recDest = audioCtx.createMediaStreamDestination();
+    connectMicSource(mediaStream);
+  } catch (_) { analyser = null; recDest = null; }
+  try {
+    const recSrc = recDest ? recDest.stream : mediaStream;
+    const mime = pickAudioMime();
+    mediaRecorder = mime ? new MediaRecorder(recSrc, { mimeType: mime }) : new MediaRecorder(recSrc);
+    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
+    mediaRecorder.start();
+  } catch (_) { mediaRecorder = null; }
 }
 
 async function stopRecording() {
@@ -657,9 +669,69 @@ function teardownAudio() {
   try { if (processorNode) processorNode.disconnect(); } catch (_) {}
   try { if (sourceNode) sourceNode.disconnect(); } catch (_) {}
   try { if (analyser) analyser.disconnect(); } catch (_) {}
+  try { if (recDest) recDest.disconnect(); } catch (_) {}
   try { if (audioCtx) audioCtx.close(); } catch (_) {}
-  processorNode = sourceNode = analyser = audioCtx = null;
+  processorNode = sourceNode = analyser = recDest = audioCtx = null;
   if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
+}
+
+/**
+ * 現在の audioCtx 上で、指定ストリームを録音グラフに接続する。
+ * 既存の sourceNode があれば切り離してから差し替えるため、録音中のマイク切替に使える。
+ */
+function connectMicSource(stream) {
+  if (!audioCtx) return;
+  try { if (sourceNode) sourceNode.disconnect(); } catch (_) {}
+  sourceNode = audioCtx.createMediaStreamSource(stream);
+  if (analyser) sourceNode.connect(analyser);
+  if (recDest) sourceNode.connect(recDest);
+  if (processorNode) sourceNode.connect(processorNode);
+}
+
+/**
+ * 録音中にマイクを切り替える。合流点 recDest はそのままなので、
+ * MediaRecorder は途切れず同じ音声ファイルへ録り続ける。
+ * 戻り値: 切り替えに成功したか。
+ */
+async function switchRecordingMic(deviceId) {
+  if (!recording || !audioCtx) return false;
+  let newStream;
+  try {
+    newStream = await navigator.mediaDevices.getUserMedia(
+      deviceId ? { audio: { deviceId: { exact: deviceId } } } : { audio: true });
+  } catch (_) {
+    try { newStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (_2) { return false; }
+  }
+  const old = mediaStream;
+  connectMicSource(newStream);
+  mediaStream = newStream;
+  if (old) { try { old.getTracks().forEach((t) => t.stop()); } catch (_) {} }
+  return true;
+}
+
+/**
+ * ライブ文字起こし用の PCM を 16kHz にリサンプルして pendingChunks に積む。
+ * 入力はマイクのネイティブレート（多くは 48kHz）。線形補間で間引く。
+ * 保存音声はネイティブレートのまま（録音は別経路）なので品質には影響しない。
+ */
+function pushLiveChunk(input, srcRate) {
+  if (!srcRate || srcRate === SAMPLE_RATE) { pendingChunks.push(new Float32Array(input)); return; }
+  const ratio = srcRate / SAMPLE_RATE; // 例: 48000/16000 = 3
+  const outLen = Math.floor((input.length - liveResampleAcc) / ratio);
+  if (outLen <= 0) { liveResampleAcc -= input.length; return; }
+  const out = new Float32Array(outLen);
+  let pos = liveResampleAcc;
+  for (let i = 0; i < outLen; i++) {
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const s0 = input[idx] || 0;
+    const s1 = (idx + 1 < input.length) ? input[idx + 1] : s0;
+    out[i] = s0 + (s1 - s0) * frac;
+    pos += ratio;
+  }
+  liveResampleAcc = pos - input.length; // 端数を次ブロックへ持ち越し
+  pendingChunks.push(out);
 }
 
 /**
@@ -1501,36 +1573,86 @@ async function activateSettingsMic() {
   if (micPermNoteSettings) micPermNoteSettings.hidden = ok;
 }
 
+/* --- 録音中のポップアップ用: 録音側 analyser からレベル表示 --- */
+let modalRecMeterRaf = null;
+function startModalRecMeter() {
+  stopModalRecMeter();
+  const buf = new Uint8Array(1024);
+  const tick = () => {
+    if (!recording || !analyser) { stopModalRecMeter(); return; }
+    modalRecMeterRaf = requestAnimationFrame(tick);
+    analyser.getByteTimeDomainData(buf);
+    let s = 0;
+    for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; s += x * x; }
+    const level = Math.min(1, Math.max(0, Math.sqrt(s / buf.length) * 6));
+    if (micMeterHomeMask) micMeterHomeMask.style.width = Math.round((1 - level) * 100) + '%';
+  };
+  tick();
+}
+function stopModalRecMeter() {
+  if (modalRecMeterRaf) cancelAnimationFrame(modalRecMeterRaf);
+  modalRecMeterRaf = null;
+}
+
 /* --- マイク選択ポップアップ --- */
 async function openMicModal() {
   if (!micModal) return;
   micModal.hidden = false;
   requestAnimationFrame(() => micModal.classList.add('show'));
-  const ok = await homeMicMeter.start(getSavedMicId());
   await populateMicSelects();
-  if (micPermNoteHome) micPermNoteHome.hidden = ok;
+  if (recording) {
+    // 録音中: 別ストリームは開かず、録音側 analyser でレベルを表示。
+    if (micPermNoteHome) micPermNoteHome.hidden = true;
+    if (micRecNote) {
+      micRecNote.hidden = false;
+      micRecNote.textContent = activeEngine === 'webspeech'
+        ? '録音中です。マイクを切り替えると録音音声に反映されます（音声認識のマイクはブラウザの既定が使われます）。'
+        : '録音中です。マイクを切り替えると、その場で録音に反映されます。';
+    }
+    startModalRecMeter();
+  } else {
+    if (micRecNote) micRecNote.hidden = true;
+    const ok = await homeMicMeter.start(getSavedMicId());
+    if (micPermNoteHome) micPermNoteHome.hidden = ok;
+  }
 }
 function closeMicModal() {
   if (!micModal) return;
+  stopModalRecMeter();
   homeMicMeter.stop();
   micModal.classList.remove('show');
   setTimeout(() => { if (!micModal.classList.contains('show')) micModal.hidden = true; }, 260);
-}
-
-/** マイク選択が変わったら保存し、メーターを新しいデバイスで開始し直す */
-async function onMicSelected(value, meter, permNote) {
-  setSavedMicId(value);
-  syncMicSelects();
-  const ok = await meter.start(getSavedMicId());
-  if (permNote) permNote.hidden = ok;
 }
 
 if (openMicSelect) openMicSelect.addEventListener('click', openMicModal);
 if (micModalClose) micModalClose.addEventListener('click', closeMicModal);
 if (micModalDone) micModalDone.addEventListener('click', closeMicModal);
 if (micModal) micModal.addEventListener('click', (e) => { if (e.target === micModal) closeMicModal(); });
-if (micSelectHome) micSelectHome.addEventListener('change', () => onMicSelected(micSelectHome.value, homeMicMeter, micPermNoteHome));
-if (micSelectSettings) micSelectSettings.addEventListener('change', () => onMicSelected(micSelectSettings.value, settingsMicMeter, micPermNoteSettings));
+
+// ポップアップのマイク選択: 録音中は録音マイクを差し替え、待機中はメーターを付け替え
+if (micSelectHome) micSelectHome.addEventListener('change', async () => {
+  const v = micSelectHome.value;
+  setSavedMicId(v);
+  syncMicSelects();
+  if (recording) {
+    const ok = await switchRecordingMic(v);
+    if (micPermNoteHome) micPermNoteHome.hidden = ok;
+    startModalRecMeter(); // 新しいマイクの analyser でレベル表示を継続
+  } else {
+    const ok = await homeMicMeter.start(getSavedMicId());
+    if (micPermNoteHome) micPermNoteHome.hidden = ok;
+  }
+});
+
+// 設定のマイク選択: 録音中なら録音マイクも差し替え、メーターは常に最新デバイスを表示
+if (micSelectSettings) micSelectSettings.addEventListener('change', async () => {
+  const v = micSelectSettings.value;
+  setSavedMicId(v);
+  syncMicSelects();
+  if (recording) await switchRecordingMic(v);
+  const ok = await settingsMicMeter.start(getSavedMicId());
+  if (micPermNoteSettings) micPermNoteSettings.hidden = ok;
+});
 
 // マイクの抜き差し等でデバイス構成が変わったら一覧を更新
 if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
