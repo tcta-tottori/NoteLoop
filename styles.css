@@ -458,6 +458,18 @@ select:focus, input:focus, textarea:focus {
 .home-transcript .transcript:focus { border: none; box-shadow: none; outline: none; }
 .home-transcript .audio-card { margin-top: 16px; border: none; background: transparent; padding: 0; }
 
+/* ---------- Home: 段階フローカード（録音後にフェードインで順に出現） ---------- */
+.home-flow { display: flex; flex-direction: column; }
+.flow-card {
+  opacity: 0; transform: translateY(18px);
+  transition: opacity .5s ease, transform .55s cubic-bezier(.22, 1, .36, 1);
+  will-change: opacity, transform;
+}
+.flow-card.revealed { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .flow-card { transition: opacity .2s ease; transform: none !important; }
+}
+
 /* ---------- Home: idle prompt (blinking) ---------- */
 .idle-prompt {
   position: fixed; left: 0; right: 0; top: 42%; z-index: 5;
@@ -730,10 +742,8 @@ select:focus, input:focus, textarea:focus {
   .mic-dock { left: var(--sidebar-w, 288px); right: 0; }
   .idle-prompt, .rec-hint { left: var(--sidebar-w, 288px); right: 0; }
 
-  /* 議事録: 左＝録音音声＋議事録(Claude含む)、右＝書き出し＋メール */
-  #screen-minutes.active { display: block; }
-  .minutes-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap: 20px; align-items: start; }
-  .minutes-col > .panel:last-child { margin-bottom: 0; }
+  /* 録音〜メールの段階フローは読みやすい幅で中央寄せ */
+  .home-flow { max-width: 820px; margin-left: auto; margin-right: auto; width: 100%; }
 }
 
 /* =========================================================
