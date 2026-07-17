@@ -125,7 +125,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.4.6';
+const APP_VERSION = 'Ver.4.7';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1909,7 +1909,7 @@ async function downloadHistoryAudio(item) {
     download(`${safeFileName(item)}.${(item.audio && item.audio.ext) || 'webm'}`, blob, blob.type || 'audio/webm');
   } catch (_) { showError('音声の読み込みに失敗しました。'); }
 }
-function openMinutes(item) {
+async function openMinutes(item) {
   meetingName.value = item.name || '';
   meetingDate.value = item.date || '';
   participants = (item.participants || []).map((p) => ({ dept: p.dept || '', name: p.name || '' }));
@@ -1917,7 +1917,27 @@ function openMinutes(item) {
   updateMeetingSummary();
   fillMinutesUI({ summary: item.summary || [], decisions: item.decisions || [], todos: item.todos || [] });
   liveTranscript.value = item.transcript || '';
-  recordedBlob = null; // 履歴の音声はこの場では読み込まない（保存は履歴カードから）
+
+  // 履歴の録音音声を読み込み、その場で再生・確認・保存・AI連携できるようにする
+  recordedBlob = null;
+  setAudioAvailable(false);
+  downloadAudio.disabled = true;
+  downloadWav.disabled = true;
+  if (item.audio) {
+    try {
+      const blob = await idbGet(item.id);
+      if (blob) {
+        recordedBlob = blob;
+        player.src = URL.createObjectURL(blob);
+        audioSize.textContent = formatBytes(blob.size);
+        setAudioAvailable(true);
+        downloadAudio.disabled = false;
+        downloadWav.disabled = false;
+        downloadAudio.innerHTML = `${ICO_DOWNLOAD} 音声を保存 (.${extFromMime(blob.type)})`;
+      }
+    } catch (_) { /* 音声が取り出せなくても議事録の閲覧・編集は継続 */ }
+  }
+
   showScreen('screen-home', '録音・文字起こし・議事録作成');
   revealFlowCards(false); // 履歴表示は一括で出現
   updateHomeUI();
