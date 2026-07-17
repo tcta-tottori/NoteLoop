@@ -125,7 +125,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.4.7';
+const APP_VERSION = 'Ver.4.8';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -352,6 +352,7 @@ function updateFabState() {
 let worker;
 let finalResolve = null;   // 高精度パス完了を待つ Promise
 let finalCanceled = false; // 高精度パスがユーザーによって中止されたか
+let finalErrored = false;  // 高精度パスがエラー（モデルDL失敗など）で終わったか
 
 function handleWorkerMessage(e) {
   const msg = e.data || {};
@@ -383,11 +384,14 @@ function handleWorkerMessage(e) {
       break;
     case 'error':
       if (msg.mode === 'final') {
+        // 高精度パスの失敗（多くはモデルDLのネットワークエラー）。
+        // メッセージは runFinalPass 側で分かりやすく案内する。
+        finalErrored = true;
         if (finalResolve) { finalResolve(); finalResolve = null; }
       } else {
         workerBusy = false;
+        showError('文字起こしエラー: ' + msg.message);
       }
-      showError('文字起こしエラー: ' + msg.message);
       break;
   }
 }
@@ -843,6 +847,7 @@ async function runFinalPass(blob) {
   recordBtn.disabled = true;
   homeProcessing = true;
   procProgress = 0;
+  finalErrored = false;
   updateHomeUI();
   setStatus('working', '音声を準備中…');
 
@@ -893,6 +898,11 @@ async function runFinalPass(blob) {
 
     if (finalCanceled) {
       setStatus('ready', '文字起こしを中止しました（音声は履歴に保存済み）');
+    } else if (finalErrored) {
+      // モデル取得や処理のネットワークエラー。録音音声は保存済みなので、
+      // 音声から直接議事録を作れる Gemini ルートへ誘導する。
+      setStatus('', '');
+      showError('文字起こし用モデルを取得できませんでした（ネットワークエラー）。録音音声は保存済みです。通信環境の良い場所でページを再読み込みして再試行するか、下の「AIで議事録を作成（自動）」で録音音声から直接議事録を作成できます。');
     } else {
       procProgress = 1;
       progressBar.style.width = '100%';
