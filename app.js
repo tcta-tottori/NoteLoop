@@ -33,7 +33,6 @@ const player         = $('player');
 const audioSize      = $('audioSize');
 const downloadAudio  = $('downloadAudio');
 const downloadWav    = $('downloadWav');
-const goMinutesFromHome = $('goMinutesFromHome');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
 
@@ -94,9 +93,18 @@ const openMeetingInfo     = $('openMeetingInfo');
 const openMeetingInfoHome = $('openMeetingInfoHome');
 const meetingSummary = $('meetingSummary');
 
+// 録音後に段階的に出現するフローカード
+const homeFlow       = $('homeFlow');
+const audioFlowCard  = $('audioFlowCard');
+const minutesFlowCard= $('minutesFlowCard');
+const aiFlowCard     = $('aiFlowCard');
+const exportFlowCard = $('exportFlowCard');
+const mailPanel      = $('mailPanel');
+const geminiSend     = $('geminiSend');
+
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.2.1';
-const APP_UPDATED = '2026.7.16 10:40';
+const APP_VERSION = 'Ver.2.2';
+const APP_UPDATED = '2026.7.17';
 
 let participants = [];   // { dept, name }
 let sttActivity = 0;     // Web Speech 用の波の活性度
@@ -182,8 +190,7 @@ function showScreen(id, title) {
   drawerItems.forEach((b) => b.classList.toggle('active', b.dataset.target === id));
   if (title) screenTitle.textContent = title;
   window.scrollTo({ top: 0, behavior: 'smooth' });
-  if (id === 'screen-home') updateHomeUI();
-  if (id === 'screen-minutes') refreshAudioPanel();
+  if (id === 'screen-home') { updateHomeUI(); refreshAudioPanel(); }
 }
 
 /** 録音音声パネルの表示（音声の有無で再生カードと案内文を切替） */
@@ -192,6 +199,36 @@ function setAudioAvailable(has) {
   if (audioEmptyNote) audioEmptyNote.hidden = has;
 }
 function refreshAudioPanel() { setAudioAvailable(!!recordedBlob); }
+
+/* =========================================================
+ * 録音後の段階フロー（カードをフェードインで順に出現）
+ *   ・状態はメモリのみ。ページ再読込では復元されず、録音待機画面に戻る。
+ * =======================================================*/
+function flowCardList() { return [audioFlowCard, minutesFlowCard, aiFlowCard, exportFlowCard, mailPanel].filter(Boolean); }
+
+/** すべてのフローカードを隠して初期状態へ戻す（新規録音・クリア・再読込時） */
+function resetFlowCards() {
+  flowCardList().forEach((c) => { c.hidden = true; c.classList.remove('revealed'); });
+}
+
+/**
+ * フローカードを出現させる。
+ * stagger=true で1枚ずつ時間差フェードイン（録音直後の演出）。
+ */
+function revealFlowCards(stagger) {
+  refreshAudioPanel();
+  const cards = flowCardList();
+  cards.forEach((c, i) => {
+    c.hidden = false;
+    if (stagger) {
+      c.classList.remove('revealed');
+      // 表示（display 復帰）を確定させてからトランジション開始
+      setTimeout(() => c.classList.add('revealed'), 90 + i * 150);
+    } else {
+      c.classList.add('revealed');
+    }
+  });
+}
 
 /* =========================================================
  * ホーム画面の表示状態（最小構成: 待機はマイクと点滅案内のみ）
@@ -207,7 +244,6 @@ function updateHomeUI() {
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   transcriptPanel.hidden = !(recording || hasText || hasAudio);
   transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
-  if (goMinutesFromHome) goMinutesFromHome.hidden = !(hasAudio && !recording && !homeProcessing); // 録音後は議事録への導線を出す
   updateFabState();
 
   if (showWave) startWave(); else stopWave();
@@ -357,13 +393,14 @@ recordBtn.addEventListener('click', async () => {
   const st = recordBtn.dataset.state;
   if (st === 'recording') return stopRecording();
   if (st === 'processing') return;
-  if (st === 'minutes') return showScreen('screen-minutes', '議事録');
-  if (st === 'mail') { showScreen('screen-minutes', '議事録'); prepareMailFromMinutes(); scrollToEl('mailPanel'); return; }
+  if (st === 'minutes') { revealFlowCards(); runGenerate(); scrollToEl('minutesFlowCard'); return; }
+  if (st === 'mail') { revealFlowCards(); prepareMailFromMinutes(); scrollToEl('mailPanel'); return; }
   return startRecording();
 });
 
 async function startRecording() {
   hideError();
+  resetFlowCards(); // 新しい録音: 前回の段階カードを一旦すべて隠す
   activeEngine = engineSelect.value;
   acquireWakeLock(); // 設定がONなら画面を常時オンに（ユーザー操作の直後に要求）
 
@@ -526,6 +563,22 @@ async function stopRecording() {
   checkTerms(); // 登録用語（会社名など）が含まれていれば確認ポップアップ
   // 文字起こし＋音声を自動的に履歴へ保存（最大10件）
   await autoSaveRecording();
+  // 録音後のフロー: 議事録を自動生成し、カードを段階的にフェードインで出現させる
+  enterReviewFlow();
+}
+
+/**
+ * 録音停止後の段階フロー開始。
+ * 文字起こしがあれば議事録を自動生成し、音声・議事録・AI・書き出し・メールの
+ * カードを1枚ずつフェードインで出現させる（メール生成まで録音ページで完結）。
+ */
+function enterReviewFlow() {
+  if (!liveTranscript.value.trim()) { updateHomeUI(); return; }
+  ensureAutoTitle();
+  fillMinutesUI(generateMinutes(liveTranscript.value.trim())); // 議事録を自動生成
+  revealFlowCards(true); // 時間差フェードイン
+  updateHomeUI();
+  scrollToEl('transcriptPanel');
 }
 
 /* =========================================================
@@ -828,8 +881,13 @@ function appendTranscript(text) {
   liveTranscript.value = formatTranscript(cur ? cur + ' ' + text : text);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
 }
-clearTranscript.addEventListener('click', () => { liveTranscript.value = ''; updateHomeUI(); });
-if (goMinutesFromHome) goMinutesFromHome.addEventListener('click', () => showScreen('screen-minutes', '議事録'));
+clearTranscript.addEventListener('click', () => {
+  liveTranscript.value = '';
+  secSummary.value = ''; secDecisions.value = ''; secTodos.value = '';
+  recordedBlob = null; setAudioAvailable(false);
+  resetFlowCards();
+  updateHomeUI();
+});
 liveTranscript.addEventListener('input', updateHomeUI);
 
 /* ===== タイマー ===== */
@@ -1010,6 +1068,7 @@ function runGenerate() {
   hideError();
   ensureAutoTitle();  // タイトル未設定なら文字起こしから自動生成
   fillMinutesUI(generateMinutes(src));
+  updateHomeUI();     // 生成後はマイクボタンを「メール作成」段階へ更新
 }
 
 /** 文字起こしの内容から短い会議タイトルを作る */
@@ -1397,11 +1456,14 @@ async function autoSaveRecording() {
  * 過去の議事録一覧（localStorage）
  * =======================================================*/
 const STORE_KEY = 'noteloop_minutes_v1';
+const SEEDED_KEY = 'noteloop_seeded_v1';
 function loadStore() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (_) { return []; } }
 function saveStore(list) { localStorage.setItem(STORE_KEY, JSON.stringify(list)); }
 function seedIfEmpty() {
   let list = loadStore();
-  if (list.length === 0) {
+  // サンプルは「初回のみ」投入する。以後は空でも再投入しないので、
+  // ユーザーが削除した項目が再読込で復活しない（＝消したら消えたまま）。
+  if (list.length === 0 && !localStorage.getItem(SEEDED_KEY)) {
     list = [
       { id: 'seed-1', name: '週次定例MTG', date: '2026-07-14',
         summary: ['来月のリリース計画について協議した'],
@@ -1414,6 +1476,7 @@ function seedIfEmpty() {
     ];
     saveStore(list);
   }
+  localStorage.setItem(SEEDED_KEY, '1'); // 初回投入済みを記録（以後は再投入しない）
   renderHistory();
 }
 function renderHistory() {
@@ -1465,8 +1528,13 @@ function openMinutes(item) {
   renderParticipants();
   updateMeetingSummary();
   fillMinutesUI({ summary: item.summary || [], decisions: item.decisions || [], todos: item.todos || [] });
-  if (item.transcript) liveTranscript.value = item.transcript;
-  showScreen('screen-minutes', '議事録');
+  liveTranscript.value = item.transcript || '';
+  // 履歴の音声はこの場では読み込まない（保存はカードの案内どおり履歴から）
+  recordedBlob = null;
+  showScreen('screen-home', '録音・文字起こし・議事録作成');
+  revealFlowCards(false); // 履歴表示は一括で出現
+  updateHomeUI();
+  scrollToEl('transcriptPanel');
 }
 function deleteMinutes(id) {
   const item = loadStore().find((x) => x.id === id);
@@ -1591,6 +1659,25 @@ claudeSend.addEventListener('click', async () => {
     setClaudeStatus('ok', '✓ Claudeを開きました。プロンプトが未入力の場合は入力欄で <strong>貼り付け（⌘/Ctrl+V）→ 送信</strong>（コピー済み）。');
   } else {
     setClaudeStatus('warn', 'Claudeを開きました。未入力なら下の「送信するプロンプトを確認」から手動でコピーしてください。');
+  }
+});
+
+// コピーしてGeminiを開く（Geminiは事前入力に非対応のため、コピー→貼り付け）
+const GEMINI_URL = 'https://gemini.google.com/app';
+if (geminiSend) geminiSend.addEventListener('click', async () => {
+  if (!ensureTranscript()) return;
+  hideError();
+  const prompt = buildClaudePrompt();
+  claudePromptPreview.value = prompt;
+  const win = window.open(GEMINI_URL, '_blank');
+  if (win) { try { win.opener = null; } catch (_) {} }
+  const copied = await copyText(prompt);
+  if (!win) {
+    setClaudeStatus('warn', 'ポップアップがブロックされました。プロンプトはコピー済みです。<a href="' + GEMINI_URL + '" target="_blank" rel="noopener">Geminiを開く</a>と貼り付けできます。');
+  } else if (copied) {
+    setClaudeStatus('ok', '✓ Geminiを開きました。入力欄で <strong>貼り付け（⌘/Ctrl+V）→ 送信</strong>（コピー済み）。');
+  } else {
+    setClaudeStatus('warn', 'Geminiを開きました。下の「送信するプロンプトを確認」から手動でコピーしてください。');
   }
 });
 
