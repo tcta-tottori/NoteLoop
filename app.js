@@ -125,7 +125,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.4.8';
+const APP_VERSION = 'Ver.4.9';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -137,7 +137,7 @@ function computeUpdatedString() {
       return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()} ${hh}:${mm}`;
     }
   } catch (_) { /* フォールバックへ */ }
-  return '2026.7.16';
+  return '2026.7.28';
 }
 const APP_UPDATED = computeUpdatedString();
 
@@ -490,6 +490,88 @@ async function releaseWakeLock() {
   wakeLock = null;
 }
 
+/* ===== バックグラウンド録音の維持（無音再生 + MediaSession） =====
+ * スマホでは画面を消すとページが凍結され、録音（MediaRecorder / 音声認識）が
+ * 止まってしまう。これを防ぐため、録音中は「ほぼ無音」の音声をループ再生して
+ * メディアセッションを「再生中」に保つ。ブラウザはメディアを再生している
+ * タブを凍結しないため、画面を消しても録音が継続する。
+ * （Wake Lock は画面を点けたままにするだけで、電源ボタンで消すと解放される） */
+let silentAudioEl = null;
+let silentAudioUrl = null;
+/** ほぼ無音（-90dBFS 相当・実質的に聞こえない）の WAV を生成して再生用URLを返す。
+ *  完全な無音（全サンプル0）は一部ブラウザで「再生していない」と判定されるため、
+ *  極小振幅の信号を入れて確実に再生中と認識させる。 */
+function makeSilentWavUrl(seconds, sampleRate) {
+  seconds = seconds || 2;
+  sampleRate = sampleRate || 8000;
+  const frames = seconds * sampleRate;
+  const dataSize = frames * 2; // 16bit mono
+  const buf = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buf);
+  const ws = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true); ws(36, 'data'); view.setUint32(40, dataSize, true);
+  for (let i = 0; i < frames; i++) view.setInt16(44 + i * 2, (i % 2 === 0) ? 1 : -1, true); // ±1/32768 ≒ 無音
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+/** MediaSession をセットして、ロック画面等に録音中の表示と停止操作を出す */
+function setupMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    if (typeof MediaMetadata !== 'undefined') {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: '● 録音中 — NOTELOOP',
+        artist: '画面を消しても録音は続きます',
+        album: 'NOTELOOP',
+      });
+    }
+    navigator.mediaSession.playbackState = 'playing';
+    const stop = () => { if (recording) stopRecording(); };
+    navigator.mediaSession.setActionHandler('stop', stop);
+    navigator.mediaSession.setActionHandler('pause', stop);
+    navigator.mediaSession.setActionHandler('play', () => { resumeBackgroundKeepAlive(); });
+  } catch (_) { /* 非対応でも録音は継続 */ }
+}
+
+/** 録音開始時に呼ぶ（ユーザー操作直後に再生を開始する必要がある） */
+function startBackgroundKeepAlive() {
+  try {
+    if (!silentAudioEl) {
+      silentAudioUrl = makeSilentWavUrl();
+      silentAudioEl = new Audio(silentAudioUrl);
+      silentAudioEl.loop = true;
+      silentAudioEl.setAttribute('playsinline', '');
+      // バックグラウンドで一時停止されたら（録音中なら）すぐ再生し直す
+      silentAudioEl.addEventListener('pause', () => { if (recording) resumeBackgroundKeepAlive(); });
+    }
+    const p = silentAudioEl.play();
+    if (p && p.catch) p.catch(() => {}); // 自動再生拒否でも録音自体は継続
+  } catch (_) {}
+  setupMediaSession();
+}
+
+/** 画面復帰時などに、無音再生が止まっていたら再開する */
+function resumeBackgroundKeepAlive() {
+  if (!recording || !silentAudioEl) return;
+  try { if (silentAudioEl.paused) { const p = silentAudioEl.play(); if (p && p.catch) p.catch(() => {}); } } catch (_) {}
+  try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; } catch (_) {}
+}
+
+/** 録音停止時に呼ぶ */
+function stopBackgroundKeepAlive() {
+  try { if (silentAudioEl) silentAudioEl.pause(); } catch (_) {}
+  try {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'none';
+      ['stop', 'pause', 'play'].forEach((a) => { try { navigator.mediaSession.setActionHandler(a, null); } catch (_) {} });
+    }
+  } catch (_) {}
+}
+
 /* =========================================================
  * 録音
  * =======================================================*/
@@ -509,6 +591,8 @@ async function startRecording() {
   if (typeof homeMicMeter !== 'undefined') homeMicMeter.stop();
   if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
   acquireWakeLock(); // 設定がONなら画面を常時オンに（ユーザー操作の直後に要求）
+  startBackgroundKeepAlive(); // 画面を消してもページが凍結されないよう無音を再生（ユーザー操作直後に開始）
+  ensureNotifyPermission(); // 画面オフ中の常駐通知に備えて通知許可を先に取得
 
   confirmMode = (engineSelect.value === 'whisper') ? 'whisper' : 'none';
   const speechAvailable = !!getSR();
@@ -605,6 +689,7 @@ async function stopRecording() {
   clearInterval(liveTimer); liveTimer = null;
   clearRecordingNotification();
   releaseWakeLock();
+  stopBackgroundKeepAlive();
 
   if (liveMode === 'webspeech') stopWebSpeech();
 
@@ -2600,6 +2685,7 @@ if ('serviceWorker' in navigator) {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !recording) return;
   try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch (_) {}
+  resumeBackgroundKeepAlive(); // 無音再生が止まっていたら再開
   // Web Speech が停止していれば再開
   if (liveMode === 'webspeech' && !recognition) { try { beginRecognition(); } catch (_) {} }
   if (!wakeLock) acquireWakeLock(); // 画面復帰時にロックを取り直す（非表示中に自動解放されるため）
