@@ -32,6 +32,7 @@ const audioWrap      = $('audioWrap');
 const audioEmptyNote = $('audioEmptyNote');
 const player         = $('player');
 const audioSize      = $('audioSize');
+const audioWarn      = $('audioWarn');
 const downloadAudio  = $('downloadAudio');
 const downloadWav    = $('downloadWav');
 const liveTranscript = $('liveTranscript');
@@ -125,7 +126,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.4.9';
+const APP_VERSION = 'Ver.5.0';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -137,7 +138,7 @@ function computeUpdatedString() {
       return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()} ${hh}:${mm}`;
     }
   } catch (_) { /* フォールバックへ */ }
-  return '2026.7.28';
+  return '2026.7.30';
 }
 const APP_UPDATED = computeUpdatedString();
 
@@ -151,16 +152,27 @@ const LIVE_INTERVAL_MS = 3000;
 const MAX_LIVE_BACKLOG_SEC = 8;   // ライブの未処理音声の上限（超過分は捨てる＝確定パスで再処理）
 const LIVE_SILENCE_RMS = 0.006;   // これ未満のチャンクは無音とみなし送らない（「！」ハルシネーション回避）
 
+// 録音の分割保存・見張り（画面オフ中に録音が止まる問題への対策）
+const REC_TIMESLICE_MS = 3000;    // この間隔でエンコード済みデータを取り出す（＝取りこぼしを最小化）
+const REC_WATCH_MS = 4000;        // 録音が生きているかを確認する間隔
+const REC_STALL_MS = 12000;       // この時間データが来なければ「止まった」と判断して録り直す
+
 let recording = false;
 let mediaStream = null;
 let mediaRecorder = null;
-let recordedBlobs = [];
+let recordedBlobs = [];           // 現在のセグメントのチャンク
+let recordedSegments = [];        // 復帰・マイク切替で分割された確定セグメント（Blob）
+let recordChunkAt = 0;            // 最後にチャンクを受け取った時刻（停止検知用）
+let recordWatchTimer = null;
+let recordStalled = false;        // 録音が止まっていると判断中か（通知に警告を出す）
+let recordRecoverCount = 0;       // 録音を自動で復帰させた回数
+let recordRestarting = false;     // 復帰処理中（見張りの多重実行を防ぐ）
+let recordedDurationSec = 0;      // 保存された音声の実長（秒）
 let recordedBlob = null;
 let audioCtx = null;
 let sourceNode = null;
 let processorNode = null;
 let analyser = null;
-let recDest = null;       // 録音の合流点（MediaStreamAudioDestinationNode）: マイク切替に追従
 let rafId = null;
 let liveTimer = null;
 let startTime = 0;
@@ -440,13 +452,15 @@ async function ensureNotifyPermission() {
 }
 
 /** 録音中の常駐通知を表示／更新（elapsed は "00:12" 形式） */
-async function showRecordingNotification(elapsed) {
+async function showRecordingNotification(elapsed, stalled) {
   if (!('serviceWorker' in navigator)) return;
   if (!(await ensureNotifyPermission())) return;
   try {
     const reg = await navigator.serviceWorker.ready;
-    await reg.showNotification('● 録音中' + (elapsed ? '　' + elapsed : ''), {
-      body: '画面を消しても録音は続きます。ここから停止できます。',
+    await reg.showNotification((stalled ? '⚠ 録音を再開中' : '● 録音中') + (elapsed ? '　' + elapsed : ''), {
+      body: stalled
+        ? '音声が取り込めていません。画面を点けてアプリを前面に戻してください。'
+        : '画面を消しても録音は続きます。ここから停止できます。',
       tag: NOTIF_TAG, renotify: false, silent: true, requireInteraction: true,
       icon: './icons/icon-192.png', badge: './icons/favicon-48.png',
       actions: [{ action: 'stop', title: '■ 停止' }],
@@ -573,6 +587,259 @@ function stopBackgroundKeepAlive() {
 }
 
 /* =========================================================
+ * 録音の実体（MediaRecorder）の管理
+ *   画面を消すとブラウザがタブを絞る／音声処理を止めることがあり、
+ *   「タイマーは進んでいるのに音声が数分しか残っていない」事故が起きる。
+ *   対策として
+ *     ・一定間隔（REC_TIMESLICE_MS）でデータを取り出し、常に手元に確定させる
+ *     ・録音が止まっていないか見張り、止まったら録り直して継ぎ足す
+ *     ・停止時に「経過時間」と「音声の実長」を比べ、足りなければ警告する
+ *   の3段構えにしている。
+ * =======================================================*/
+
+/**
+ * ストリームから録音を開始する（1セグメント分）。
+ * timeslice 付きで start するため ondataavailable が定期的に呼ばれ、
+ * 途中でタブが落ちても直前までの音声が手元に残る。
+ * チャンクの入れ物はレコーダーごとに持たせ、録り直しの前後で混ざらないようにする。
+ */
+function startSegmentRecorder(stream) {
+  if (!stream) return null;
+  const mime = pickAudioMime();
+  let rec = null;
+  try {
+    rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  } catch (_) {
+    try { rec = new MediaRecorder(stream); } catch (_2) { return null; }
+  }
+  const chunks = [];
+  rec.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) { chunks.push(e.data); recordChunkAt = Date.now(); }
+  };
+  rec.onerror = () => { recordChunkAt = 0; }; // 見張り側で録り直す
+  try { rec.start(REC_TIMESLICE_MS); }
+  catch (_) { try { rec.start(); } catch (_2) { return null; } }
+  rec._chunks = chunks;
+  recordedBlobs = chunks;   // 現在のセグメントのチャンク列
+  recordChunkAt = Date.now();
+  return rec;
+}
+
+/** 現在のセグメントを閉じて recordedSegments に積む（データは失わない） */
+async function sealCurrentSegment() {
+  const rec = mediaRecorder;
+  mediaRecorder = null;
+  if (rec && rec.state !== 'inactive') {
+    await new Promise((resolve) => {
+      let done = false;
+      const fin = () => { if (!done) { done = true; resolve(); } };
+      rec.onstop = fin;
+      setTimeout(fin, 2500); // 応答が無くても先に進む（停止処理を止めない）
+      try { rec.stop(); } catch (_) { fin(); }
+    });
+  }
+  // 停止待ちの間に届いたチャンクも含めて、ここで確定させる
+  const chunks = (rec && rec._chunks) || recordedBlobs;
+  if (chunks && chunks.length) {
+    recordedSegments.push(new Blob(chunks, { type: chunks[0].type || 'audio/webm' }));
+  }
+  recordedBlobs = [];
+}
+
+/**
+ * 録音が止まっていないか見張る。
+ * データが来ない／マイクが切れた／MediaRecorder が死んだ場合は、
+ * マイクを取り直して録音を再開し、音声を継ぎ足す（画面オフからの復帰も想定）。
+ */
+function startRecordWatchdog() {
+  stopRecordWatchdog();
+  recordWatchTimer = setInterval(() => { recordWatchdogTick(); }, REC_WATCH_MS);
+}
+function stopRecordWatchdog() {
+  if (recordWatchTimer) { clearInterval(recordWatchTimer); recordWatchTimer = null; }
+}
+
+async function recordWatchdogTick() {
+  if (!recording || recordRestarting) return;
+  // 画面オフ中に止められがちなものを、まず起こし直す
+  try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch (_) {}
+  resumeBackgroundKeepAlive();
+
+  const track = mediaStream ? (mediaStream.getAudioTracks()[0] || null) : null;
+  const micDead = !track || track.readyState === 'ended';
+  const recDead = !mediaRecorder || mediaRecorder.state === 'inactive';
+  const stalled = !recordChunkAt || (Date.now() - recordChunkAt > REC_STALL_MS);
+
+  if (!micDead && !recDead && !stalled) {
+    if (recordStalled) { recordStalled = false; notifLastSec = -1; } // 復帰したので通知を戻す
+    return;
+  }
+  recordStalled = true;
+  notifLastSec = -1; // 次の tick で「⚠」付き通知に差し替える
+  await restartRecordSegment(micDead);
+}
+
+/**
+ * 録音を録り直す。mic を取り直す必要があれば取り直し、
+ * 新しいセグメントとして録音を続ける（停止時に1本へ結合する）。
+ */
+async function restartRecordSegment(reacquireMic) {
+  if (recordRestarting) return false;
+  recordRestarting = true;
+  try {
+    await sealCurrentSegment();
+    if (!recording) return false;
+
+    if (reacquireMic) {
+      const old = mediaStream;
+      let fresh = null;
+      try { fresh = await getMicStream(); } catch (_) { fresh = null; }
+      if (!fresh) return false;      // 取り直せない（権限喪失等）→ 次の tick で再挑戦
+      mediaStream = fresh;
+      if (old) { try { old.getTracks().forEach((t) => t.stop()); } catch (_) {} }
+      connectMicSource(mediaStream); // 波形・レベル表示を新しいマイクへ繋ぎ直す
+    }
+
+    mediaRecorder = startSegmentRecorder(mediaStream);
+    if (mediaRecorder) {
+      recordRecoverCount++;
+      recordStalled = false;
+      return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  } finally {
+    recordRestarting = false;
+  }
+}
+
+/**
+ * 停止時に、全セグメントから再生・保存用の1本の音声を作る。
+ * 分割が無ければそのまま（m4a/webm のまま）。分割があった場合は
+ * 各セグメントをデコードして 16kHz モノラル WAV に繋ぎ直す
+ * （コンテナが別々のため単純連結では再生できないため）。
+ */
+async function finalizeRecordedAudio() {
+  // 見張りによる録り直しが進行中なら、終わるまで少し待つ（取りこぼし防止）
+  for (let i = 0; i < 30 && recordRestarting; i++) await new Promise((r) => setTimeout(r, 100));
+  await sealCurrentSegment();
+  const segs = recordedSegments.filter((b) => b && b.size > 0);
+  recordedSegments = [];
+  if (!segs.length) return null;
+  if (segs.length === 1) return segs[0];
+  try {
+    return await mergeSegmentsToWav(segs);
+  } catch (_) {
+    // 結合に失敗したら、いちばん長い（大きい）セグメントを残す
+    return segs.reduce((a, b) => (b.size > a.size ? b : a), segs[0]);
+  }
+}
+
+/**
+ * 複数セグメントを 16kHz モノラル WAV 1本へ結合。
+ * 長時間の録音でも重くならないよう、デコードした区間はすぐ 16bit に落とし、
+ * 連結は Blob に任せる（巨大な連続バッファを作らない）。
+ */
+async function mergeSegmentsToWav(segs) {
+  const parts = [];
+  let frames = 0;
+  for (const s of segs) {
+    try {
+      const f32 = await decodeTo16kMono(s);
+      if (!f32 || !f32.length) continue;
+      const i16 = new Int16Array(f32.length);
+      for (let i = 0; i < f32.length; i++) {
+        const v = Math.max(-1, Math.min(1, f32[i]));
+        i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+      }
+      parts.push(i16);
+      frames += i16.length;
+    } catch (_) { /* 壊れたセグメントは飛ばして続ける */ }
+  }
+  if (!parts.length) throw new Error('結合できる音声がありませんでした');
+  return new Blob([wavHeader(frames, SAMPLE_RATE), ...parts], { type: 'audio/wav' });
+}
+
+/** 16bit モノラル WAV の44バイトヘッダを作る */
+function wavHeader(frames, sampleRate) {
+  const dataSize = frames * 2;
+  const view = new DataView(new ArrayBuffer(44));
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  ws(36, 'data'); view.setUint32(40, dataSize, true);
+  return view;
+}
+
+/**
+ * 音声ファイルの実際の長さ（秒）を調べる。
+ * MediaRecorder の webm は duration が入っていないことがあるため、
+ * その場合は末尾へシークして確定させる（取得できなければ 0）。
+ */
+function probeDurationSec(blob) {
+  return new Promise((resolve) => {
+    if (!blob) return resolve(0);
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement('audio');
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      try { el.removeAttribute('src'); el.load(); } catch (_) {}
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(v) && v > 0 ? v : 0);
+    };
+    el.preload = 'metadata';
+    el.onloadedmetadata = () => {
+      if (Number.isFinite(el.duration) && el.duration > 0) return finish(el.duration);
+      el.ontimeupdate = () => { if (Number.isFinite(el.duration) && el.duration > 0) finish(el.duration); };
+      try { el.currentTime = 1e7; } catch (_) { finish(0); } // 末尾シークで duration を確定させる
+    };
+    el.onerror = () => finish(0);
+    setTimeout(() => finish(el.duration), 8000); // 取れないまま待ち続けない
+    el.src = url;
+  });
+}
+
+/** 秒を「20分34秒」形式に（1分未満は「45秒」） */
+function formatDurationJp(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  const m = Math.floor(s / 60);
+  return m ? `${m}分${String(s % 60).padStart(2, '0')}秒` : `${s}秒`;
+}
+
+function clearAudioWarning() {
+  if (!audioWarn) return;
+  audioWarn.hidden = true;
+  audioWarn.textContent = '';
+}
+
+/**
+ * 「経過時間」と「保存された音声の長さ」を比べ、明らかに足りなければ警告する。
+ * 録音が途中で止まっていたことに気づけないまま会議が終わる、という事故を防ぐのが目的。
+ */
+function showAudioShortfallWarning(wallSec, audioSec) {
+  clearAudioWarning();
+  if (!audioWarn) return;
+  const recovered = recordRecoverCount > 0
+    ? `録音が途切れたため ${recordRecoverCount} 回自動で録り直しました。` : '';
+  // 長さが測れない／十分に録れている場合は、復帰があったときだけ知らせる
+  if (!audioSec || wallSec < 60 || audioSec >= wallSec * 0.9 - 5) {
+    if (recovered) { audioWarn.textContent = `⚠ ${recovered}`; audioWarn.hidden = false; }
+    return;
+  }
+  audioWarn.textContent =
+    `⚠ 録音時間は ${formatDurationJp(wallSec)} ですが、保存された音声は ${formatDurationJp(audioSec)} でした。` +
+    `画面を消している間に、ブラウザ（または端末の省電力機能）が録音を止めた可能性があります。${recovered}` +
+    `設定の「録音中は画面を常時オン」をON、端末のバッテリー最適化からブラウザを除外し、` +
+    `録音中は他のアプリに切り替えないようにすると安定します。`;
+  audioWarn.hidden = false;
+}
+
+/* =========================================================
  * 録音
  * =======================================================*/
 recordBtn.addEventListener('click', async () => {
@@ -600,7 +867,14 @@ async function startRecording() {
   activeEngine = (liveMode === 'webspeech') ? 'webspeech' : 'whisper'; // 互換（onSpeechEnd 等）
 
   recordedBlobs = [];
+  recordedSegments = [];
   recordedBlob = null;
+  recordedDurationSec = 0;
+  clearAudioWarning();
+  recordChunkAt = 0;
+  recordStalled = false;
+  recordRecoverCount = 0;
+  recordRestarting = false;
 
   // === ライブ字幕モード（Web Speech）＋ 音声録音を並行 ===
   // 先に録音用マイクを確保（getUserMedia → MediaRecorder）してから認識を開始する。
@@ -610,12 +884,7 @@ async function startRecording() {
     try {
       mediaStream = await getMicStream();
       recordedBlobs = [];
-      const mime = pickAudioMime();
-      try {
-        mediaRecorder = mime ? new MediaRecorder(mediaStream, { mimeType: mime }) : new MediaRecorder(mediaStream);
-        mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
-        mediaRecorder.start();
-      } catch (_) { mediaRecorder = null; }
+      mediaRecorder = startSegmentRecorder(mediaStream);
     } catch (_) { mediaStream = null; mediaRecorder = null; } // 録音不可でも字幕は続行
 
     const ok = startWebSpeech();
@@ -630,6 +899,7 @@ async function startRecording() {
     startTime = Date.now();
     updateTimer();
     timerInterval = setInterval(updateTimer, 250);
+    if (mediaRecorder) startRecordWatchdog(); // 画面オフ中に録音が止まったら録り直す
     return;
   }
 
@@ -650,24 +920,19 @@ async function startRecording() {
   // 確定に Whisper を使う場合のバックエンドを確定
   activeDevice = await resolveDevice(backendSelect ? backendSelect.value : 'auto');
 
-  // Web Audio: ネイティブレートのまま録音（保存音声の品質を維持）。
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  if (audioCtx.state === 'suspended') await audioCtx.resume();
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 1024;
-  recDest = audioCtx.createMediaStreamDestination();
-  connectMicSource(mediaStream);
+  // MediaRecorder はマイクのストリームから直接録音する。
+  // （以前は AudioContext の合流点を経由していたが、画面を消すと AudioContext が
+  //   止められて無音・途切れの原因になっていたため、経路から外した）
+  mediaRecorder = startSegmentRecorder(mediaStream);
 
-  // MediaRecorder（再生・確定再処理・音声→AI 共有用の音声を保持）
+  // Web Audio は波形表示のためだけに使う。止まっても録音そのものには影響しない。
   try {
-    const mime = pickAudioMime();
-    mediaRecorder = mime ? new MediaRecorder(recDest.stream, { mimeType: mime }) : new MediaRecorder(recDest.stream);
-    mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); };
-    mediaRecorder.start();
-  } catch (_) {
-    try { mediaRecorder = new MediaRecorder(recDest.stream); mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedBlobs.push(e.data); }; mediaRecorder.start(); }
-    catch (_2) { mediaRecorder = null; }
-  }
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    connectMicSource(mediaStream);
+  } catch (_) { audioCtx = null; analyser = null; }
 
   recording = true;
   pendingChunks = [];
@@ -678,6 +943,7 @@ async function startRecording() {
   startTime = Date.now();
   updateTimer();
   timerInterval = setInterval(updateTimer, 250);
+  if (mediaRecorder) startRecordWatchdog(); // 画面オフ中に録音が止まったら録り直す
 }
 
 async function stopRecording() {
@@ -687,25 +953,30 @@ async function stopRecording() {
 
   clearInterval(timerInterval);
   clearInterval(liveTimer); liveTimer = null;
+  stopRecordWatchdog();
   clearRecordingNotification();
   releaseWakeLock();
   stopBackgroundKeepAlive();
 
   if (liveMode === 'webspeech') stopWebSpeech();
 
-  // 録音した音声を確定
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    await new Promise((res) => { mediaRecorder.onstop = res; mediaRecorder.stop(); });
-    if (recordedBlobs.length) {
-      recordedBlob = new Blob(recordedBlobs, { type: recordedBlobs[0].type || 'audio/webm' });
-      player.src = URL.createObjectURL(recordedBlob);
-      audioSize.textContent = formatBytes(recordedBlob.size);
-      setAudioAvailable(true);
-      downloadAudio.disabled = false;
-      downloadWav.disabled = false;
-      // 保存ボタンに実際の拡張子を表示
-      downloadAudio.innerHTML = `${ICO_DOWNLOAD} 音声を保存 (.${extFromMime(recordedBlob.type)})`;
-    }
+  // 経過時間（実際に録っていたはずの長さ）を先に確定させる
+  const wallSec = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
+
+  // 録音した音声を確定（復帰で分割された場合は1本へ結合）
+  recordedBlob = await finalizeRecordedAudio();
+  if (recordedBlob) {
+    recordedDurationSec = await probeDurationSec(recordedBlob);
+    player.src = URL.createObjectURL(recordedBlob);
+    audioSize.textContent = recordedDurationSec
+      ? `${formatDurationJp(recordedDurationSec)} ・ ${formatBytes(recordedBlob.size)}`
+      : formatBytes(recordedBlob.size);
+    showAudioShortfallWarning(wallSec, recordedDurationSec);
+    setAudioAvailable(true);
+    downloadAudio.disabled = false;
+    downloadWav.disabled = false;
+    // 保存ボタンに実際の拡張子を表示
+    downloadAudio.innerHTML = `${ICO_DOWNLOAD} 音声を保存 (.${extFromMime(recordedBlob.type)})`;
   }
   teardownAudio();
 
@@ -852,32 +1123,31 @@ function teardownAudio() {
   try { if (processorNode) processorNode.disconnect(); } catch (_) {}
   try { if (sourceNode) sourceNode.disconnect(); } catch (_) {}
   try { if (analyser) analyser.disconnect(); } catch (_) {}
-  try { if (recDest) recDest.disconnect(); } catch (_) {}
   try { if (audioCtx) audioCtx.close(); } catch (_) {}
-  processorNode = sourceNode = analyser = recDest = audioCtx = null;
+  processorNode = sourceNode = analyser = audioCtx = null;
   if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
 }
 
 /**
- * 現在の audioCtx 上で、指定ストリームを録音グラフに接続する。
+ * 現在の audioCtx 上で、指定ストリームを波形表示のグラフに接続する。
  * 既存の sourceNode があれば切り離してから差し替えるため、録音中のマイク切替に使える。
+ * （録音そのものはマイクのストリームから直接行うため、この経路には依存しない）
  */
 function connectMicSource(stream) {
   if (!audioCtx) return;
   try { if (sourceNode) sourceNode.disconnect(); } catch (_) {}
   sourceNode = audioCtx.createMediaStreamSource(stream);
   if (analyser) sourceNode.connect(analyser);
-  if (recDest) sourceNode.connect(recDest);
   if (processorNode) sourceNode.connect(processorNode);
 }
 
 /**
- * 録音中にマイクを切り替える。合流点 recDest はそのままなので、
- * MediaRecorder は途切れず同じ音声ファイルへ録り続ける。
+ * 録音中にマイクを切り替える。録音はマイクのストリームから直接行っているため、
+ * 新しいマイクで録音を録り直し（セグメント分割）、停止時に1本へ結合する。
  * 戻り値: 切り替えに成功したか。
  */
 async function switchRecordingMic(deviceId) {
-  if (!recording || !audioCtx) return false;
+  if (!recording) return false;
   let newStream;
   try {
     newStream = await navigator.mediaDevices.getUserMedia(
@@ -886,11 +1156,18 @@ async function switchRecordingMic(deviceId) {
     try { newStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch (_2) { return false; }
   }
-  const old = mediaStream;
-  connectMicSource(newStream);
-  mediaStream = newStream;
-  if (old) { try { old.getTracks().forEach((t) => t.stop()); } catch (_) {} }
-  return true;
+  recordRestarting = true;
+  try {
+    await sealCurrentSegment();   // ここまでの音声を確定
+    const old = mediaStream;
+    mediaStream = newStream;
+    connectMicSource(newStream);  // 波形表示を差し替え
+    if (old) { try { old.getTracks().forEach((t) => t.stop()); } catch (_) {} }
+    mediaRecorder = startSegmentRecorder(mediaStream);
+  } finally {
+    recordRestarting = false;
+  }
+  return !!mediaRecorder;
 }
 
 /**
@@ -1132,7 +1409,8 @@ function appendTranscript(text) {
 clearTranscript.addEventListener('click', () => {
   liveTranscript.value = '';
   secSummary.value = ''; secDecisions.value = ''; secTodos.value = '';
-  recordedBlob = null; setAudioAvailable(false);
+  recordedBlob = null; recordedDurationSec = 0; setAudioAvailable(false);
+  clearAudioWarning();
   resetFlowCards();
   updateHomeUI();
 });
@@ -1144,10 +1422,11 @@ function updateTimer() {
   const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const s = String(elapsed % 60).padStart(2, '0');
   timerEl.textContent = `${m}:${s}`;
-  // 通知の経過時間は 5 秒ごとに更新（頻繁な再表示を避ける）
-  if (recording && elapsed !== notifLastSec && (elapsed % 5 === 0)) {
+  // 通知の経過時間は 5 秒以上あいたら更新する。
+  // （バックグラウンドではタイマーが間引かれて秒が飛ぶため、剰余ではなく差で判定）
+  if (recording && (notifLastSec < 0 || elapsed - notifLastSec >= 5)) {
     notifLastSec = elapsed;
-    showRecordingNotification(`${m}:${s}`);
+    showRecordingNotification(`${m}:${s}`, recordStalled);
   }
 }
 
@@ -1876,7 +2155,7 @@ async function saveRecordingNow() {
   activeRecordingId = id;
   let audio = null;
   if (recordedBlob) {
-    try { await idbPut(id, recordedBlob); audio = { ext: extFromMime(recordedBlob.type), size: recordedBlob.size }; }
+    try { await idbPut(id, recordedBlob); audio = { ext: extFromMime(recordedBlob.type), size: recordedBlob.size, sec: Math.round(recordedDurationSec || 0) }; }
     catch (_) { audio = null; }
   }
   const m = currentMinutes();
@@ -1924,7 +2203,7 @@ async function finalizeRecordingSave() {
   const id = 'rec-' + Date.now() + '-' + Math.floor(performance.now());
   let audio = null;
   if (recordedBlob) {
-    try { await idbPut(id, recordedBlob); audio = { ext: extFromMime(recordedBlob.type), size: recordedBlob.size }; }
+    try { await idbPut(id, recordedBlob); audio = { ext: extFromMime(recordedBlob.type), size: recordedBlob.size, sec: Math.round(recordedDurationSec || 0) }; }
     catch (_) { audio = null; }
   }
   list.push({ id, name: m.name, date: m.date, participants: m.participants,
@@ -2015,7 +2294,9 @@ async function openMinutes(item) {
 
   // 履歴の録音音声を読み込み、その場で再生・確認・保存・AI連携できるようにする
   recordedBlob = null;
+  recordedDurationSec = 0;
   setAudioAvailable(false);
+  clearAudioWarning();
   downloadAudio.disabled = true;
   downloadWav.disabled = true;
   if (item.audio) {
@@ -2023,8 +2304,11 @@ async function openMinutes(item) {
       const blob = await idbGet(item.id);
       if (blob) {
         recordedBlob = blob;
+        recordedDurationSec = (item.audio && item.audio.sec) || 0;
         player.src = URL.createObjectURL(blob);
-        audioSize.textContent = formatBytes(blob.size);
+        audioSize.textContent = recordedDurationSec
+          ? `${formatDurationJp(recordedDurationSec)} ・ ${formatBytes(blob.size)}`
+          : formatBytes(blob.size);
         setAudioAvailable(true);
         downloadAudio.disabled = false;
         downloadWav.disabled = false;
@@ -2368,16 +2652,12 @@ function blobToBase64(blob) {
 /** 録音 Blob を 16kHz モノラル WAV（Gemini 対応形式）へ変換 */
 async function toWav16kMono(blob) {
   const f32 = await decodeTo16kMono(blob); // Float32 @16kHz mono
-  const frames = f32.length, dataSize = frames * 2;
-  const arr = new ArrayBuffer(44 + dataSize), view = new DataView(arr);
-  const ws = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
-  ws(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); ws(8, 'WAVE');
-  ws(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-  view.setUint32(24, 16000, true); view.setUint32(28, 16000 * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-  ws(36, 'data'); view.setUint32(40, dataSize, true);
-  let o = 44;
-  for (let i = 0; i < frames; i++) { const s = Math.max(-1, Math.min(1, f32[i])); view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true); o += 2; }
-  return new Blob([view], { type: 'audio/wav' });
+  const i16 = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const v = Math.max(-1, Math.min(1, f32[i]));
+    i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+  }
+  return new Blob([wavHeader(i16.length, SAMPLE_RATE), i16], { type: 'audio/wav' });
 }
 
 /** Files API（大きい音声）へレジューム可能アップロードして fileUri を得る */
@@ -2690,4 +2970,6 @@ document.addEventListener('visibilitychange', () => {
   if (liveMode === 'webspeech' && !recognition) { try { beginRecognition(); } catch (_) {} }
   if (!wakeLock) acquireWakeLock(); // 画面復帰時にロックを取り直す（非表示中に自動解放されるため）
   notifLastSec = -1; // 次のtickで通知を更新
+  // 非表示中に録音が止まっていたら、待たずにその場で録り直す
+  recordWatchdogTick();
 });
