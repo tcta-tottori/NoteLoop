@@ -126,7 +126,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.0';
+const APP_VERSION = 'Ver.5.1';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -2598,7 +2598,8 @@ const GENAI_BASE = 'https://generativelanguage.googleapis.com';
 const GEMINI_INLINE_LIMIT = 18 * 1024 * 1024; // これ以下は inline、超えたら Files API
 
 function loadGeminiKey() { return (localStorage.getItem(GEMINI_KEY_KEY) || '').trim(); }
-function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || 'gemini-3.5-flash'; }
+const GEMINI_DEFAULT_MODEL = 'gemini-3.6-flash';
+function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || GEMINI_DEFAULT_MODEL; }
 
 /* --- 無料枠の使用状況（この端末での推定・毎日リセット）--- */
 const GEMINI_USAGE_KEY = 'noteloop_gemini_usage';
@@ -2623,13 +2624,13 @@ function renderUsage() {
   geminiUsageBox.hidden = false;
   const u = loadUsage();
   const pct = Math.min(100, Math.round((u.requests / GEMINI_FREE_RPD) * 100));
-  if (geminiUsageCount) geminiUsageCount.textContent = `${u.requests.toLocaleString()} / ${GEMINI_FREE_RPD.toLocaleString()} 回`;
+  if (geminiUsageCount) geminiUsageCount.textContent = `${u.requests.toLocaleString()} / ${GEMINI_FREE_RPD.toLocaleString()} 回（目安）`;
   if (geminiUsageFill) { geminiUsageFill.style.width = pct + '%'; geminiUsageFill.className = 'quota-fill' + (pct >= 80 ? ' warn' : ''); }
   if (geminiUsageDetail) {
     const remain = Math.max(0, GEMINI_FREE_RPD - u.requests);
     const kt = Math.round(u.tokens / 1000);
     geminiUsageDetail.innerHTML = `残り約 <strong>${remain.toLocaleString()}</strong> 回（本日の消費トークン 約 ${kt.toLocaleString()}k）。` +
-      `<br>※Googleの実際の枠はこの端末以外の利用も含みます。上限は太平洋時間の深夜にリセット。`;
+      `<br>※上限 ${GEMINI_FREE_RPD.toLocaleString()} 回は目安です（モデルと時期で変わります）。実際の枠はこの端末以外の利用も含み、太平洋時間の深夜にリセットされます。`;
   }
 }
 
@@ -2800,7 +2801,12 @@ if (geminiApiKey) {
   geminiApiKey.addEventListener('input', () => { localStorage.setItem(GEMINI_KEY_KEY, geminiApiKey.value.trim()); updateGeminiKeyStatus(); });
 }
 if (geminiModel) {
-  geminiModel.value = loadGeminiModel();
+  // 保存済みのモデルが選択肢に無い（提供終了・古い版で選んだ等）場合は既定に戻す。
+  // そのままだと選択が空欄になり、リクエストのモデル名も空になってしまう。
+  const saved = loadGeminiModel();
+  const known = Array.from(geminiModel.options).some((o) => o.value === saved);
+  geminiModel.value = known ? saved : GEMINI_DEFAULT_MODEL;
+  if (!known) localStorage.removeItem(GEMINI_MODEL_KEY);
   geminiModel.addEventListener('change', () => localStorage.setItem(GEMINI_MODEL_KEY, geminiModel.value));
 }
 updateGeminiKeyStatus();
