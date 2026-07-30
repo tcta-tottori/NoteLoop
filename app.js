@@ -101,6 +101,8 @@ const geminiInstructionReset = $('geminiInstructionReset');
 const geminiApiKey         = $('geminiApiKey');
 const geminiModel          = $('geminiModel');
 const geminiKeyStatus      = $('geminiKeyStatus');
+const geminiKeyTest        = $('geminiKeyTest');
+const geminiKeyTestStatus  = $('geminiKeyTestStatus');
 const geminiUsageBox       = $('geminiUsageBox');
 const geminiUsageCount     = $('geminiUsageCount');
 const geminiUsageFill      = $('geminiUsageFill');
@@ -126,7 +128,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.1';
+const APP_VERSION = 'Ver.5.2';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -2598,8 +2600,17 @@ const GENAI_BASE = 'https://generativelanguage.googleapis.com';
 const GEMINI_INLINE_LIMIT = 18 * 1024 * 1024; // これ以下は inline、超えたら Files API
 
 function loadGeminiKey() { return (localStorage.getItem(GEMINI_KEY_KEY) || '').trim(); }
-const GEMINI_DEFAULT_MODEL = 'gemini-3.6-flash';
+// 既定は「無料枠で実際に通るモデル」を選ぶ。
+// gemini-3.6-flash / gemini-flash-latest は無料枠に割り当てが無く、
+// 請求先未設定のプロジェクトでは 429（RESOURCE_EXHAUSTED）で必ず失敗する。
+const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash';
+// 選択モデルが 404（提供終了）や 429（無料枠なし）で使えないときに順に試す代替。
+const GEMINI_FALLBACK_MODELS = ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
 function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || GEMINI_DEFAULT_MODEL; }
+
+// APIキーの形式。Google AI Studio は従来の「AIza…」に加え、
+// 新形式の「AQ.…」も発行する。どちらも有効なので両方を受け付ける。
+function isLikelyGeminiKey(k) { return /^AIza[\w-]{10,}$/.test(k) || /^AQ\.[\w.-]{10,}$/.test(k); }
 
 /* --- 無料枠の使用状況（この端末での推定・毎日リセット）--- */
 const GEMINI_USAGE_KEY = 'noteloop_gemini_usage';
@@ -2697,6 +2708,26 @@ async function geminiUploadFile(blob, key) {
   return { uri: file.uri, mime };
 }
 
+/** HTTPステータスとAPIメッセージから、原因が分かる日本語エラーを作る */
+function geminiHttpError(status, msg, model) {
+  if (status === 400 && /API[ _]key not valid|API_KEY_INVALID/i.test(msg)) {
+    return new Error('APIキーが正しくありません。設定→AI連携 のキーを貼り直してください（AI Studio のコピーボタンでキー全体をコピーしてください。画面上の「AQ.Ab8…」のような省略表示をそのまま入力すると弾かれます）。');
+  }
+  if (status === 403) {
+    return new Error('このAPIキーでは実行できませんでした（キーの制限、またはGenerative Language APIが無効の可能性）。AI Studio でキーの設定を確認してください。詳細: ' + msg);
+  }
+  if (status === 404) {
+    return new Error(`モデル「${model}」は現在このキーでは使えません（提供終了などの可能性）。設定→AI連携 のモデルを変更してください。`);
+  }
+  if (status === 429) {
+    return new Error(`モデル「${model}」の利用枠に達しました。無料枠（請求先未設定）のプロジェクトでは最新モデル（gemini-3.6-flash / gemini-flash-latest）に割り当てが無く、常にこのエラーになります。設定→AI連携 のモデルを gemini-3.5-flash に変更してお試しください。`);
+  }
+  return new Error('Gemini APIエラー（' + status + '）: ' + msg);
+}
+
+// 代替モデルで生成できたときに、実際に使ったモデル名を控えて画面に知らせる。
+let lastGeminiFallbackModel = '';
+
 /** 録音音声を Gemini に送り、議事録＋メール文面テキストを返す */
 async function geminiGenerateMinutes(onStage) {
   const key = loadGeminiKey();
@@ -2720,19 +2751,36 @@ async function geminiGenerateMinutes(onStage) {
 
   onStage && onStage('Geminiが議事録を作成中…');
   const body = { contents: [{ parts: [{ text: prompt }, audioPart] }] };
-  const res = await fetch(`${GENAI_BASE}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
+
+  // 選択モデルが使えない（提供終了 / 無料枠なし）ときは代替モデルで自動的に再試行する。
+  const tried = [];
+  let data = null, lastErr = null, usedModel = model;
+  for (const m of [model, ...GEMINI_FALLBACK_MODELS]) {
+    if (tried.includes(m)) continue;
+    tried.push(m);
+    if (tried.length > 1) onStage && onStage(`${m} で作成し直しています…`);
+    const res = await fetch(`${GENAI_BASE}/v1beta/models/${encodeURIComponent(m)}:generateContent`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) { data = await res.json(); usedModel = m; break; }
+
     let msg = String(res.status);
     try { const e = await res.json(); msg = (e.error && e.error.message) || msg; } catch (_) {}
-    if (res.status === 400 && /API key|API_KEY/i.test(msg)) throw new Error('APIキーが無効です。設定→AI連携 のキーを確認してください。');
-    if (res.status === 429) throw new Error('利用上限に達しました（無料枠の1分/1日の上限など）。少し待つか、モデルを見直してください。');
-    throw new Error('Gemini APIエラー: ' + msg);
+    lastErr = geminiHttpError(res.status, msg, m);
+    // 404（モデルが無い）と 429（枠切れ）だけ代替モデルを試す。
+    // キー不正・権限・リクエスト不正はモデルを変えても直らないので即座に中断する。
+    if (res.status !== 404 && res.status !== 429) throw lastErr;
   }
-  const data = await res.json();
+  if (!data) {
+    if (tried.length > 1) {
+      throw new Error(`どのモデルでも作成できませんでした（試行: ${tried.join(' / ')}）。最後のエラー: ` + (lastErr ? lastErr.message : '不明'));
+    }
+    throw lastErr || new Error('Gemini APIエラー');
+  }
+  if (usedModel !== model) lastGeminiFallbackModel = usedModel;
+  else lastGeminiFallbackModel = '';
   const cand = (data.candidates || [])[0] || {};
   const parts = (cand.content && cand.content.parts) || [];
   const text = parts.map((p) => p.text || '').join('').trim();
@@ -2764,7 +2812,10 @@ if (aiAutoBtn) aiAutoBtn.addEventListener('click', async () => {
     ensureAutoTitle();
     if (mailBody && !mailBody.value.trim()) mailBody.value = text;
     const u = loadUsage();
-    setAiAutoStatus('ok', `✓ 議事録＋メール文面を生成しました（本日 ${u.requests}/${GEMINI_FREE_RPD}回・推定）。下で編集・コピー、メール本文にも反映済み。`);
+    const note = lastGeminiFallbackModel
+      ? `<br>※選択中のモデルが使えなかったため <strong>${lastGeminiFallbackModel}</strong> で作成しました。設定→AI連携 でモデルを変更できます。`
+      : '';
+    setAiAutoStatus('ok', `✓ 議事録＋メール文面を生成しました（本日 ${u.requests}/${GEMINI_FREE_RPD}回・推定）。下で編集・コピー、メール本文にも反映済み。${note}`);
   } catch (err) {
     if (err && err.noKey) setAiAutoStatus('warn', '⚠ APIキーが未設定です。設定→AI連携で入力してください。');
     else setAiAutoStatus('warn', '⚠ ' + (err && err.message ? err.message : err));
@@ -2787,15 +2838,54 @@ function updateGeminiKeyStatus() {
   const k = loadGeminiKey();
   if (!k) { geminiKeyStatus.hidden = true; return; }
   geminiKeyStatus.hidden = false;
-  if (!/^AIza[\w-]{10,}$/.test(k)) {
+  if (!isLikelyGeminiKey(k)) {
     geminiKeyStatus.className = 'field-hint warn';
-    geminiKeyStatus.textContent = '⚠ キーの形式が想定と異なります（通常 AIza… で始まります）。';
+    geminiKeyStatus.textContent = '⚠ キーの形式が想定と異なります（通常 AIza… または AQ.… で始まります）。省略表示（末尾が「…」）をそのまま貼っていないか確認してください。';
   } else {
     geminiKeyStatus.className = 'field-hint';
-    geminiKeyStatus.textContent = '✓ キーを保存しました（この端末内のみ）。「議事録」画面の「AIで議事録を作成（自動）」が使えます。';
+    geminiKeyStatus.textContent = '✓ キーを保存しました（この端末内のみ）。「議事録」画面の「AIで議事録を作成（自動）」が使えます。下の「キーをテスト」で実際に使えるか確認できます。';
   }
   renderUsage();
 }
+
+/** 設定画面の「キーをテスト」— 実際にAPIを叩き、キーとモデルの可否を確認する */
+async function testGeminiKey() {
+  if (!geminiKeyTestStatus) return;
+  const key = loadGeminiKey();
+  const show = (kind, html) => {
+    geminiKeyTestStatus.hidden = false;
+    geminiKeyTestStatus.className = 'field-hint' + (kind ? ' ' + kind : '');
+    geminiKeyTestStatus.innerHTML = html;
+  };
+  if (!key) { show('warn', '⚠ キーが未入力です。'); return; }
+  geminiKeyTest.disabled = true;
+  show('', 'テスト中…');
+  try {
+    const res = await fetch(`${GENAI_BASE}/v1beta/models?pageSize=200`, { headers: { 'x-goog-api-key': key } });
+    if (!res.ok) {
+      let msg = String(res.status);
+      try { const e = await res.json(); msg = (e.error && e.error.message) || msg; } catch (_) {}
+      show('warn', '⚠ ' + geminiHttpError(res.status, msg, loadGeminiModel()).message);
+      return;
+    }
+    const data = await res.json();
+    const names = (data.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map((m) => String(m.name || '').replace('models/', ''));
+    const model = loadGeminiModel();
+    if (names.includes(model)) {
+      show('ok', `✓ キーは有効です。選択中のモデル <strong>${model}</strong> も利用できます。`);
+    } else {
+      const alt = GEMINI_FALLBACK_MODELS.find((m) => names.includes(m)) || names[0] || '（なし）';
+      show('warn', `⚠ キーは有効ですが、選択中の <strong>${model}</strong> はこのキーで利用できません。<strong>${alt}</strong> に変更してください。`);
+    }
+  } catch (err) {
+    show('warn', '⚠ 通信に失敗しました（オフライン、または接続がブロックされている可能性）。' + (err && err.message ? ' 詳細: ' + err.message : ''));
+  } finally {
+    geminiKeyTest.disabled = false;
+  }
+}
+if (geminiKeyTest) geminiKeyTest.addEventListener('click', testGeminiKey);
 if (geminiApiKey) {
   geminiApiKey.value = loadGeminiKey();
   geminiApiKey.addEventListener('input', () => { localStorage.setItem(GEMINI_KEY_KEY, geminiApiKey.value.trim()); updateGeminiKeyStatus(); });

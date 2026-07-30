@@ -351,19 +351,22 @@
         <h3 class="settings-group-title">AI連携</h3>
         <div class="field settings-field">
           <label for="geminiApiKey">Gemini API キー（自動生成に使用・任意）</label>
-          <input id="geminiApiKey" type="password" autocomplete="off" placeholder="AIza… で始まるキーを貼り付け" />
+          <input id="geminiApiKey" type="password" autocomplete="off" placeholder="AIza… または AQ.… で始まるキーを貼り付け" />
           <p class="field-hint">これを設定すると、議事録画面の <strong>「AIで議事録を作成（自動）」</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
           <div class="settings-field" style="margin-top:8px;">
             <label for="geminiModel" style="font-size:12px;color:var(--muted);">モデル</label>
             <select id="geminiModel">
-              <option value="gemini-3.6-flash" selected>gemini-3.6-flash（推奨・最新・無料枠）</option>
-              <option value="gemini-flash-latest">gemini-flash-latest（常に最新Flash）</option>
-              <option value="gemini-3.5-flash">gemini-3.5-flash（前世代・安定）</option>
-              <option value="gemini-2.5-flash">gemini-2.5-flash（旧・安定）</option>
-              <option value="gemini-3.5-pro">gemini-3.5-pro（最高精度・要課金）</option>
+              <option value="gemini-3.5-flash" selected>gemini-3.5-flash（推奨・無料枠で使える）</option>
+              <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite（軽量・高速 / 無料枠）</option>
+              <option value="gemini-3.6-flash">gemini-3.6-flash（最新・要課金）</option>
+              <option value="gemini-flash-latest">gemini-flash-latest（常に最新Flash・要課金）</option>
+              <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview（最高精度・要課金）</option>
             </select>
+            <p class="field-hint">「要課金」のモデルは、Google Cloud プロジェクトに<strong>請求先が設定されていない</strong>と必ず上限エラー（429）になります。無料で使う場合は <strong>gemini-3.5-flash</strong> を選んでください。</p>
           </div>
           <p class="field-hint warn" id="geminiKeyStatus" hidden></p>
+          <button class="secondary-btn key-test-btn" id="geminiKeyTest" type="button">キーをテスト</button>
+          <p class="field-hint" id="geminiKeyTestStatus" hidden></p>
           <div class="quota-box" id="geminiUsageBox" hidden>
             <div class="quota-head">
               <span>本日の利用（この端末での推定）</span>
@@ -377,7 +380,7 @@
             <ol class="key-help-steps">
               <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio のAPIキー画面</a>を開き、Googleアカウントでログイン（<strong>クレジットカード不要</strong>）。</li>
               <li>「Create API key」でキーを作成。<strong>請求（Billing）は絶対に有効化しない</strong>。有効化するとそのプロジェクトは無料枠が消え、1トークン目から課金対象になります。</li>
-              <li>できた <code>AIza…</code> を上の欄に貼り付け。モデルは <strong>gemini-3.6-flash</strong>（<strong>Flashのみ無料</strong>。Proは選ばない）。</li>
+              <li>できたキー（<code>AIza…</code> または <code>AQ.…</code>）を、<strong>コピーボタン</strong>で全体をコピーして上の欄に貼り付け（画面に出ている省略表示「AQ.Ab8…」を手入力すると無効キー扱いになります）。モデルは <strong>gemini-3.5-flash</strong>（<strong>Flashのみ無料</strong>。Proと最新のgemini-3.6-flashは無料枠に割り当てが無く429エラーになります）。貼り付けたら <strong>「キーをテスト」</strong>で実際に使えるか確認できます。</li>
               <li>無料枠の上限（1分あたり・1日あたりの回数）は<strong>モデルと時期で変わります</strong>。正確な残量は <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">AI Studio のキー画面</a>で確認してください。超えても課金ではなく <strong>エラー（429）で止まるだけ</strong>なので、無料枠だけで安全に使えます（上の「本日の利用」はこの端末で数えた目安です）。</li>
             </ol>
             <p class="field-hint warn">⚠ プライバシー：無料枠は入力/出力が <strong>Googleの製品改善に使われる・人間が確認する場合</strong>があります。機密性の高い会議音声の送信は避けてください（学習利用を止めるには有料契約が必要＝無料枠ではなくなります）。</p>
