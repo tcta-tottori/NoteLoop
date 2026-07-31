@@ -16,3 +16,6 @@ android/local.properties
 *.apk
 *.aab
 *.keystore
+# 署名鍵だけは例外。ビルドのたびに署名が変わるとアプリを上書き更新できないため、
+# 検証用アプリの鍵をリポジトリで共有している（android/app/build.gradle 参照）。
+!android/app/noteloop.keystore

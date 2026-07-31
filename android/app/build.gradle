@@ -3,12 +3,27 @@ apply plugin: 'com.android.application'
 android {
     namespace "jp.tcta.noteloop"
     compileSdk rootProject.ext.compileSdkVersion
+
+    // 署名鍵を固定する。
+    // 既定の debug 用鍵はビルドする環境ごとに自動生成されるため、CI で作り直すたび
+    // 署名が変わり、端末が「既存のパッケージと競合する」として上書き更新を拒否する
+    // （＝毎回アンインストールが必要になり、設定・履歴が消える）。
+    // ストア配布ではない社内検証用アプリなので、この鍵はリポジトリに含めている。
+    signingConfigs {
+        shared {
+            storeFile file('noteloop.keystore')
+            storePassword 'noteloop'
+            keyAlias 'noteloop'
+            keyPassword 'noteloop'
+        }
+    }
+
     defaultConfig {
         applicationId "jp.tcta.noteloop"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 60200
-        versionName "6.2"
+        versionCode 60300
+        versionName "6.3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -17,9 +32,13 @@ android {
         }
     }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.shared
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.shared
         }
     }
 }
