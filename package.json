@@ -4,7 +4,7 @@
   "private": true,
   "description": "NOTELOOP — 録音・文字起こし・議事録作成",
   "scripts": {
-    "build": "node scripts/build-www.mjs",
+    "build": "node scripts/sync-version.mjs && node scripts/build-www.mjs",
     "sync": "npm run build && cap sync android",
     "open:android": "cap open android"
   },

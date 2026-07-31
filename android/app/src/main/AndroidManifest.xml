@@ -51,6 +51,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <!-- Android 13 以降、録音中の常駐通知を出すために必要 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- アプリ内更新: ダウンロードしたAPKのインストーラを開くために必要 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
 </manifest>

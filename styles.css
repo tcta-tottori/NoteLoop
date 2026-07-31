@@ -231,6 +231,15 @@ a:hover { text-decoration: underline; }
 /* 設定→AI連携 の「キーをテスト」 */
 .key-test-btn { width: auto; padding: 8px 16px; font-size: 13px; margin-top: 6px; }
 /* APIキー入力＋表示切替（貼り付けミスを目で確認できるように） */
+/* 設定→アプリの更新 */
+.update-box {
+  border: 1px solid color-mix(in srgb, var(--brand1) 32%, var(--border));
+  background: color-mix(in srgb, var(--brand1) 8%, transparent);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 10px;
+}
+.update-box .field-hint { margin: 0; }
+.update-btn { width: auto; padding: 9px 18px; font-size: 13px; margin-top: 10px; }
+
 .key-input-row { display: flex; align-items: stretch; gap: 8px; }
 .key-input-row input { flex: 1; min-width: 0; }
 .key-reveal-btn {

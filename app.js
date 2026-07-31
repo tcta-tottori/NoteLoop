@@ -131,7 +131,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.8';
+const APP_VERSION = 'Ver.5.9';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -3380,6 +3380,91 @@ renderParticipants();
 loadTermDict();
 drawerVerMain.textContent = APP_VERSION;
 drawerVerSub.textContent = APP_UPDATED;
+
+/* =========================================================
+ * アプリ内更新（Androidアプリ版のみ）
+ *   ストア配布ではないので自動更新が効かない。新しい版が出ていたら
+ *   設定画面で知らせ、その場でダウンロード→インストールまで行う。
+ * =======================================================*/
+// Release に添付した version.json を見る。APK と同じビルドの成果物なので、
+// 「配信中のAPKの版数」と必ず一致する（リポジトリ側のファイルだとズレうる）。
+const VERSION_JSON_URL = 'https://github.com/tcta-tottori/NoteLoop/releases/latest/download/version.json';
+const updateBox      = $('updateBox');
+const updateText     = $('updateText');
+const updateBtn      = $('updateBtn');
+const updateCheckBtn = $('updateCheckBtn');
+let updateInfo = null;
+
+function setUpdateStatus(kind, html, showBtn) {
+  if (!updateBox) return;
+  updateBox.hidden = false;
+  updateText.className = 'field-hint' + (kind ? ' ' + kind : '');
+  updateText.innerHTML = html;
+  if (updateBtn) updateBtn.hidden = !showBtn;
+}
+
+/** 配信中の版を調べ、いまのアプリより新しければ知らせる */
+async function checkForUpdate(manual) {
+  if (!updateBox) return;
+  if (!NATIVE) {
+    // ブラウザ版は再読み込みで最新になるので、確認の仕組みそのものが要らない
+    if (manual) setUpdateStatus('ok', 'ブラウザで開いているため、更新の確認は不要です。ページを再読み込みすれば常に最新版になります。', false);
+    return;
+  }
+  const up = window.Capacitor.Plugins.Updater;
+  if (!up) {
+    if (manual) setUpdateStatus('warn', '⚠ このアプリには更新機能が入っていません。古い版のようなので、ブラウザから最新のAPKを入れ直してください。', false);
+    return;
+  }
+  try {
+    if (manual) setUpdateStatus('', '確認中…', false);
+    const cur = await up.getInfo();
+    // キャッシュを避けるため毎回クエリを変える
+    const res = await fetch(`${VERSION_JSON_URL}?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const latest = await res.json();
+    updateInfo = latest;
+    if (Number(latest.versionCode) > Number(cur.versionCode)) {
+      setUpdateStatus('warn',
+        `新しいバージョン <strong>${latest.version}</strong> があります（現在 ${cur.versionName}）。`
+        + '<br>下のボタンでダウンロードし、そのままインストールできます。', true);
+    } else if (manual) {
+      setUpdateStatus('ok', `✓ 最新版です（${cur.versionName}）。`, false);
+    } else {
+      updateBox.hidden = true;
+    }
+  } catch (err) {
+    if (manual) setUpdateStatus('warn', '⚠ 更新を確認できませんでした（通信を確認してください）。' + ((err && err.message) ? ' 詳細: ' + err.message : ''));
+  }
+}
+
+if (updateCheckBtn) updateCheckBtn.addEventListener('click', () => checkForUpdate(true));
+if (updateBtn) updateBtn.addEventListener('click', async () => {
+  const up = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Updater;
+  if (!up || !updateInfo) return;
+  updateBtn.disabled = true;
+  const orig = updateBtn.textContent;
+  updateBtn.textContent = 'ダウンロード中…';
+  // 進捗はネイティブ側から流れてくる
+  const sub = up.addListener('downloadProgress', (ev) => {
+    if (ev && ev.percent >= 0) updateBtn.textContent = `ダウンロード中… ${ev.percent}%`;
+  });
+  try {
+    await up.downloadAndInstall({ url: updateInfo.apk });
+    setUpdateStatus('ok', '✓ ダウンロードが完了しました。表示されたインストール画面で「インストール」を押してください。', false);
+  } catch (err) {
+    setUpdateStatus('warn', '⚠ ' + ((err && err.message) || err)
+      + '<br>うまくいかない場合は、ブラウザから直接ダウンロードしてください: '
+      + `<a href="${updateInfo.apk}" target="_blank" rel="noopener">APKを開く</a>`);
+  } finally {
+    try { (await sub).remove(); } catch (_) {}
+    updateBtn.disabled = false;
+    updateBtn.textContent = orig;
+  }
+});
+
+// 起動時にそっと確認する（新しい版が無ければ何も出さない）
+if (NATIVE) setTimeout(() => checkForUpdate(false), 2500);
 const manVer = $('manVer'); if (manVer) manVer.textContent = `${APP_VERSION} ・ ${APP_UPDATED}`;
 // マニュアルの目次: クリックで該当セクションへスクロール
 document.querySelectorAll('.man-toc button[data-goto]').forEach((b) => {

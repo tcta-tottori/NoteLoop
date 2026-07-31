@@ -53,6 +53,8 @@ jobs:
           # Chrome は .apk を「危険なファイル」として保存前に破棄することがある。
           # zip なら止められないので、同じものを zip でも置いておく。
           (cd dist && zip -q NOTELOOP-apk.zip NOTELOOP.apk)
+          # アプリ内更新の判定に使う。同じビルドの成果物として一緒に配る。
+          cp version.json dist/version.json
           ls -lh dist
           sha256sum dist/NOTELOOP.apk
 
@@ -95,9 +97,9 @@ jobs:
 
           if gh release view latest >/dev/null 2>&1; then
             gh release edit latest --title "NOTELOOP $VER" --notes "$NOTES"
-            gh release upload latest dist/NOTELOOP.apk dist/NOTELOOP-apk.zip --clobber
+            gh release upload latest dist/NOTELOOP.apk dist/NOTELOOP-apk.zip dist/version.json --clobber
           else
-            gh release create latest dist/NOTELOOP.apk dist/NOTELOOP-apk.zip \
+            gh release create latest dist/NOTELOOP.apk dist/NOTELOOP-apk.zip dist/version.json \
               --title "NOTELOOP $VER" --notes "$NOTES" --latest
           fi
           echo "APK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/NOTELOOP.apk"

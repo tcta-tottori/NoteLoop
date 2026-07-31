@@ -430,6 +430,18 @@
       </div>
 
       <div class="panel about-panel">
+        <h3 class="settings-group-title">アプリの更新</h3>
+        <div class="field settings-field">
+          <div class="update-box" id="updateBox" hidden>
+            <p class="field-hint" id="updateText"></p>
+            <button class="primary-btn update-btn" id="updateBtn" type="button" hidden>ダウンロードして更新</button>
+          </div>
+          <button class="secondary-btn key-test-btn" id="updateCheckBtn" type="button">更新を確認</button>
+          <p class="field-hint">アプリ版（APK）でのみ動作します。新しい版が公開されていれば、この画面からダウンロードしてそのままインストールできます。ブラウザで開いている場合は、再読み込みすれば常に最新です。</p>
+        </div>
+      </div>
+
+      <div class="panel">
         <h3 class="settings-group-title">このアプリについて</h3>
         <p>録音・文字起こし・議事録化・出力をすべて<strong>ブラウザ内で完結</strong>するPoCサンプルです。音声は外部へ送信されません。文字起こしは <a href="https://github.com/xenova/transformers.js" target="_blank" rel="noopener">Transformers.js</a> の Whisper を利用しています。</p>
         <p class="field-hint">初回はモデル（数十MB〜数百MB）のダウンロードが発生します。Wi-Fi環境での初回利用を推奨します。</p>
