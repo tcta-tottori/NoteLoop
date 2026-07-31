@@ -197,9 +197,16 @@ OSに録音を止められません。長時間の会議で音声が途中まで
 
 **https://github.com/tcta-tottori/NoteLoop/releases/latest/download/NOTELOOP.apk**
 
-このURLを端末のブラウザで開けば、そのままAPKがダウンロードされます
-（ログイン不要・zipではありません）。落ちてきたファイルをタップしてインストール
-してください。「提供元不明のアプリ」の許可を求められたら許可します。
+このURLを**Chromeアプリで直接**開いてください（GitHubアプリ内のブラウザからだと
+保存されないことがあります）。落ちてきたファイルをタップしてインストールします。
+「提供元不明のアプリ」の許可を求められたら許可してください。
+
+**Chromeが「危険なファイル」としてAPKを消してしまう場合**は、次のどちらかで回避できます。
+
+- Chrome の ⋮ →「ダウンロード」を開き、ブロックされた `NOTELOOP.apk` の
+  ⋮ →「ダウンロードを続行」（システムの「ファイル」アプリには出ません）
+- zip版を使う: https://github.com/tcta-tottori/NoteLoop/releases/latest/download/NOTELOOP-apk.zip
+  （中身は同じAPK。展開してからタップ）
 
 `main` へpushするたびに GitHub Actions がビルドし、上のURLの中身が
 最新版に差し替わります。手動で走らせる場合は Actions 画面の

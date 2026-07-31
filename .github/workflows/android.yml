@@ -50,7 +50,11 @@ jobs:
           mkdir -p dist
           # Release では常に同じ名前にする（ダウンロードURLを固定するため）
           cp android/app/build/outputs/apk/debug/app-debug.apk dist/NOTELOOP.apk
+          # Chrome は .apk を「危険なファイル」として保存前に破棄することがある。
+          # zip なら止められないので、同じものを zip でも置いておく。
+          (cd dist && zip -q NOTELOOP-apk.zip NOTELOOP.apk)
           ls -lh dist
+          sha256sum dist/NOTELOOP.apk
 
       - name: APK をアップロード（Actions の成果物・PC向け）
         uses: actions/upload-artifact@v4
@@ -67,23 +71,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VER=$(grep -oP "APP_VERSION = 'Ver\.\K[0-9.]+" app.js || echo "?")
+          SUM=$(sha256sum dist/NOTELOOP.apk | cut -d' ' -f1)
+          SIZE=$(stat -c%s dist/NOTELOOP.apk)
           NOTES="NOTELOOP $VER（Androidアプリ版）
 
-          このAPKをタップしてインストールしてください（提供元不明のアプリの許可が必要です）。
           録音はネイティブのフォアグラウンドサービスで行うため、画面を消しても
           他のアプリに切り替えても録音が止まりません。
 
+          ## インストール
+
+          1. NOTELOOP.apk をタップしてダウンロード
+          2. 落ちてきたファイルをタップ →「提供元不明のアプリ」を許可してインストール
+
+          Chrome が APK を「危険なファイル」として消してしまう場合は、
+          NOTELOOP-apk.zip のほうを落として展開してください（中身は同じです）。
+
+          - サイズ: ${SIZE} バイト
+          - SHA-256: ${SUM}
           - コミット: ${GITHUB_SHA}
-          - ビルド: Actions run #${GITHUB_RUN_NUMBER}
 
           初回起動時にマイクと通知の許可を求めます。通知を許可しないと
           録音を継続できないので、必ず許可してください。"
 
           if gh release view latest >/dev/null 2>&1; then
             gh release edit latest --title "NOTELOOP $VER" --notes "$NOTES"
-            gh release upload latest dist/NOTELOOP.apk --clobber
+            gh release upload latest dist/NOTELOOP.apk dist/NOTELOOP-apk.zip --clobber
           else
-            gh release create latest dist/NOTELOOP.apk \
+            gh release create latest dist/NOTELOOP.apk dist/NOTELOOP-apk.zip \
               --title "NOTELOOP $VER" --notes "$NOTES" --latest
           fi
-          echo "ダウンロードURL: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/NOTELOOP.apk"
+          echo "APK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/NOTELOOP.apk"
+          echo "ZIP: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/NOTELOOP-apk.zip"
