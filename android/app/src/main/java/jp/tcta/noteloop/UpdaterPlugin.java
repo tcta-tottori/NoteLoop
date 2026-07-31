@@ -14,6 +14,7 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -46,6 +47,53 @@ public class UpdaterPlugin extends Plugin {
             return;
         }
         call.resolve(r);
+    }
+
+    /**
+     * URL から JSON を取って返す（更新確認の version.json 用）。
+     *
+     * WebView の fetch は https://localhost オリジンからの通信になるため、
+     * CORS ヘッダを返さない GitHub のリリース資産は「Failed to fetch」で
+     * 必ず失敗する。ネイティブ側の HttpURLConnection なら CORS の制約が
+     * 無いので、APK のダウンロードと同じ経路で確実に取得できる。
+     */
+    @PluginMethod
+    public void fetchJson(PluginCall call) {
+        final String url = call.getString("url");
+        if (url == null || url.isEmpty()) {
+            call.reject("取得先が指定されていません");
+            return;
+        }
+        new Thread(() -> {
+            HttpURLConnection conn = null;
+            try {
+                conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setInstanceFollowRedirects(true); // github.com → objects.githubusercontent.com
+                conn.setConnectTimeout(15000);
+                conn.setReadTimeout(20000);
+                conn.setRequestProperty("Accept", "application/json");
+                conn.connect();
+                int code = conn.getResponseCode();
+                if (code / 100 != 2) throw new Exception("HTTP " + code);
+
+                ByteArrayOutputStream body = new ByteArrayOutputStream();
+                try (InputStream in = conn.getInputStream()) {
+                    byte[] buf = new byte[8 * 1024];
+                    int n;
+                    // 更新情報は数百バイト。壊れた応答で膨らまないよう上限を設ける。
+                    while ((n = in.read(buf)) > 0 && body.size() < 64 * 1024) {
+                        body.write(buf, 0, n);
+                    }
+                }
+                final JSObject data = new JSObject(new String(body.toByteArray(), "UTF-8"));
+                runOnMain(() -> call.resolve(data));
+            } catch (Exception e) {
+                final String msg = String.valueOf(e.getMessage());
+                runOnMain(() -> call.reject("更新情報を取得できませんでした: " + msg));
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }).start();
     }
 
     /**

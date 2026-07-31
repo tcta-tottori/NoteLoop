@@ -131,7 +131,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.9';
+const APP_VERSION = 'Ver.6.1';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -483,6 +483,9 @@ const NOTIF_TAG = 'noteloop-recording';
 let notifLastSec = -1;
 
 async function ensureNotifyPermission() {
+  // アプリ版は録音サービス側の通知（経過時間＋音量ゲージ）を使うので、
+  // Web 側の通知は出さない（同じ「録音中」が二重に並んでしまうため）。
+  if (NATIVE) return false;
   if (!('Notification' in window)) return false;
   if (Notification.permission === 'granted') return true;
   if (Notification.permission === 'denied') return false;
@@ -3275,6 +3278,16 @@ const isMobileDevice = IS_TOUCH_DEVICE;
 /** ライブ表示（Web Speech）の対応状況を反映。非対応なら無効化して案内。 */
 function applyLiveUI() {
   if (!liveHint) return;
+  if (NATIVE) {
+    // アプリ版はマイクを録音サービスが握る。Android では同じマイクを
+    // 音声認識と同時には使えず、併用すると録音が失敗しうるため、
+    // 「録音を優先」して字幕は出さない（停止後に音声をAIへ送れば文字起こしできる）。
+    liveEnabled.checked = false;
+    liveEnabled.disabled = true;
+    liveHint.innerHTML = 'アプリ版は<strong>録音を優先</strong>します（マイクは録音サービスが使用するため、リアルタイム字幕とは同時に使えません）。'
+      + '画面を消しても録音は止まらず、停止後に<strong>「音声をAIに送る（Gemini）」</strong>で高精度な文字起こし＋議事録を作れます。';
+    return;
+  }
   if (!getSR()) {
     liveEnabled.checked = false;
     liveEnabled.disabled = true;
@@ -3389,6 +3402,9 @@ drawerVerSub.textContent = APP_UPDATED;
 // Release に添付した version.json を見る。APK と同じビルドの成果物なので、
 // 「配信中のAPKの版数」と必ず一致する（リポジトリ側のファイルだとズレうる）。
 const VERSION_JSON_URL = 'https://github.com/tcta-tottori/NoteLoop/releases/latest/download/version.json';
+// 予備の取得先。リリース資産は CORS ヘッダを返さず WebView の fetch から読めないが、
+// raw.githubusercontent.com は CORS を許可している（中身は同じ version.json）。
+const VERSION_JSON_RAW_URL = 'https://raw.githubusercontent.com/tcta-tottori/NoteLoop/main/version.json';
 const updateBox      = $('updateBox');
 const updateText     = $('updateText');
 const updateBtn      = $('updateBtn');
@@ -3401,6 +3417,25 @@ function setUpdateStatus(kind, html, showBtn) {
   updateText.className = 'field-hint' + (kind ? ' ' + kind : '');
   updateText.innerHTML = html;
   if (updateBtn) updateBtn.hidden = !showBtn;
+}
+
+/**
+ * 配信中の version.json を取得する。
+ *
+ * WebView の fetch は https://localhost オリジンからの通信になり、
+ * GitHub のリリース資産は CORS ヘッダを返さないため必ず
+ * 「Failed to fetch」になる。ネイティブ側（Updater.fetchJson）は
+ * CORS の制約を受けないので、そちらを優先して使う。
+ */
+async function fetchVersionJson(up) {
+  // キャッシュを避けるため毎回クエリを変える
+  const url = `${VERSION_JSON_URL}?t=${Date.now()}`;
+  if (up && typeof up.fetchJson === 'function') return up.fetchJson({ url });
+  // 更新機能が古い版（fetchJson なし）のときの保険。
+  // リリース資産は CORS で弾かれるので、CORS を許可している raw を見る。
+  const res = await fetch(`${VERSION_JSON_RAW_URL}?t=${Date.now()}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
 }
 
 /** 配信中の版を調べ、いまのアプリより新しければ知らせる */
@@ -3419,10 +3454,7 @@ async function checkForUpdate(manual) {
   try {
     if (manual) setUpdateStatus('', '確認中…', false);
     const cur = await up.getInfo();
-    // キャッシュを避けるため毎回クエリを変える
-    const res = await fetch(`${VERSION_JSON_URL}?t=${Date.now()}`, { cache: 'no-store' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const latest = await res.json();
+    const latest = await fetchVersionJson(up);
     updateInfo = latest;
     if (Number(latest.versionCode) > Number(cur.versionCode)) {
       setUpdateStatus('warn',
