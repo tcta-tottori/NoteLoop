@@ -102,6 +102,7 @@ const geminiApiKey         = $('geminiApiKey');
 const geminiModel          = $('geminiModel');
 const geminiKeyStatus      = $('geminiKeyStatus');
 const aiAutoAfterStop      = $('aiAutoAfterStop');
+const geminiKeyReveal      = $('geminiKeyReveal');
 const geminiKeyTest        = $('geminiKeyTest');
 const geminiKeyTestStatus  = $('geminiKeyTestStatus');
 const geminiUsageBox       = $('geminiUsageBox');
@@ -129,7 +130,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.4';
+const APP_VERSION = 'Ver.5.5';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -2698,6 +2699,21 @@ function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || GE
 // APIキーの形式。Google AI Studio は従来の「AIza…」に加え、
 // 新形式の「AQ.…」も発行する。どちらも有効なので両方を受け付ける。
 function isLikelyGeminiKey(k) { return /^AIza[\w-]{10,}$/.test(k) || /^AQ\.[\w.-]{10,}$/.test(k); }
+// AI Studio が発行するキーの実際の長さ（AIza… は39文字、AQ.… は53文字）。
+// 画面の省略表示（例: AQ.Ab8RN6IZd_HwfHR1PyxCjlq0NriZnsacN = 36文字）を
+// そのまま入力してしまう取り違えが多いので、長さで検知して知らせる。
+const GEMINI_KEY_LEN = { AIza: 39, 'AQ.': 53 };
+function expectedKeyLen(k) { return k.startsWith('AIza') ? GEMINI_KEY_LEN.AIza : (k.startsWith('AQ.') ? GEMINI_KEY_LEN['AQ.'] : 0); }
+/** 保存中のキーの形（長さ・前後の数文字）を、値そのものを晒さずに説明する */
+function keyShapeNote() {
+  const k = loadGeminiKey();
+  if (!k) return 'キー未設定';
+  const exp = expectedKeyLen(k);
+  const shape = `いま保存されているキーは ${k.length} 文字・${k.slice(0, 6)}…${k.slice(-4)}`;
+  if (exp && k.length < exp) return `${shape}。本来は ${exp} 文字なので<strong>途中で切れています</strong>`;
+  if (exp && k.length > exp) return `${shape}。本来は ${exp} 文字なので<strong>余分な文字が入っています</strong>`;
+  return shape;
+}
 
 /* --- 録音停止後に自動でAI議事録を作るか（既定：ON）--- */
 const AI_AUTO_AFTER_STOP_KEY = 'noteloop_ai_auto_after_stop';
@@ -2801,8 +2817,13 @@ async function geminiUploadFile(blob, key) {
 
 /** HTTPステータスとAPIメッセージから、原因が分かる日本語エラーを作る */
 function geminiHttpError(status, msg, model) {
-  if (status === 400 && /API[ _]key not valid|API_KEY_INVALID/i.test(msg)) {
-    return new Error('APIキーが正しくありません。設定→AI連携 のキーを貼り直してください（AI Studio のコピーボタンでキー全体をコピーしてください。画面上の「AQ.Ab8…」のような省略表示をそのまま入力すると弾かれます）。');
+  // 401（UNAUTHENTICATED）は新形式キー「AQ.…」が不正なときに返る。
+  // 旧形式「AIza…」の不正は 400 + API_KEY_INVALID なので、どちらも同じ案内にまとめる。
+  if (status === 401 || (status === 400 && /API[ _]key not valid|API_KEY_INVALID/i.test(msg))) {
+    return new Error('APIキーが正しくありません（' + keyShapeNote() + '）。'
+      + '設定→AI連携 のキーを貼り直してください。AI Studio の<strong>コピーボタン</strong>でキー全体をコピーしてください'
+      + '（画面に出ている「AQ.Ab8…」のような省略表示を手で入力すると、途中までしか入らず必ず失敗します）。'
+      + 'キー欄の目のアイコンで、いま保存されている内容を確認できます。');
   }
   if (status === 403) {
     return new Error('このAPIキーでは実行できませんでした（キーの制限、またはGenerative Language APIが無効の可能性）。AI Studio でキーの設定を確認してください。詳細: ' + msg);
@@ -2974,12 +2995,19 @@ function updateGeminiKeyStatus() {
   const k = loadGeminiKey();
   if (!k) { geminiKeyStatus.hidden = true; return; }
   geminiKeyStatus.hidden = false;
+  const exp = expectedKeyLen(k);
   if (!isLikelyGeminiKey(k)) {
     geminiKeyStatus.className = 'field-hint warn';
-    geminiKeyStatus.textContent = '⚠ キーの形式が想定と異なります（通常 AIza… または AQ.… で始まります）。省略表示（末尾が「…」）をそのまま貼っていないか確認してください。';
+    geminiKeyStatus.textContent = `⚠ キーの形式が想定と異なります（通常 AIza… または AQ.… で始まります・現在 ${k.length} 文字）。省略表示（末尾が「…」）をそのまま貼っていないか確認してください。`;
+  } else if (exp && k.length !== exp) {
+    // 長さ違いはほぼ確実に貼り付けミス。テストする前にここで気づけるようにする
+    geminiKeyStatus.className = 'field-hint warn';
+    geminiKeyStatus.textContent = `⚠ キーの長さが違います（現在 ${k.length} 文字／本来 ${exp} 文字）。`
+      + (k.length < exp ? '途中で切れています。' : '余分な文字が入っています。')
+      + ' AI Studio の「コピー」ボタンでキー全体をコピーし、貼り直してください。';
   } else {
     geminiKeyStatus.className = 'field-hint';
-    geminiKeyStatus.textContent = '✓ キーを保存しました（この端末内のみ）。「議事録」画面の「AIで議事録を作成（自動）」が使えます。下の「キーをテスト」で実際に使えるか確認できます。';
+    geminiKeyStatus.textContent = '✓ キーを保存しました（この端末内のみ・' + k.length + '文字）。録音画面の「AIで議事録を作成（自動）」が使えます。下の「キーをテスト」で実際に使えるか確認できます。';
   }
   renderUsage();
 }
@@ -3022,6 +3050,16 @@ async function testGeminiKey() {
   }
 }
 if (geminiKeyTest) geminiKeyTest.addEventListener('click', testGeminiKey);
+// 貼り付けミス（途中で切れている等）を目で確かめられるように表示/非表示を切り替える
+if (geminiKeyReveal && geminiApiKey) {
+  geminiKeyReveal.addEventListener('click', () => {
+    const show = geminiApiKey.type === 'password';
+    geminiApiKey.type = show ? 'text' : 'password';
+    geminiKeyReveal.setAttribute('aria-pressed', show ? 'true' : 'false');
+    geminiKeyReveal.setAttribute('aria-label', show ? 'キーを隠す' : 'キーを表示');
+    geminiKeyReveal.classList.toggle('on', show);
+  });
+}
 /** 議事録カードに、いま自動生成モードかどうかを表示する */
 function updateAiAutoModeHint() {
   const el = $('aiAutoModeHint');

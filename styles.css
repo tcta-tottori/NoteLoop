@@ -230,6 +230,18 @@ a:hover { text-decoration: underline; }
 .field-hint.ok { color: #4ade80; font-weight: 600; }
 /* 設定→AI連携 の「キーをテスト」 */
 .key-test-btn { width: auto; padding: 8px 16px; font-size: 13px; margin-top: 6px; }
+/* APIキー入力＋表示切替（貼り付けミスを目で確認できるように） */
+.key-input-row { display: flex; align-items: stretch; gap: 8px; }
+.key-input-row input { flex: 1; min-width: 0; }
+.key-reveal-btn {
+  flex: none; width: 44px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface-3); color: var(--muted);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); cursor: pointer;
+  transition: .16s;
+}
+.key-reveal-btn:hover { color: var(--brand1); border-color: var(--brand1); }
+.key-reveal-btn.on { color: var(--brand1); border-color: var(--brand1); }
+.key-reveal-btn svg { width: 19px; height: 19px; }
 .cancel-proc { margin-top: 8px; color: var(--danger); border-color: var(--border-strong); }
 select, input[type="text"], input[type="date"], textarea {
   width: 100%; font: inherit; color: var(--text);

@@ -373,7 +373,12 @@
         </div>
         <div class="field settings-field">
           <label for="geminiApiKey">Gemini API キー（自動生成に使用・任意）</label>
-          <input id="geminiApiKey" type="password" autocomplete="off" placeholder="AIza… または AQ.… で始まるキーを貼り付け" />
+          <div class="key-input-row">
+            <input id="geminiApiKey" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="AIza… または AQ.… で始まるキーを貼り付け" />
+            <button id="geminiKeyReveal" class="key-reveal-btn" type="button" aria-label="キーを表示" aria-pressed="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
           <p class="field-hint">これを設定すると、録音画面の <strong>「AIで議事録を作成（自動）」</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
           <div class="settings-field" style="margin-top:8px;">
             <label for="geminiModel" style="font-size:12px;color:var(--muted);">モデル</label>
