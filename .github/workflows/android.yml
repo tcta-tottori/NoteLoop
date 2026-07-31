@@ -9,8 +9,9 @@ on:
       - '**.md'
   workflow_dispatch:
 
+# Release に APK を貼り付けるため書き込み権限が要る
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -47,14 +48,42 @@ jobs:
       - name: APK に分かりやすい名前を付ける
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk \
-             "dist/NOTELOOP-${GITHUB_SHA::7}.apk"
+          # Release では常に同じ名前にする（ダウンロードURLを固定するため）
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/NOTELOOP.apk
           ls -lh dist
 
-      - name: APK をアップロード
+      - name: APK をアップロード（Actions の成果物・PC向け）
         uses: actions/upload-artifact@v4
         with:
           name: NOTELOOP-apk
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 90
+
+      # スマホからは Actions の成果物（zip・要ログイン）を落とせないため、
+      # Release に APK そのものを置いて1タップで入れられるようにする。
+      - name: Release「latest」を更新
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(grep -oP "APP_VERSION = 'Ver\.\K[0-9.]+" app.js || echo "?")
+          NOTES="NOTELOOP $VER（Androidアプリ版）
+
+          このAPKをタップしてインストールしてください（提供元不明のアプリの許可が必要です）。
+          録音はネイティブのフォアグラウンドサービスで行うため、画面を消しても
+          他のアプリに切り替えても録音が止まりません。
+
+          - コミット: ${GITHUB_SHA}
+          - ビルド: Actions run #${GITHUB_RUN_NUMBER}
+
+          初回起動時にマイクと通知の許可を求めます。通知を許可しないと
+          録音を継続できないので、必ず許可してください。"
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --title "NOTELOOP $VER" --notes "$NOTES"
+            gh release upload latest dist/NOTELOOP.apk --clobber
+          else
+            gh release create latest dist/NOTELOOP.apk \
+              --title "NOTELOOP $VER" --notes "$NOTES" --latest
+          fi
+          echo "ダウンロードURL: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/NOTELOOP.apk"

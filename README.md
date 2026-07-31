@@ -193,16 +193,21 @@ npx serve .
 OSに録音を止められません。長時間の会議で音声が途中までしか残らない問題は、
 このアプリ版で解消します。
 
-### APKの入手
+### APKの入手（スマホから1タップ）
 
-`main` へのpushで GitHub Actions が APK をビルドします。
+**https://github.com/tcta-tottori/NoteLoop/releases/latest/download/NOTELOOP.apk**
 
-1. GitHub の **Actions → Android APK** から最新の実行を開く
-2. 下部の **Artifacts → NOTELOOP-apk** をダウンロード（zip）
-3. 展開した `.apk` を端末に転送し、タップしてインストール
-   （「提供元不明のアプリ」の許可が必要です）
+このURLを端末のブラウザで開けば、そのままAPKがダウンロードされます
+（ログイン不要・zipではありません）。落ちてきたファイルをタップしてインストール
+してください。「提供元不明のアプリ」の許可を求められたら許可します。
 
-手動で走らせる場合は Actions 画面の **Run workflow** から実行できます。
+`main` へpushするたびに GitHub Actions がビルドし、上のURLの中身が
+最新版に差し替わります。手動で走らせる場合は Actions 画面の
+**Run workflow** から実行できます。
+
+PC から取る場合は Actions の実行結果にある **Artifacts → NOTELOOP-apk**
+（zip）でも入手できます。※GitHubのモバイルアプリからは成果物を
+ダウンロードできないので、上のReleaseのURLを使ってください。
 
 ### 手元でビルドする場合
 
