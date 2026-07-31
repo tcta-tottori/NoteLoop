@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="color-scheme" content="light" />
+  <meta name="color-scheme" content="dark" />
   <title>NOTELOOP — 議事録自動化</title>
   <meta name="description" content="ブラウザだけで完結する議事録自動化アプリ。録音 → 高精度文字起こし → 議事録整形 → 音声 / txt / Word / メール下書きで出力。" />
   <link rel="stylesheet" href="./styles.css" />
   <!-- PWA（アプリとしてインストール可能に） -->
   <link rel="manifest" href="./manifest.webmanifest" />
-  <meta name="theme-color" content="#4f6ef7" />
+  <meta name="theme-color" content="#17181b" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="NOTELOOP" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="48x48" href="./icons/favicon-48.png" />
@@ -42,10 +42,6 @@
     <button class="drawer-item active" type="button" data-target="screen-home" data-title="録音・文字起こし・議事録作成">
       <span class="d-ico d-ico-mic" aria-hidden="true"><img src="./icons/mic-white.png" alt="" /></span>
       <span>録音</span>
-    </button>
-    <button class="drawer-item" type="button" data-target="screen-home" data-title="録音・文字起こし・議事録作成" data-scroll="minutesFlowCard">
-      <svg class="d-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="14" y2="17"/></svg>
-      <span>議事録</span>
     </button>
     <button class="drawer-item" type="button" data-target="screen-history" data-title="過去の議事録">
       <svg class="d-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l3 2"/></svg>
@@ -272,7 +268,23 @@
 
     <!-- ========== 履歴 ========== -->
     <section class="screen" id="screen-history" aria-labelledby="screenTitle" hidden>
-      <ul id="historyList" class="history-list"></ul>
+      <!-- 一覧 -->
+      <div id="historyListView">
+        <ul id="historyList" class="history-list"></ul>
+      </div>
+
+      <!-- 詳細（一覧をタップで表示。録音後と同じカード群をここへ移して使う） -->
+      <div id="historyDetail" hidden>
+        <button id="historyBack" class="history-back" type="button">
+          <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg> 一覧へ戻る
+        </button>
+        <div class="history-detail-head">
+          <h2 id="historyDetailTitle"></h2>
+          <p class="meta" id="historyDetailMeta"></p>
+        </div>
+        <!-- 録音画面のカード群（音声・議事録・書き出し・メール）をここへ移動して表示する -->
+        <div id="historyDetailSlot"></div>
+      </div>
     </section>
 
     <!-- ========== 設定 ========== -->
@@ -362,7 +374,7 @@
         <div class="field settings-field">
           <label for="geminiApiKey">Gemini API キー（自動生成に使用・任意）</label>
           <input id="geminiApiKey" type="password" autocomplete="off" placeholder="AIza… または AQ.… で始まるキーを貼り付け" />
-          <p class="field-hint">これを設定すると、議事録画面の <strong>「AIで議事録を作成（自動）」</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
+          <p class="field-hint">これを設定すると、録音画面の <strong>「AIで議事録を作成（自動）」</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
           <div class="settings-field" style="margin-top:8px;">
             <label for="geminiModel" style="font-size:12px;color:var(--muted);">モデル</label>
             <select id="geminiModel">
@@ -452,8 +464,7 @@
         <h3 class="settings-group-title">画面の説明</h3>
         <ul class="man-def">
           <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と波形、ライブ文字起こしを表示。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
-          <li><b>議事録</b><span>録音した音声の再生・保存、議事録本文（要点／決定事項／ToDo）、Claude 連携、書き出し、メール作成をまとめた画面です。</span></li>
-          <li><b>履歴</b><span>保存した議事録をカードで一覧。カードをタップで開き、右下のアイコンで削除・音声保存。最大10件を保存します。</span></li>
+          <li><b>履歴</b><span>保存した議事録をカードで一覧。カードをタップすると<b>この画面のまま</b>、音声の再生・保存、AI議事録、書き出し、メール作成まで確認・編集できます（「一覧へ戻る」で一覧に戻ります）。右下のアイコンで削除・音声保存。最大10件を保存します。</span></li>
           <li><b>設定</b><span>文字起こしエンジンの切替、<b>実行バックエンド（WebGPU / WASM）</b>、高精度モデル（tiny〜large-v3-turbo）、録音中の画面常時オン、Claude の指示テンプレートを設定できます。</span></li>
           <li><b>メニュー</b><span>左上の三本線（PC では常時左側）から各画面へ移動。上部に現在のバージョンを表示します。</span></li>
         </ul>
@@ -479,7 +490,7 @@
       <div class="panel" id="man-claude">
         <h3 class="settings-group-title">Claude 連携で高精度な議事録に</h3>
         <ol class="man-steps">
-          <li><span class="man-n">1</span><div><p>議事録画面の下部「<b>コピーしてClaudeを開く</b>」をタップ。会議情報＋文字起こしが自動コピーされ、Claude が開きます。</p></div></li>
+          <li><span class="man-n">1</span><div><p>録音後のカード内「<b>コピーしてClaudeを開く</b>」をタップ。会議情報＋文字起こしが自動コピーされ、Claude が開きます。</p></div></li>
           <li><span class="man-n">2</span><div><p>開いた Claude の入力欄に <b>貼り付け（<kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>V</kbd>）→ 送信</b> するだけ。</p></div></li>
           <li><span class="man-n">3</span><div><p>Claude が要点・決定事項・ToDo を整理した議事録を作成します。</p></div></li>
         </ol>

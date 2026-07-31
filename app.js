@@ -129,7 +129,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.3';
+const APP_VERSION = 'Ver.5.4';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -264,7 +264,34 @@ function scrollToEl(id) {
   if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
 }
 
+/* =========================================================
+ * 録音後のカード群（#homeFlow）の置き場所
+ *   録音画面と履歴の詳細で同じUIを使い回すため、DOMごと移動させる。
+ *   複製しないので、既存のイベント・状態はそのまま引き継がれる。
+ * =======================================================*/
+/** カード群を履歴の詳細内へ移す */
+function moveFlowToHistory() {
+  const flow = $('homeFlow'), slot = $('historyDetailSlot');
+  if (flow && slot && flow.parentElement !== slot) slot.appendChild(flow);
+}
+/** カード群を録音画面へ戻す（履歴を離れるとき・新しい録音を始めるとき） */
+function moveFlowToHome() {
+  const flow = $('homeFlow'), home = $('screen-home'), anchor = $('idlePrompt');
+  if (!flow || !home || flow.parentElement === home) return;
+  if (anchor && anchor.parentElement === home) home.insertBefore(flow, anchor);
+  else home.appendChild(flow);
+}
+/** 履歴：一覧に戻る（詳細を閉じ、カード群を録音画面へ返す） */
+function closeHistoryDetail() {
+  const listView = $('historyListView'), detail = $('historyDetail');
+  moveFlowToHome();
+  if (detail) detail.hidden = true;
+  if (listView) listView.hidden = false;
+}
+
 function showScreen(id, title) {
+  // 履歴の詳細を開いたまま他の画面へ移ると、カード群が履歴側に取り残される
+  if (id !== 'screen-history') closeHistoryDetail();
   document.querySelectorAll('.screen').forEach((s) => {
     const active = s.id === id;
     s.classList.toggle('active', active);
@@ -856,6 +883,7 @@ recordBtn.addEventListener('click', async () => {
 
 async function startRecording() {
   hideError();
+  closeHistoryDetail(); // 履歴を見ていた場合はカード群を録音画面へ戻す
   resetFlowCards(); // 新しい録音: 前回の段階カードを一旦すべて隠す
   // 入力レベルメーターがマイクを掴んでいたら解放してから録音を開始
   if (typeof homeMicMeter !== 'undefined') homeMicMeter.stop();
@@ -1593,10 +1621,31 @@ function autoTitleFromTranscript(text) {
   if (s.length > 24) s = s.slice(0, 24) + '…';
   return s;
 }
-/** タイトルが未入力なら、文字起こしから自動生成してフィールドへ反映 */
+/**
+ * AI議事録の本文から会議名らしい1行を拾う。
+ * 「【議事録】」等の見出しや箇条書き記号は飛ばし、最初の中身のある行を使う。
+ */
+function autoTitleFromAiText(text) {
+  const lines = String(text || '').split('\n');
+  for (let line of lines) {
+    line = line.replace(/^[\s#*>・\-–—•]+/, '').trim();
+    if (!line) continue;
+    if (/^[【\[(（]?(議事録|要点|見出し|決定事項|ToDo|やること|メール文面|件名)/i.test(line)) {
+      // 「件名: 〇〇」は中身がタイトルとして使える
+      const m = line.match(/^[【\[(（]?件名[】\])）]?\s*[:：]?\s*(.+)$/);
+      if (m && m[1].trim()) return autoTitleFromTranscript(m[1]);
+      continue;
+    }
+    return autoTitleFromTranscript(line);
+  }
+  return '';
+}
+/** タイトルが未入力なら、文字起こし（無ければAI議事録）から自動生成してフィールドへ反映 */
 function ensureAutoTitle() {
   if (meetingName.value.trim()) return;
-  const t = autoTitleFromTranscript(liveTranscript.value);
+  // 音声をそのままAIに送る運用では文字起こしが空になるため、AIの結果からも拾う
+  const t = autoTitleFromTranscript(liveTranscript.value)
+         || autoTitleFromAiText(aiResult ? aiResult.value : '');
   if (t) { meetingName.value = t; updateMeetingSummary(); }
 }
 
@@ -2272,7 +2321,9 @@ function renderHistory() {
     li.className = 'history-item';
     li.setAttribute('role', 'button');
     li.tabIndex = 0;
-    const excerpt = item.transcript || [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
+    // AI議事録があればそれを優先（音声をそのままAIに送る運用では文字起こしが空になる）
+    const excerpt = (item.aiText || '').replace(/^[\s#*>・\-–—•【\[]*(議事録|要点・見出し)[】\]]?\s*/, '').trim()
+      || item.transcript || [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
     const meta = formatDateJp(item.date) + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '') + (item.audio ? ' ・ 音声あり' : '');
     li.innerHTML = `<h3></h3><span class="meta"></span><span class="excerpt"></span>
       <div class="history-actions">
@@ -2338,10 +2389,22 @@ async function openMinutes(item) {
     } catch (_) { /* 音声が取り出せなくても議事録の閲覧・編集は継続 */ }
   }
 
-  showScreen('screen-home', '録音・文字起こし・議事録作成');
+  // 履歴ページ内で完結して確認できるよう、カード群を詳細へ移してその場で表示する
+  showScreen('screen-history', '過去の議事録');
+  const listView = $('historyListView'), detail = $('historyDetail');
+  moveFlowToHistory();
+  if (listView) listView.hidden = true;
+  if (detail) detail.hidden = false;
+  const t = $('historyDetailTitle'), mt = $('historyDetailMeta');
+  if (t) t.textContent = item.name || '（タイトル未設定）';
+  if (mt) {
+    mt.textContent = formatDateJp(item.date)
+      + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '')
+      + (item.audio ? ' ・ 音声あり' : '');
+  }
   revealFlowCards(false); // 履歴表示は一括で出現
   updateHomeUI();
-  scrollToEl('transcriptPanel');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 function deleteMinutes(id) {
   const item = loadStore().find((x) => x.id === id);
@@ -2349,6 +2412,11 @@ function deleteMinutes(id) {
   saveStore(loadStore().filter((x) => x.id !== id));
   renderHistory();
 }
+const historyBack = $('historyBack');
+if (historyBack) historyBack.addEventListener('click', () => {
+  closeHistoryDetail();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
 
 saveMinutes.addEventListener('click', () => {
   const m = currentMinutes();
@@ -2826,6 +2894,18 @@ function saveAiTextToHistory(text) {
     let idx = activeRecordingId ? list.findIndex((e) => e.id === activeRecordingId) : -1;
     if (idx < 0) idx = list.length - 1;
     list[idx].aiText = text;
+    // 履歴は自動生成より前に保存されるため、既定名（録音 7/31 03:05）のままなら
+    // AIの結果から付け直す。画面側のタイトルも同時に合わせる。
+    if (/^録音 \d+\/\d+ \d+:\d+$/.test(list[idx].name || '')) {
+      const t = autoTitleFromAiText(text);
+      if (t) {
+        list[idx].name = t;
+        if (meetingName && /^録音 \d+\/\d+ \d+:\d+$/.test(meetingName.value.trim())) {
+          meetingName.value = t;
+          updateMeetingSummary();
+        }
+      }
+    }
     saveStore(list);
     renderHistory();
   } catch (_) { /* 保存に失敗しても画面の生成結果は使えるので無視する */ }
