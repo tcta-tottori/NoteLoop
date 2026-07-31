@@ -140,6 +140,14 @@ public class RecorderPlugin extends Plugin {
         }).start();
     }
 
+    /** 録音中の音量（0.0〜1.0）。画面上のゲージ表示に使う。 */
+    @PluginMethod
+    public void getLevel(PluginCall call) {
+        JSObject r = new JSObject();
+        r.put("level", RecordingService.getLevel());
+        call.resolve(r);
+    }
+
     @PluginMethod
     public void getStatus(PluginCall call) {
         JSObject r = new JSObject();

@@ -43,8 +43,27 @@ public class RecordingService extends Service {
     private static volatile String lastError = null;
 
     private MediaRecorder recorder;
+    /** 音量ゲージ用。録音中の MediaRecorder を静的に持ち、プラグインから音量を読めるようにする。 */
+    private static volatile MediaRecorder activeRecorder = null;
 
     public static boolean isRecording() { return recording; }
+
+    /**
+     * いま録音している音の大きさ（0.0〜1.0）。
+     * MediaRecorder.getMaxAmplitude() は「前回呼んでからの最大振幅」を返すので、
+     * 定期的に呼ぶだけでレベルメーターになる。マイクを二重に掴む必要がない。
+     */
+    public static float getLevel() {
+        MediaRecorder r = activeRecorder;
+        if (r == null || !recording) return 0f;
+        try {
+            int amp = r.getMaxAmplitude();          // 0..32767
+            if (amp <= 0) return 0f;
+            return Math.min(1f, amp / 24000f);
+        } catch (Exception e) {
+            return 0f;
+        }
+    }
     public static String getCurrentPath() { return currentPath; }
     public static String getLastError() { return lastError; }
 
@@ -146,6 +165,7 @@ public class RecordingService extends Service {
             recorder.prepare();
             recorder.start();
 
+            activeRecorder = recorder;
             currentPath = path;
             startedAtElapsed = SystemClock.elapsedRealtime();
             recording = true;
@@ -174,6 +194,7 @@ public class RecordingService extends Service {
     }
 
     private void releaseRecorder() {
+        activeRecorder = null;
         if (recorder != null) {
             try { recorder.release(); } catch (Exception ignored) {}
             recorder = null;

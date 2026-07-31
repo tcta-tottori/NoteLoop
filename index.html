@@ -65,10 +65,10 @@
     <!-- ========== ホーム: 録音・文字起こし ========== -->
     <section class="screen active home-screen" id="screen-home" aria-labelledby="screenTitle">
 
-      <!-- 上部: ウェーブアニメーション -->
-      <div class="wave-wrap" id="waveWrap" hidden>
-        <canvas id="wave" class="wave" width="900" height="140" aria-hidden="true"></canvas>
-        <div class="wave-timer" id="timer" aria-live="polite" hidden>00:00</div>
+      <!-- 上部: 音量で動くゲージ（録音中） -->
+      <div class="gauge-wrap" id="gaugeWrap" hidden>
+        <canvas id="gauge" class="gauge" width="900" height="140" aria-hidden="true"></canvas>
+        <div class="gauge-timer" id="timer" aria-live="polite" hidden>00:00</div>
       </div>
       <!-- 経過時間より実際の録音が短くなったときの注意（録音中に気づけるように） -->
       <p class="captured-hint" id="capturedHint" role="status" aria-live="polite" hidden></p>
@@ -87,16 +87,65 @@
       <!-- 録音後の段階フロー（録音がおわると下のカードが順にフェードインで出現） -->
       <div class="home-flow" id="homeFlow">
 
-      <!-- 文字起こし本文（録音中／結果があるときのみ表示） -->
-      <div class="home-transcript" id="transcriptPanel" hidden>
+      <!-- 文字起こし本文（録音中／結果があるときのみ表示・停止後は折りたたむ） -->
+      <details class="home-transcript" id="transcriptPanel" open hidden>
+        <summary class="transcript-summary">文字起こし（編集可）</summary>
         <div class="mini-label-row">
-          <label class="mini-label" for="liveTranscript">文字起こし</label>
           <span class="mini-actions">
             <button id="openTermFix" class="link-btn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> 用語修正</button>
             <button id="clearTranscript" class="link-btn" type="button">クリア</button>
           </span>
         </div>
         <textarea id="liveTranscript" class="transcript" placeholder="録音中の文字起こしがここに表示されます。停止後に編集できます。"></textarea>
+      </details>
+
+      <!-- 議事録づくり（AIで自動作成）— 録音後にいちばん最初に出るカード -->
+      <div class="panel flow-card" id="minutesFlowCard" hidden>
+        <div class="section-head">
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg> AI議事録</span>
+          <button id="openMeetingInfo" class="link-btn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg> タイトル・参加者</button>
+        </div>
+        <div id="meetingSummary" class="meeting-summary"></div>
+
+        <p class="field-hint" id="aiAutoModeHint"></p>
+        <button class="primary-btn ai-auto-btn" id="aiAutoBtn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/><path d="M19 3v4M21 5h-4"/></svg> AIで議事録を作成</button>
+        <div class="ai-status" id="aiAutoStatus" hidden></div>
+        <div class="ai-result-wrap" id="aiResultWrap" hidden>
+          <label class="mini-label" for="aiResult"><span class="tag tag-sum">議事録＋メール文面（編集可）</span></label>
+          <textarea id="aiResult" class="minutes-area" rows="12" placeholder="生成された議事録とメール文面がここに表示されます。"></textarea>
+          <div class="ai-actions" style="margin-top:8px;">
+            <button class="secondary-btn" id="aiResultCopy" type="button">コピー</button>
+            <button class="secondary-btn" id="aiResultToMail" type="button">メール本文に使う</button>
+          </div>
+        </div>
+
+        <details class="ai-preview" style="margin-top:12px;">
+          <summary>APIキーを使わず手動でAIに渡す</summary>
+          <p class="field-hint" style="margin:8px 0;">録音音声を共有（またはダウンロード）し、指示文を貼り付けて Gemini などに渡します（APIキー不要）。</p>
+          <div class="ai-actions">
+            <button class="secondary-btn" id="aiAudioSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 音声を共有</button>
+            <button class="secondary-btn" id="aiAudioCopy" type="button">指示をコピー</button>
+          </div>
+          <div class="ai-status" id="aiAudioStatus" hidden></div>
+          <a class="ai-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
+          <textarea id="aiAudioPreview" class="minutes-area" rows="4" readonly placeholder="「指示をコピー」で共有する指示文がここに表示されます。"></textarea>
+        </details>
+
+        <details class="minutes-fields">
+          <summary>議事録を貼り付け／編集（任意・メール/書き出し用）</summary>
+        <div class="minutes-section">
+          <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
+          <textarea id="secSummary" class="minutes-area" rows="4" placeholder="AIの議事録を貼り付け、または手入力。"></textarea>
+        </div>
+        <div class="minutes-section">
+          <label class="mini-label" for="secDecisions"><span class="tag tag-dec">決定事項</span></label>
+          <textarea id="secDecisions" class="minutes-area" rows="4" placeholder="決まったことを貼り付け／手入力。"></textarea>
+        </div>
+        <div class="minutes-section">
+          <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
+          <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題を貼り付け／手入力。"></textarea>
+        </div>
+        </details>
       </div>
 
       <!-- 録音した音声（再生・音声出力） -->
@@ -114,72 +163,7 @@
         </div>
         <p class="field-hint warn" id="audioWarn" hidden></p>
         <p class="field-hint" id="audioEmptyNote">まだ録音した音声はありません。録音すると、ここで再生・保存できます。</p>
-      </div>
-
-      <!-- 議事録づくり（AIに投げる / 貼り付け） -->
-      <div class="panel flow-card" id="minutesFlowCard" hidden>
-        <button id="openMeetingInfo" class="meeting-info-btn" type="button">
-          <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg> 情報編集（タイトル・参加者）
-        </button>
-        <div id="meetingSummary" class="meeting-summary"></div>
-
-        <!-- A. 音声をAIに送る（Gemini）— 文字起こし不要・高精度 -->
-        <div class="ai-inline ai-audio">
-          <p class="route-title">録音音声から議事録を作成 <span class="route-badge">Gemini・おすすめ</span></p>
-          <p class="field-hint" id="aiAutoModeHint"></p>
-          <button class="primary-btn ai-auto-btn" id="aiAutoBtn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/><path d="M19 3v4M21 5h-4"/></svg> AIで議事録を作成（自動）</button>
-          <div class="claude-status" id="aiAutoStatus" hidden></div>
-          <div class="ai-result-wrap" id="aiResultWrap" hidden>
-            <label class="mini-label" for="aiResult"><span class="tag tag-sum">AI議事録＋メール（編集可）</span></label>
-            <textarea id="aiResult" class="minutes-area" rows="12" placeholder="生成された議事録とメール文面がここに表示されます。"></textarea>
-            <div class="claude-actions" style="margin-top:8px;">
-              <button class="secondary-btn" id="aiResultCopy" type="button">コピー</button>
-              <button class="secondary-btn" id="aiResultToMail" type="button">メール本文に使う</button>
-            </div>
-          </div>
-          <details class="claude-preview" style="margin-top:12px;">
-            <summary>APIキーを使わず手動でGeminiに渡す</summary>
-            <p class="field-hint" style="margin:8px 0;">録音音声をダウンロード＆共有し、指示文を貼り付けてGeminiに渡します（APIキー不要）。</p>
-            <div class="claude-actions">
-              <button class="secondary-btn" id="aiAudioSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 音声を共有</button>
-              <button class="secondary-btn" id="aiAudioCopy" type="button">指示をコピー</button>
-            </div>
-            <div class="claude-status" id="aiAudioStatus" hidden></div>
-            <a class="claude-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
-            <textarea id="aiAudioPreview" class="minutes-area" rows="4" readonly placeholder="「指示をコピー」で共有する指示文がここに表示されます。"></textarea>
-          </details>
-        </div>
-
-        <!-- B. 文字起こしをClaudeに送る（テキスト経路） -->
-        <div class="claude-inline">
-          <p class="route-title">文字起こしをClaudeに送る</p>
-          <div class="claude-actions">
-            <button class="primary-btn" id="claudeSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピーしてClaudeを開く</button>
-            <button class="secondary-btn" id="claudeCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー</button>
-          </div>
-          <div class="claude-status" id="claudeStatus" hidden></div>
-          <a class="claude-open-link" id="claudeOpen" href="https://claude.ai/new" target="_blank" rel="noopener" hidden>→ Claudeを開く</a>
-          <details class="claude-preview">
-            <summary>プロンプトを確認</summary>
-            <textarea id="claudePromptPreview" class="minutes-area" rows="6" readonly placeholder="「コピーしてClaudeを開く」を押すと、ここに内容が表示されます。"></textarea>
-          </details>
-        </div>
-
-        <details class="minutes-fields">
-          <summary>議事録を貼り付け／編集（任意・メール/書き出し用）</summary>
-        <div class="minutes-section">
-          <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
-          <textarea id="secSummary" class="minutes-area" rows="4" placeholder="AIの議事録を貼り付け、または手入力。"></textarea>
-        </div>
-        <div class="minutes-section">
-          <label class="mini-label" for="secDecisions"><span class="tag tag-dec">決定事項</span></label>
-          <textarea id="secDecisions" class="minutes-area" rows="4" placeholder="決まったことを貼り付け／手入力。"></textarea>
-        </div>
-        <div class="minutes-section">
-          <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
-          <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題を貼り付け／手入力。"></textarea>
-        </div>
-        </details>
+        <button class="chip-btn" id="importAudioBtnCard" type="button" style="margin-top:10px;"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> 別の音声ファイルを読み込む</button>
       </div>
 
       <!-- 書き出し -->
@@ -242,13 +226,19 @@
 
       </div><!-- /#homeFlow -->
 
-      <!-- 中央: 点滅する案内（待機中のみ） -->
+      <!-- 中央: 点滅する案内（待機中のみ）＋ 外部音声の読み込み -->
       <div class="idle-prompt" id="idlePrompt">
         <span class="idle-text">
           <svg class="idle-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
           で録音開始
         </span>
+        <button id="importAudioBtn" class="home-meeting-btn ghost" type="button">
+          <svg class="edit-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          録音済みの音声ファイルから作成
+        </button>
       </div>
+      <!-- 外部で録音した音声を読み込むための入力（画面には出さない） -->
+      <input type="file" id="audioFileInput" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.aac,.ogg,.opus,.webm,.mp4,.amr,.3gp" hidden />
 
       <!-- 中央下部に固定するマイクボタン＋右下のツールボタン（マイク設定・編集を集約） -->
       <div class="mic-dock" id="micDock">
@@ -367,8 +357,8 @@
         <div class="field settings-field">
           <label class="switch-row" for="aiAutoAfterStop">
             <span>
-              録音停止後に自動でAI議事録を作成
-              <span class="field-hint inline">録音を止めると、そのまま録音音声を Gemini に送り、議事録＋メール文面まで自動で作ります。OFFにすると「AIで議事録を作成（自動）」を押したときだけ実行します。</span>
+              録音・読み込みのあと自動でAI議事録を作成
+              <span class="field-hint inline">録音を止めたとき（音声ファイルを読み込んだとき）に、そのまま音声を Gemini へ送り、議事録＋メール文面まで自動で作ります。OFFにすると「AIで議事録を作成」を押したときだけ実行します。</span>
             </span>
             <input type="checkbox" id="aiAutoAfterStop" checked />
           </label>
@@ -381,7 +371,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
-          <p class="field-hint">これを設定すると、録音画面の <strong>「AIで議事録を作成（自動）」</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
+          <p class="field-hint">これを設定すると、録音画面の <strong>「AIで議事録を作成」</strong> が使えます。録音音声（読み込んだ音声ファイルも同様）をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
           <div class="settings-field" style="margin-top:8px;">
             <label for="geminiModel" style="font-size:12px;color:var(--muted);">モデル</label>
             <select id="geminiModel">
@@ -416,16 +406,10 @@
           </details>
         </div>
         <div class="field settings-field">
-          <label for="geminiInstruction">A. 音声をAIに送る指示（Gemini等・編集可）</label>
+          <label for="geminiInstruction">議事録の指示（編集可）</label>
           <textarea id="geminiInstruction" class="minutes-area" rows="8"></textarea>
-          <p class="field-hint">録音音声と一緒に共有される指示文です。音声から議事録＋メール文面（件名/本文）まで作らせます。このあとに会議名・日付・参加者が自動で付きます。</p>
+          <p class="field-hint">音声と一緒にAIへ渡す指示文です。音声から議事録＋メール文面（件名/本文）まで作らせます。このあとに会議名・日付・参加者が自動で付きます。</p>
           <button class="chip-btn" id="geminiInstructionReset" type="button" style="margin-top:8px;">既定に戻す</button>
-        </div>
-        <div class="field settings-field">
-          <label for="claudeInstruction">B. 文字起こしをClaudeに送る指示（編集可）</label>
-          <textarea id="claudeInstruction" class="minutes-area" rows="8"></textarea>
-          <p class="field-hint">この指示文のあとに「会議名・日付・文字起こし」が自動で付きます。用途に合わせて自由に調整できます。</p>
-          <button class="chip-btn" id="claudeInstructionReset" type="button" style="margin-top:8px;">既定に戻す</button>
         </div>
       </div>
 
@@ -454,12 +438,12 @@
         <div class="section-head">
           <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="9" y1="7" x2="15" y2="7"/></svg> 使い方マニュアル</span>
         </div>
-        <p class="man-lead">NOTELOOP は、会議の<strong>録音 → 文字起こし → 議事録づくり → 共有</strong>を 1 つの画面でつなぐアプリです。録音ボタンを押すだけで始められます。以下は各機能の使い方です。</p>
+        <p class="man-lead">NOTELOOP は、会議の<strong>録音 → 議事録づくり → 共有</strong>を 1 つの画面でつなぐアプリです。録音ボタンを押すだけで始められます。外部で録音した音声ファイルを読み込んで議事録にすることもできます。以下は各機能の使い方です。</p>
         <div class="man-toc">
-          <button type="button" data-goto="man-start">はじめの4ステップ</button>
+          <button type="button" data-goto="man-start">はじめの3ステップ</button>
           <button type="button" data-goto="man-screens">画面の説明</button>
           <button type="button" data-goto="man-engine">文字起こしエンジン</button>
-          <button type="button" data-goto="man-claude">Claude連携</button>
+          <button type="button" data-goto="man-import">音声ファイルの読み込み</button>
           <button type="button" data-goto="man-export">書き出し・メール</button>
           <button type="button" data-goto="man-tips">便利な機能</button>
           <button type="button" data-goto="man-privacy">データとプライバシー</button>
@@ -469,22 +453,20 @@
       </div>
 
       <div class="panel" id="man-start">
-        <h3 class="settings-group-title">はじめの4ステップ</h3>
+        <h3 class="settings-group-title">はじめの3ステップ</h3>
         <ol class="man-steps">
-          <li><span class="man-n">1</span><div><b>録音する</b><p>「録音」画面の中央下にある丸いマイクボタンをタップ。マイクの使用を許可すると録音が始まり、話しながら文字起こしが画面に表示されます。</p></div></li>
-          <li><span class="man-n">2</span><div><b>停止する</b><p>もう一度ボタンをタップで停止。文字起こしが整い、下部に「録音した音声」の再生・保存が表示されます。誤変換のループは自動で除去されます。</p></div></li>
-          <li><span class="man-n">3</span><div><b>議事録ができるのを待つ</b><p>停止すると、<b>そのまま録音音声が Gemini に送られ、議事録＋メール文面が自動で作られます</b>（数十秒）。できあがると画面が結果までスクロールします。文面はその場で編集でき、メール本文にも反映済みです。<br>自動で作らせたくないときは <b>設定 → AI連携 →「録音停止後に自動でAI議事録を作成」</b> をOFFにしてください。OFFのときは「AIで議事録を作成（自動）」ボタンで作れます。</p></div></li>
-          <li><span class="man-n">4</span><div><b>Claudeでさらに整える（任意）</b><p><b>「コピーしてClaudeを開く」</b>で会議情報＋文字起こしをコピーし、開いた Claude に貼り付け（⌘/Ctrl+V）→送信すると、別の切り口の議事録も作れます。タイトルは内容から自動で付きます。</p></div></li>
-          <li><span class="man-n">5</span><div><b>出力・共有する</b><p>txt / Word / メールで書き出し。<b>一覧に保存</b>で履歴に残せます。</p></div></li>
+          <li><span class="man-n">1</span><div><b>録音する</b><p>「録音」画面の中央下にある丸いマイクボタンをタップ。マイクの使用を許可すると録音が始まり、上部のゲージが<b>声の大きさに合わせて</b>動きます。<br>※ すでに別のアプリ・ICレコーダーで録った音声があるときは、マイクボタンの上の <b>「録音済みの音声ファイルから作成」</b> から読み込めます（→ <a href="#man-import">音声ファイルの読み込み</a>）。</p></div></li>
+          <li><span class="man-n">2</span><div><b>停止する（そのまま議事録ができる）</b><p>もう一度ボタンをタップで停止。<b>そのまま音声が Gemini に送られ、議事録＋メール文面が自動で作られます</b>（数十秒）。できあがると画面が結果までスクロールします。文面はその場で編集でき、メール本文にも反映済みです。<br>自動で作らせたくないときは <b>設定 → AI連携 →「録音・読み込みのあと自動でAI議事録を作成」</b> をOFFに。OFFのときは <b>「AIで議事録を作成」</b> ボタンで作れます。</p></div></li>
+          <li><span class="man-n">3</span><div><b>出力・共有する</b><p>議事録ができると、下に <b>書き出し</b> と <b>メールを作成</b> のカードが出ます。txt / Word / メールで書き出し、<b>一覧に保存</b>で履歴に残せます。タイトルは内容から自動で付きます。</p></div></li>
         </ol>
       </div>
 
       <div class="panel" id="man-screens">
         <h3 class="settings-group-title">画面の説明</h3>
         <ul class="man-def">
-          <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と波形、ライブ文字起こしを表示。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
+          <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と、<b>声の大きさで動くゲージ</b>、ライブ文字起こしを表示。右下のツールボタンから会議情報（タイトル・日付・参加者）とマイクを設定できます。マイクボタンの上のボタンで、外部の音声ファイルを読み込めます。</span></li>
           <li><b>履歴</b><span>保存した議事録をカードで一覧。カードをタップすると<b>この画面のまま</b>、音声の再生・保存、AI議事録、書き出し、メール作成まで確認・編集できます（「一覧へ戻る」で一覧に戻ります）。右下のアイコンで削除・音声保存。最大10件を保存します。</span></li>
-          <li><b>設定</b><span>文字起こしエンジンの切替、<b>実行バックエンド（WebGPU / WASM）</b>、高精度モデル（tiny〜large-v3-turbo）、録音中の画面常時オン、Claude の指示テンプレートを設定できます。</span></li>
+          <li><b>設定</b><span>文字起こしエンジンの切替、<b>実行バックエンド（WebGPU / WASM）</b>、高精度モデル（tiny〜large-v3-turbo）、録音中の画面常時オン、AI（Gemini）のキー・モデル・指示テンプレートを設定できます。</span></li>
           <li><b>メニュー</b><span>左上の三本線（PC では常時左側）から各画面へ移動。上部に現在のバージョンを表示します。</span></li>
         </ul>
       </div>
@@ -506,14 +488,15 @@
         <div class="man-note"><b>おすすめ（スマホ）：</b>録音中は「ライブ表示（Web Speech）」で文字を確認し、止めたら <b>「音声をAIに送る」</b> で議事録化。<b>完全オフライン</b>が必要なときだけ、ライブ表示OFF＋「停止後にWhisper」を使ってください。</div>
       </div>
 
-      <div class="panel" id="man-claude">
-        <h3 class="settings-group-title">Claude 連携で高精度な議事録に</h3>
+      <div class="panel" id="man-import">
+        <h3 class="settings-group-title">外部で録音した音声から議事録を作る</h3>
+        <p class="field-hint" style="margin-bottom:12px;">ICレコーダー・スマホの録音アプリ・Web会議の録画など、<b>このアプリ以外で録った音声</b>でも議事録にできます。</p>
         <ol class="man-steps">
-          <li><span class="man-n">1</span><div><p>録音後のカード内「<b>コピーしてClaudeを開く</b>」をタップ。会議情報＋文字起こしが自動コピーされ、Claude が開きます。</p></div></li>
-          <li><span class="man-n">2</span><div><p>開いた Claude の入力欄に <b>貼り付け（<kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>V</kbd>）→ 送信</b> するだけ。</p></div></li>
-          <li><span class="man-n">3</span><div><p>Claude が要点・決定事項・ToDo を整理した議事録を作成します。</p></div></li>
+          <li><span class="man-n">1</span><div><p>録音画面のマイクボタンの上にある <b>「録音済みの音声ファイルから作成」</b> をタップ（すでに録音がある場合は「録音した音声」カードの <b>「別の音声ファイルを読み込む」</b>）。</p></div></li>
+          <li><span class="man-n">2</span><div><p>端末から音声ファイルを選びます。<b>m4a / mp3 / wav / aac / ogg / opus / webm / mp4</b> など、ブラウザが再生できる形式に対応しています。</p></div></li>
+          <li><span class="man-n">3</span><div><p>読み込むと、録音を止めたときと<b>まったく同じ流れ</b>で議事録＋メール文面が自動作成されます（自動作成をOFFにしている場合は「AIで議事録を作成」をタップ）。読み込んだ音声は履歴にも保存されます。</p></div></li>
         </ol>
-        <div class="man-note">渡す指示文は <b>設定 → Claude連携</b> で編集できます。Claude はチャット上で音声を直接処理できないため、渡すのは<b>文字起こしテキスト</b>です（音声は「録音した音声」から別途保存）。</div>
+        <div class="man-note">ファイル名がそのまま会議タイトルの初期値になります（<b>タイトル・参加者</b> から変更できます）。長い音声は送信・生成に時間がかかります。<b>設定 → 停止後の文字起こし</b> で Whisper を選んでいる場合は、読み込んだ音声も端末内で文字起こしされます。</div>
       </div>
 
       <div class="panel" id="man-export">
