@@ -101,6 +101,7 @@ const geminiInstructionReset = $('geminiInstructionReset');
 const geminiApiKey         = $('geminiApiKey');
 const geminiModel          = $('geminiModel');
 const geminiKeyStatus      = $('geminiKeyStatus');
+const aiAutoAfterStop      = $('aiAutoAfterStop');
 const geminiKeyTest        = $('geminiKeyTest');
 const geminiKeyTestStatus  = $('geminiKeyTestStatus');
 const geminiUsageBox       = $('geminiUsageBox');
@@ -128,7 +129,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.2';
+const APP_VERSION = 'Ver.5.3';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -988,13 +989,17 @@ async function stopRecording() {
   if (recordedBlob) await saveRecordingNow();
 
   const gotLiveText = liveTranscript.value.trim().length > 0;
+  // このあと Gemini へ自動で投げるか（Whisper のフォールバックを省く判断に使う）
+  const willAutoAi = isAiAutoAfterStop() && !!recordedBlob && !!loadGeminiKey();
   if (confirmMode === 'whisper' && recordedBlob) {
     // 設定で「停止後に Whisper で文字起こし」→ 音声全体を再処理して確定版に置き換え
     hideError();
     setStatus('working', '音声から文字起こし中…');
     await runFinalPass(recordedBlob);
-  } else if (!gotLiveText && recordedBlob) {
-    // ライブ文字が無い（Web Speech 非対応・オフライン・無音）→ 最低限 Whisper で一度だけ出す
+  } else if (!gotLiveText && recordedBlob && !willAutoAi) {
+    // ライブ文字が無い（Web Speech 非対応・オフライン・無音）→ 最低限 Whisper で一度だけ出す。
+    // ただし直後に音声をそのまま Gemini へ送る場合は省く。同じ音声を二重に処理することになり、
+    // 初回は Whisper モデルのダウンロード待ちで自動生成が大幅に遅れるため。
     hideError();
     setStatus('working', '音声から文字起こし中…');
     await runFinalPass(recordedBlob);
@@ -1012,6 +1017,15 @@ async function stopRecording() {
     scrollToEl('transcriptPanel');
   }
   updateHomeUI();
+
+  // 設定がONなら、そのまま Gemini に投げて議事録＋メール文面まで自動生成する。
+  // 失敗しても録音・文字起こし・履歴は上で確定済みなので、ここでは待つだけでよい。
+  if (willAutoAi) {
+    setStatus('working', 'AIが議事録を作成中…');
+    const ok = await runAiAutoMinutes({ auto: true });
+    setStatus(ok ? 'ready' : 'error', ok ? 'AI議事録の作成が完了しました' : 'AI議事録を作成できませんでした');
+    updateHomeUI();
+  }
 }
 
 /* =========================================================
@@ -2293,6 +2307,11 @@ async function openMinutes(item) {
   updateMeetingSummary();
   fillMinutesUI({ summary: item.summary || [], decisions: item.decisions || [], todos: item.todos || [] });
   liveTranscript.value = item.transcript || '';
+  // AIが作った議事録＋メール文面も復元する（自動生成分を含む）
+  if (aiResult) {
+    aiResult.value = item.aiText || '';
+    if (aiResultWrap) aiResultWrap.hidden = !item.aiText;
+  }
 
   // 履歴の録音音声を読み込み、その場で再生・確認・保存・AI連携できるようにする
   recordedBlob = null;
@@ -2612,6 +2631,10 @@ function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || GE
 // 新形式の「AQ.…」も発行する。どちらも有効なので両方を受け付ける。
 function isLikelyGeminiKey(k) { return /^AIza[\w-]{10,}$/.test(k) || /^AQ\.[\w.-]{10,}$/.test(k); }
 
+/* --- 録音停止後に自動でAI議事録を作るか（既定：ON）--- */
+const AI_AUTO_AFTER_STOP_KEY = 'noteloop_ai_auto_after_stop';
+function isAiAutoAfterStop() { return localStorage.getItem(AI_AUTO_AFTER_STOP_KEY) !== '0'; }
+
 /* --- 無料枠の使用状況（この端末での推定・毎日リセット）--- */
 const GEMINI_USAGE_KEY = 'noteloop_gemini_usage';
 const GEMINI_FREE_RPD = 1500; // 無料枠の1日あたりリクエスト上限
@@ -2792,38 +2815,71 @@ async function geminiGenerateMinutes(onStage) {
 }
 
 // 「AIで議事録を作成（自動）」
-if (aiAutoBtn) aiAutoBtn.addEventListener('click', async () => {
-  hideError();
+/**
+ * 生成したAI議事録を履歴エントリへ保存する。
+ * 直近に録音したエントリ（activeRecordingId）、無ければ一覧の最新に紐づける。
+ */
+function saveAiTextToHistory(text) {
+  try {
+    const list = loadStore();
+    if (!list.length) return;
+    let idx = activeRecordingId ? list.findIndex((e) => e.id === activeRecordingId) : -1;
+    if (idx < 0) idx = list.length - 1;
+    list[idx].aiText = text;
+    saveStore(list);
+    renderHistory();
+  } catch (_) { /* 保存に失敗しても画面の生成結果は使えるので無視する */ }
+}
+
+/**
+ * 録音音声を Gemini に投げ、議事録＋メール文面を画面へ反映する。
+ * ボタン押下と、録音停止後の自動実行の両方から呼ぶ。
+ * @param {{auto?: boolean}} [opts] auto=true なら録音停止直後の自動実行
+ * @returns {Promise<boolean>} 生成できたら true
+ */
+let aiAutoRunning = false;
+async function runAiAutoMinutes(opts) {
+  const auto = !!(opts && opts.auto);
+  if (aiAutoRunning) return false; // 二重起動（自動＋手動の同時実行）を防ぐ
   if (!loadGeminiKey()) {
     setAiAutoStatus('warn', '⚠ Gemini APIキーが未設定です。<strong>設定 → AI連携</strong> でキーを入力してください（<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">無料で取得</a>）。または下の「手動でGeminiに渡す」をご利用ください。');
-    return;
+    return false;
   }
   if (!recordedBlob) {
     setAiAutoStatus('warn', '⚠ 録音音声がありません。設定で<strong>ライブ字幕モードをOFF（録音モード）</strong>にして録音してからお試しください。');
-    return;
+    return false;
   }
-  aiAutoBtn.disabled = true;
-  const orig = aiAutoBtn.innerHTML;
-  aiAutoBtn.textContent = 'AIが作成中…';
+  aiAutoRunning = true;
+  const orig = aiAutoBtn ? aiAutoBtn.innerHTML : '';
+  if (aiAutoBtn) { aiAutoBtn.disabled = true; aiAutoBtn.textContent = 'AIが作成中…'; }
   try {
-    const text = await geminiGenerateMinutes((s) => setAiAutoStatus('', s));
+    const prefix = auto ? '録音が終わりました。' : '';
+    const text = await geminiGenerateMinutes((s) => setAiAutoStatus('', prefix + s));
     aiResult.value = text;
     aiResultWrap.hidden = false;
     ensureAutoTitle();
     if (mailBody && !mailBody.value.trim()) mailBody.value = text;
+    saveAiTextToHistory(text); // 再読み込み・履歴からの再表示でも残るように保存
     const u = loadUsage();
     const note = lastGeminiFallbackModel
       ? `<br>※選択中のモデルが使えなかったため <strong>${lastGeminiFallbackModel}</strong> で作成しました。設定→AI連携 でモデルを変更できます。`
       : '';
     setAiAutoStatus('ok', `✓ 議事録＋メール文面を生成しました（本日 ${u.requests}/${GEMINI_FREE_RPD}回・推定）。下で編集・コピー、メール本文にも反映済み。${note}`);
+    // 自動実行では結果まで自動で表示されないと気づけないので、生成結果へスクロールする
+    if (auto) scrollToEl('aiResultWrap');
+    return true;
   } catch (err) {
-    if (err && err.noKey) setAiAutoStatus('warn', '⚠ APIキーが未設定です。設定→AI連携で入力してください。');
-    else setAiAutoStatus('warn', '⚠ ' + (err && err.message ? err.message : err));
+    const msg = (err && err.noKey) ? 'APIキーが未設定です。設定→AI連携で入力してください。'
+              : (err && err.message ? err.message : String(err));
+    // 自動実行の失敗は「手動でやり直せる」ことまで伝える
+    setAiAutoStatus('warn', '⚠ ' + msg + (auto ? '<br>上の「AIで議事録を作成（自動）」からやり直せます。' : ''));
+    return false;
   } finally {
-    aiAutoBtn.disabled = false;
-    aiAutoBtn.innerHTML = orig;
+    aiAutoRunning = false;
+    if (aiAutoBtn) { aiAutoBtn.disabled = false; aiAutoBtn.innerHTML = orig; }
   }
-});
+}
+if (aiAutoBtn) aiAutoBtn.addEventListener('click', () => { hideError(); runAiAutoMinutes(); });
 if (aiResultCopy) aiResultCopy.addEventListener('click', async () => {
   const ok = await copyText(aiResult.value);
   setAiAutoStatus(ok ? 'ok' : 'warn', ok ? '✓ コピーしました。' : '⚠ コピーできませんでした。');
@@ -2886,6 +2942,22 @@ async function testGeminiKey() {
   }
 }
 if (geminiKeyTest) geminiKeyTest.addEventListener('click', testGeminiKey);
+/** 議事録カードに、いま自動生成モードかどうかを表示する */
+function updateAiAutoModeHint() {
+  const el = $('aiAutoModeHint');
+  if (!el) return;
+  el.textContent = isAiAutoAfterStop()
+    ? '録音を止めると自動で作成されます。作り直したいときは下のボタンを押してください。'
+    : '下のボタンを押すと、録音音声から議事録＋メール文面を作成します。';
+}
+if (aiAutoAfterStop) {
+  aiAutoAfterStop.checked = isAiAutoAfterStop();
+  aiAutoAfterStop.addEventListener('change', () => {
+    localStorage.setItem(AI_AUTO_AFTER_STOP_KEY, aiAutoAfterStop.checked ? '1' : '0');
+    updateAiAutoModeHint();
+  });
+}
+updateAiAutoModeHint();
 if (geminiApiKey) {
   geminiApiKey.value = loadGeminiKey();
   geminiApiKey.addEventListener('input', () => { localStorage.setItem(GEMINI_KEY_KEY, geminiApiKey.value.trim()); updateGeminiKeyStatus(); });

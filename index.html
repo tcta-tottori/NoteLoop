@@ -128,6 +128,7 @@
         <!-- A. 音声をAIに送る（Gemini）— 文字起こし不要・高精度 -->
         <div class="ai-inline ai-audio">
           <p class="route-title">録音音声から議事録を作成 <span class="route-badge">Gemini・おすすめ</span></p>
+          <p class="field-hint" id="aiAutoModeHint"></p>
           <button class="primary-btn ai-auto-btn" id="aiAutoBtn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/><path d="M19 3v4M21 5h-4"/></svg> AIで議事録を作成（自動）</button>
           <div class="claude-status" id="aiAutoStatus" hidden></div>
           <div class="ai-result-wrap" id="aiResultWrap" hidden>
@@ -350,6 +351,15 @@
       <div class="panel">
         <h3 class="settings-group-title">AI連携</h3>
         <div class="field settings-field">
+          <label class="switch-row" for="aiAutoAfterStop">
+            <span>
+              録音停止後に自動でAI議事録を作成
+              <span class="field-hint inline">録音を止めると、そのまま録音音声を Gemini に送り、議事録＋メール文面まで自動で作ります。OFFにすると「AIで議事録を作成（自動）」を押したときだけ実行します。</span>
+            </span>
+            <input type="checkbox" id="aiAutoAfterStop" checked />
+          </label>
+        </div>
+        <div class="field settings-field">
           <label for="geminiApiKey">Gemini API キー（自動生成に使用・任意）</label>
           <input id="geminiApiKey" type="password" autocomplete="off" placeholder="AIza… または AQ.… で始まるキーを貼り付け" />
           <p class="field-hint">これを設定すると、議事録画面の <strong>「AIで議事録を作成（自動）」</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
@@ -432,8 +442,9 @@
         <ol class="man-steps">
           <li><span class="man-n">1</span><div><b>録音する</b><p>「録音」画面の中央下にある丸いマイクボタンをタップ。マイクの使用を許可すると録音が始まり、話しながら文字起こしが画面に表示されます。</p></div></li>
           <li><span class="man-n">2</span><div><b>停止する</b><p>もう一度ボタンをタップで停止。文字起こしが整い、下部に「録音した音声」の再生・保存が表示されます。誤変換のループは自動で除去されます。</p></div></li>
-          <li><span class="man-n">3</span><div><b>議事録を作る</b><p>「議事録へ」または録音ボタンから議事録画面へ。<b>「コピーしてClaudeを開く」</b>で会議情報＋文字起こしをコピーし、開いた Claude に貼り付け（⌘/Ctrl+V）→送信すると高精度な議事録ができます。結果は下の欄に貼り付けると、メールや書き出しに使えます。タイトルは内容から自動で付きます。</p></div></li>
-          <li><span class="man-n">4</span><div><b>出力・共有する</b><p>txt / Word / メールで書き出し、または <b>Claude</b> に渡してさらに高精度な議事録に。<b>一覧に保存</b>で履歴に残せます。</p></div></li>
+          <li><span class="man-n">3</span><div><b>議事録ができるのを待つ</b><p>停止すると、<b>そのまま録音音声が Gemini に送られ、議事録＋メール文面が自動で作られます</b>（数十秒）。できあがると画面が結果までスクロールします。文面はその場で編集でき、メール本文にも反映済みです。<br>自動で作らせたくないときは <b>設定 → AI連携 →「録音停止後に自動でAI議事録を作成」</b> をOFFにしてください。OFFのときは「AIで議事録を作成（自動）」ボタンで作れます。</p></div></li>
+          <li><span class="man-n">4</span><div><b>Claudeでさらに整える（任意）</b><p><b>「コピーしてClaudeを開く」</b>で会議情報＋文字起こしをコピーし、開いた Claude に貼り付け（⌘/Ctrl+V）→送信すると、別の切り口の議事録も作れます。タイトルは内容から自動で付きます。</p></div></li>
+          <li><span class="man-n">5</span><div><b>出力・共有する</b><p>txt / Word / メールで書き出し。<b>一覧に保存</b>で履歴に残せます。</p></div></li>
         </ol>
       </div>
 

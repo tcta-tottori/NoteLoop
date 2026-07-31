@@ -250,6 +250,7 @@ select:focus, input:focus, textarea:focus {
 .status-chip.loading { color: var(--brand1); border-color: color-mix(in srgb, var(--brand1) 40%, var(--border)); }
 .status-chip.working { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 .status-chip.working::before { animation: blink 1s infinite; }
+.status-chip.error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
 @keyframes blink { 50% { opacity: .2; } }
 .progress { flex: 1; min-width: 120px; height: 8px; background: var(--surface-3); border-radius: 999px; overflow: hidden; }
 .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--brand1), var(--brand2)); transition: width .2s ease; }
