@@ -8,13 +8,21 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Shader;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Log;
+import android.widget.RemoteViews;
 
 import androidx.core.app.NotificationCompat;
 
@@ -41,8 +49,20 @@ public class RecordingService extends Service {
     private static final String CHANNEL_ID_OLD = "noteloop_recording";
     private static final int NOTIF_ID = 4711;
 
-    /** ゲージの更新間隔。動いて見える速さと電池消費のバランス。 */
-    private static final long GAUGE_TICK_MS = 500L;
+    /** 音量を読む間隔。1本のバーがこの時間ぶんの音量になる。 */
+    private static final long LEVEL_TICK_MS = 100L;
+    /** 通知のゲージを描き替える間隔（音量の読み取り何回ぶんか）。 */
+    private static final int NOTIF_EVERY_AWAKE = 4;  // 画面が点いている: 0.4秒ごと
+    private static final int NOTIF_EVERY_ASLEEP = 10; // 画面が消えている: 1秒ごと（誰も見ていないので粗く）
+
+    /** 通知に描くゲージ画像の大きさ（px）。表示側で横幅いっぱいに引き伸ばす。 */
+    private static final int GAUGE_W = 560;
+    private static final int GAUGE_H = 56;
+    /** ゲージが覚えておく音量の本数（＝流れていくバーの数） */
+    private static final int HIST = 64;
+    /** バーの色（左が濃い青 → 右へ明るい水色。アプリ画面のゲージと同じ配色） */
+    private static final int[] GAUGE_COLORS = { 0xFF2F4FC8, 0xFF3B6FE0, 0xFF4F9BF2, 0xFF7FD2FB };
+    private static final float[] GAUGE_STOPS = { 0f, 0.35f, 0.62f, 1f };
 
     /** 録音状態。プラグインから参照するのでプロセス内で共有する。 */
     private static volatile boolean recording = false;
@@ -55,17 +75,40 @@ public class RecordingService extends Service {
     /** 通知のゲージ更新用。通知を作り直さず、同じ Builder を使い回す。 */
     private NotificationCompat.Builder notifBuilder;
     private final Handler gaugeHandler = new Handler(Looper.getMainLooper());
-    private int gaugeLevel = 0; // 0..100（表示中のゲージの値）
+    private int notifCountdown = 0;
+    /**
+     * いまの音の大きさ（0.0〜1.0）。
+     * getMaxAmplitude() は「前回呼んでからの最大振幅」を返すため、複数の場所から
+     * 呼ぶと互いに値を食い合う。読むのはこのサービスの1か所だけにして、
+     * 通知のゲージも画面のゲージ（getLevel）も、この値を共有する。
+     */
+    private static volatile float level = 0f;
+
+    /** 流れていくバーの記録。いちばん新しい音量が histAt の1つ手前に入る。 */
+    private final float[] histV = new float[HIST];
+    private final float[] histBias = new float[HIST];  // 中心のずれ（非対称にするため）
+    private final float[] histShape = new float[HIST]; // 高さの個体差
+    private int histAt = 0;
+    private long gaugeSeed = 0;
+    private Paint gaugePaint;
+
     private final Runnable gaugeTick = new Runnable() {
         @Override
         public void run() {
             if (!recording) return;
-            updateGauge();
-            gaugeHandler.postDelayed(this, GAUGE_TICK_MS);
+            sampleLevel();
+            if (--notifCountdown <= 0) {
+                notifCountdown = isScreenOn() ? NOTIF_EVERY_AWAKE : NOTIF_EVERY_ASLEEP;
+                updateGauge();
+            }
+            gaugeHandler.postDelayed(this, LEVEL_TICK_MS);
         }
     };
 
     public static boolean isRecording() { return recording; }
+
+    /** 録音中の音量（0.0〜1.0）。画面上のゲージ表示に使う。 */
+    public static float getLevel() { return recording ? level : 0f; }
     public static String getCurrentPath() { return currentPath; }
     public static String getLastError() { return lastError; }
 
@@ -110,7 +153,10 @@ public class RecordingService extends Service {
         PendingIntent stopPi = PendingIntent.getService(this, 1, stop, piFlags);
 
         // 経過時間は setUsesChronometer で OS に数えさせる。画面を消していても
-        // ロック画面側で 1 秒ごとに進むため、こちらから更新しなくてもズレない。
+        // 通知の見出し部分で 1 秒ごとに進むため、こちらから更新しなくてもズレない。
+        // 本文はカスタムビュー（notif_recording.xml）にして、音量に連動する
+        // 縦バーのゲージを描く。見出し・操作ボタンは OS の体裁のまま使う
+        // （DecoratedCustomViewStyle）。
         notifBuilder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("● 録音中")
                 .setContentText("画面を消しても録音は続いています")
@@ -127,7 +173,15 @@ public class RecordingService extends Service {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)
-                .setProgress(100, 2, false); // 声の大きさで動くゲージ
+                .setStyle(new NotificationCompat.DecoratedCustomViewStyle());
+        try {
+            Bitmap gauge = renderGauge(); // 開始直後は静かなので点が並ぶ
+            notifBuilder.setCustomContentView(buildGaugeView(R.layout.notif_recording, gauge, false));
+            notifBuilder.setCustomBigContentView(buildGaugeView(R.layout.notif_recording_big, gauge, true));
+        } catch (Exception e) {
+            // カスタムビューを作れない端末では、素の通知（見出し＋本文）のまま続ける
+            Log.w(TAG, "ゲージ付き通知を作れませんでした", e);
+        }
 
         Notification n = notifBuilder.build();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -138,31 +192,102 @@ public class RecordingService extends Service {
     }
 
     /**
-     * 通知のゲージをマイクの音量に合わせて動かす（ロック画面でも動いて見える）。
+     * マイクの音量を読んで level に入れる。
      * getMaxAmplitude() は「前回呼んでからの最大振幅（0..32767）」を返すので、
      * 一定間隔で呼べばそのままレベルメーターになる。
      */
-    private void updateGauge() {
-        if (notifBuilder == null || !recording) return;
+    private void sampleLevel() {
         int amp = 0;
         try {
             if (recorder != null) amp = recorder.getMaxAmplitude();
         } catch (Exception ignored) { /* 停止直後などは取得できない */ }
-
-        // 会議の話し声（数千程度）でしっかり振れるよう、平方根で持ち上げる
-        double norm = Math.min(1.0, amp / 10000.0);
-        int target = (int) Math.round(Math.sqrt(norm) * 100);
+        float target = Math.min(1f, Math.max(0, amp) / 10000f);
         // アタックは速く、リリースはゆっくり（跳ねて滑らかに戻る動き）
-        gaugeLevel = target > gaugeLevel ? target : (int) Math.round(gaugeLevel * 0.65 + target * 0.35);
+        level = target > level ? target : level * 0.75f + target * 0.25f;
+        pushGaugeSlot(level);
+    }
 
+    /** 決まった見た目を再現するための擬似乱数（アプリ画面のゲージと同じ作り） */
+    private static float gaugeNoise(double seed) {
+        double x = Math.sin(seed * 12.9898) * 43758.5453;
+        return (float) (x - Math.floor(x)); // 0..1
+    }
+
+    /** 新しいバーを1本ぶん記録する（古いものは押し出されて消える） */
+    private void pushGaugeSlot(float v) {
+        gaugeSeed++;
+        histV[histAt] = v;
+        // 中心のずれ。上寄り／下寄りが不規則に入れ替わり、左右対称にならない。
+        histBias[histAt] = gaugeNoise(gaugeSeed * 1.7) * 2f - 1f;
+        // 高さの個体差。同じ音量でも1本ごとに伸び方が変わる。
+        histShape[histAt] = 0.55f + gaugeNoise(gaugeSeed * 3.1) * 0.45f;
+        histAt = (histAt + 1) % HIST;
+    }
+
+    /** 画面が点いているか（消えている間は通知の描き替えを粗くして電池を節約する） */
+    private boolean isScreenOn() {
         try {
-            notifBuilder.setProgress(100, Math.max(2, gaugeLevel), false);
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            return pm == null || pm.isInteractive();
+        } catch (Exception e) { return true; }
+    }
+
+    /**
+     * 通知に載せるゲージを描く。
+     * 1本＝0.1秒ぶんの音量で、右端が最新。左へ流れていき、静かなときは丸い点になる。
+     * アプリ画面のゲージと同じ描き方にそろえている。
+     */
+    private Bitmap renderGauge() {
+        Bitmap bmp = Bitmap.createBitmap(GAUGE_W, GAUGE_H, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        if (gaugePaint == null) {
+            gaugePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            gaugePaint.setShader(new LinearGradient(
+                    0, 0, GAUGE_W, 0, GAUGE_COLORS, GAUGE_STOPS, Shader.TileMode.CLAMP));
+        }
+        final float barW = Math.max(4f, GAUGE_W / 90f);
+        final float pitch = barW * 2f;                    // バー同士の間隔
+        final int count = Math.min(HIST, (int) (GAUGE_W / pitch));
+        final float maxH = GAUGE_H * 0.92f;               // いちばん大きい声のときの高さ
+        final float minH = barW;                          // 無音は「点」になる
+        final float mid = GAUGE_H / 2f;
+
+        for (int i = 0; i < count; i++) {
+            // i=0 が左端（古い）、count-1 が右端（最新）
+            int idx = ((histAt - 1 - (count - 1 - i)) % HIST + HIST) % HIST;
+            float v = histV[idx];
+            float bh = minH + (maxH - minH) * v * histShape[idx];
+            float cy = mid + histBias[idx] * (maxH * 0.10f) * v;
+            float x = GAUGE_W - (count - i) * pitch;
+            RectF r = new RectF(x, cy - bh / 2f, x + barW, cy + bh / 2f);
+            c.drawRoundRect(r, barW / 2f, barW / 2f, gaugePaint);
+        }
+        return bmp;
+    }
+
+    /** 通知のゲージを現在の音量に合わせて描き替える（ロック画面でも動いて見える）。 */
+    private void updateGauge() {
+        if (notifBuilder == null || !recording) return;
+        try {
+            Bitmap gauge = renderGauge();
+            // RemoteViews は setXxx のたびに命令が積まれるため、毎回作り直す
+            notifBuilder.setCustomContentView(buildGaugeView(R.layout.notif_recording, gauge, false));
+            notifBuilder.setCustomBigContentView(buildGaugeView(R.layout.notif_recording_big, gauge, true));
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(NOTIF_ID, notifBuilder.build());
         } catch (Exception e) {
             // 通知が出せない（権限を切られた等）だけなら録音は続ける
             Log.w(TAG, "通知を更新できませんでした", e);
         }
+    }
+
+    /** ゲージ入りの通知ビューを1枚作る */
+    private RemoteViews buildGaugeView(int layoutId, Bitmap gauge, boolean big) {
+        RemoteViews rv = new RemoteViews(getPackageName(), layoutId);
+        rv.setTextViewText(R.id.notif_title, "● 録音中");
+        if (big) rv.setTextViewText(R.id.notif_text, "画面を消しても録音は続いています");
+        rv.setImageViewBitmap(R.id.notif_gauge, gauge);
+        return rv;
     }
 
     private void createChannel() {
@@ -216,10 +341,13 @@ public class RecordingService extends Service {
             startedAtElapsed = SystemClock.elapsedRealtime();
             recording = true;
             lastError = null;
-            // 通知のゲージを動かし始める（フォアグラウンドサービスなので画面オフでも動く）
-            gaugeLevel = 0;
+            // 音量の読み取りと通知のゲージを動かし始める
+            // （フォアグラウンドサービスなので画面オフでも止まらない）
+            level = 0f;
+            java.util.Arrays.fill(histV, 0f);
+            notifCountdown = NOTIF_EVERY_AWAKE;
             gaugeHandler.removeCallbacks(gaugeTick);
-            gaugeHandler.postDelayed(gaugeTick, GAUGE_TICK_MS);
+            gaugeHandler.postDelayed(gaugeTick, LEVEL_TICK_MS);
             return true;
         } catch (Exception e) {
             lastError = String.valueOf(e.getMessage());
@@ -233,6 +361,7 @@ public class RecordingService extends Service {
         if (!recording) return;
         recording = false;
         gaugeHandler.removeCallbacks(gaugeTick);
+        level = 0f;
         try {
             recorder.stop();
         } catch (Exception e) {

@@ -131,7 +131,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.6.1';
+const APP_VERSION = 'Ver.6.2';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1615,38 +1615,99 @@ function updateTimer() {
   }
 }
 
-/* ===== 上部のウェーブアニメーション ===== */
+/* =========================================================
+ * 上部の録音ゲージ（音量に連動する縦バー）
+ *   声の大きさをそのまま縦バーの高さにし、1本ごとに中心をずらして
+ *   （非対称に）並べる。時間とともに右から左へ流れ、静かなときは
+ *   丸い点になって残る。
+ * =======================================================*/
 let waveRAF = null, wavePhase = 0, waveLevel = 0.14, waveActive = false;
+let nativeLevel = 0;       // アプリ版でネイティブから受け取った音量（0..1）
+let nativeLevelTimer = null;
 let procProgress = 0;      // 高精度処理の推定進捗 0..1
 let lastDlProgress = 0;    // 直近のモデルDL進捗の時刻
 const waveBuf = new Uint8Array(1024);
+
+// 1本のバーが受け持つ時間。短いほど細かく流れる。
+const GAUGE_SLOT_MS = 68;
+// slots[0] が最も古い（左端）。{ v: 音量 0..1, bias: 中心のずれ -1..1, shape: 個体差 }
+let gaugeSlots = [];
+let gaugeSlotAt = 0;
+let gaugeSeed = 0;
+
 function brandVar(n) { return (getComputedStyle(document.documentElement).getPropertyValue(n) || '').trim(); }
+
+/** 決まった見た目を再現するための擬似乱数（同じ種なら同じ値） */
+function gaugeNoise(seed) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x); // 0..1
+}
+function newGaugeSlot() {
+  gaugeSeed++;
+  return {
+    v: 0,
+    // 中心のずれ。上寄り／下寄りが不規則に入れ替わり、左右対称にならない。
+    bias: gaugeNoise(gaugeSeed * 1.7) * 2 - 1,
+    // 高さの個体差。同じ音量でも1本ごとに伸び方が変わる。
+    shape: 0.55 + gaugeNoise(gaugeSeed * 3.1) * 0.45,
+  };
+}
+
 function resizeWave() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const rect = wave.getBoundingClientRect();
   if (rect.width > 0) { wave.width = Math.round(rect.width * dpr); wave.height = Math.round(rect.height * dpr); }
 }
+
+/** アプリ版: 録音中の音量をネイティブから定期的に受け取る（マイクは開かない） */
+function startNativeLevelPolling() {
+  if (!NATIVE || nativeLevelTimer) return;
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.getLevel !== 'function') return;
+  nativeLevelTimer = setInterval(async () => {
+    try {
+      const r = await rec.getLevel();
+      const v = r && typeof r.level === 'number' ? r.level : 0;
+      // 小さな音を持ち上げて、話し声で気持ちよく動く範囲に整える
+      nativeLevel = Math.min(1, Math.pow(Math.max(0, v), 0.6) * 1.35);
+    } catch (_) { /* 取れない版のアプリでは 0 のまま（ゲージは静かなまま） */ }
+  }, 90);
+}
+function stopNativeLevelPolling() {
+  if (nativeLevelTimer) clearInterval(nativeLevelTimer);
+  nativeLevelTimer = null;
+  nativeLevel = 0;
+}
+
 function startWave() {
   if (waveActive) return;
   waveActive = true;
+  gaugeSlots = [];
+  gaugeSlotAt = performance.now();
+  startNativeLevelPolling();
   resizeWave();
   waveLoop();
 }
 function stopWave() {
   waveActive = false;
+  stopNativeLevelPolling();
   if (waveRAF) cancelAnimationFrame(waveRAF);
   waveRAF = null;
 }
 function waveLoop() {
   if (!waveActive) return;
   waveRAF = requestAnimationFrame(waveLoop);
-  // 大きいほど速く揺れる（静かなときはゆっくり）
+  // 大きいほど速く動く（静かなときはゆっくり）
   wavePhase += 0.02 + waveLevel * 0.055;
   // 高精度処理中は「文字が打たれていく」別アニメーションを表示
   if (homeProcessing && !recording) { drawProcessingFrame(); return; }
   sttActivity *= 0.9;
   let target;
-  if (recording && analyser) {
+  if (recording && NATIVE) {
+    // アプリ版はサービス側の MediaRecorder が音を握っているので、
+    // マイクを二重に開かず、録音中の振幅をネイティブから受け取って使う。
+    target = nativeLevel;
+  } else if (recording && analyser) {
     analyser.getByteTimeDomainData(waveBuf);
     let s = 0;
     for (let i = 0; i < waveBuf.length; i++) { const x = (waveBuf[i] - 128) / 128; s += x * x; }
@@ -1710,31 +1771,72 @@ function drawProcessingFrame() {
   }
 }
 
+/**
+ * 録音中のゲージ本体。
+ * 1本＝一定時間ぶんの音量で、右端で生まれて左へ流れていく。
+ * 各バーは中心をずらして描くので、上下対称の波形にはならない。
+ */
 function drawWaveFrame() {
   const ctx = wave.getContext('2d');
-  const w = wave.width, h = wave.height, mid = h * 0.52;
+  // 上部は経過時間の表示に譲るため、バーの中心は少し下に置く
+  const w = wave.width, h = wave.height, mid = h * 0.6;
   ctx.clearRect(0, 0, w, h);
-  // 線で描く波。端に向かって振幅が細くなり、グロウで背景に溶け込む。
-  const layers = [
-    { amp: 0.42, freq: 1.3, speed: 0.8,  col: '#7c5cf6', a: 0.42 },
-    { amp: 0.30, freq: 1.9, speed: -1.1, col: '#4f6ef7', a: 0.38 },
-    { amp: 0.20, freq: 2.7, speed: 1.5,  col: '#ec4899', a: 0.30 },
-  ];
-  const step = Math.max(2, w / 240);
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  for (const L of layers) {
-    ctx.beginPath();
-    for (let x = 0; x <= w; x += step) {
-      const t = x / w;
-      const env = Math.sin(t * Math.PI);   // 端で0 → 中央でふくらむ（溶け込み）
-      const y = mid + Math.sin(t * Math.PI * 2 * L.freq + wavePhase * L.speed)
-                    * (h * L.amp * (0.05 + waveLevel)) * env;
-      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.strokeStyle = L.col; ctx.globalAlpha = L.a;
-    ctx.lineWidth = Math.max(2.5, w * 0.0045);
-    ctx.shadowColor = L.col; ctx.shadowBlur = 14;
-    ctx.stroke();
+
+  // バーの太さ。無音時の「点」の大きさでもあるので、高さに対して太くなりすぎ
+  // ないよう抑える（横長の画面でバーが潰れて高さの差が出なくなるのを防ぐ）。
+  const barW = Math.max(4, Math.min(Math.round(w / 90), Math.round(h * 0.12)));
+  const pitch = barW * 2;                          // バー同士の間隔（太さと同じだけ空ける）
+  const count = Math.ceil(w / pitch) + 2;          // 画面外の1本を含めて用意する
+  const maxH = h * 0.56;                           // いちばん大きい声のときの高さ
+  const minH = barW;                               // 無音は「点」になる
+
+  // 時間の経過ぶんだけスロットを進める（＝右から左へ流れる）
+  const now = performance.now();
+  if (!gaugeSlots.length) { for (let i = 0; i < count; i++) gaugeSlots.push(newGaugeSlot()); gaugeSlotAt = now; }
+  // 画面を消していた間は描画が止まる。空白の時間ぶんを律儀に作らず、
+  // 画面1枚ぶんまで巻き戻して再開する（復帰時に無駄なループを回さない）。
+  const maxGap = count * GAUGE_SLOT_MS;
+  if (now - gaugeSlotAt > maxGap) gaugeSlotAt = now - maxGap;
+  while (now - gaugeSlotAt >= GAUGE_SLOT_MS) {
+    gaugeSlotAt += GAUGE_SLOT_MS;
+    gaugeSlots.push(newGaugeSlot());
+  }
+  while (gaugeSlots.length > count) gaugeSlots.shift();
+  while (gaugeSlots.length < count) gaugeSlots.unshift(newGaugeSlot());
+  // いま生まれているバー（右端）は、そのスロットの最大音量を保持する
+  const head = gaugeSlots[gaugeSlots.length - 1];
+  head.v = Math.max(head.v, waveLevel);
+
+  // スロットの途中経過ぶんだけ横にずらし、カクつかずに流れて見せる
+  const frac = Math.min(1, (now - gaugeSlotAt) / GAUGE_SLOT_MS);
+  const shift = frac * pitch;
+
+  // 左が濃い青、右へいくほど明るい水色
+  const grad = ctx.createLinearGradient(0, 0, w, 0);
+  grad.addColorStop(0.00, '#2f4fc8');
+  grad.addColorStop(0.35, '#3b6fe0');
+  grad.addColorStop(0.62, '#4f9bf2');
+  grad.addColorStop(1.00, '#7fd2fb');
+  ctx.fillStyle = grad;
+  ctx.shadowColor = 'rgba(79, 155, 242, .45)';
+  ctx.shadowBlur = Math.max(6, barW * 2);
+
+  const last = gaugeSlots.length - 1;
+  for (let i = 0; i <= last; i++) {
+    const s = gaugeSlots[i];
+    // 新しいバーほど右。生まれた瞬間は右端の外にあり、流れながら現れる。
+    const x = w - (last - i) * pitch - shift;
+    if (x < -pitch || x > w) continue;
+    const t = x / w;
+    // 両端はうっすら消えて背景に溶け込む
+    const edge = Math.min(1, Math.min(t, 1 - t) / 0.09);
+    if (edge <= 0) continue;
+    const bh = minH + (maxH - minH) * s.v * s.shape;
+    // 中心のずれ＝非対称。声が大きいバーほど大きくずれる。
+    const cy = mid + s.bias * (maxH * 0.12) * s.v;
+    ctx.globalAlpha = 0.55 + 0.45 * edge;
+    rrect(ctx, x, cy - bh / 2, barW, bh, barW / 2);
+    ctx.fill();
   }
   ctx.globalAlpha = 1; ctx.shadowBlur = 0;
 }
