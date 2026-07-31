@@ -17,6 +17,7 @@ const ICO_TRASH      = `<svg class="btn-ico" ${SVG_ATTR}><polyline points="3 6 5
 /* ===== 要素 ===== */
 const recordBtn      = $('recordBtn');
 const recHint        = $('recHint');
+const capturedHint   = $('capturedHint');
 const timerEl        = $('timer');
 const wave           = $('wave');
 const waveWrap       = $('waveWrap');
@@ -130,7 +131,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.5';
+const APP_VERSION = 'Ver.5.6';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -170,6 +171,12 @@ let recordChunkAt = 0;            // 最後にチャンクを受け取った時�
 let recordWatchTimer = null;
 let recordStalled = false;        // 録音が止まっていると判断中か（通知に警告を出す）
 let recordRecoverCount = 0;       // 録音を自動で復帰させた回数
+// セグメント結合の結果（停止後の警告で「何本中何本を繋げたか」を知らせるため）
+let segmentReport = { total: 0, merged: 0, failed: 0 };
+// 録音時間に対して音声が短かったときの記録（AI議事録にも「一部しか含まれない」と添えるため）
+let audioShortfall = null;
+// 実際にデータが届いていた時間の合計（ミリ秒）。経過時間との差が「録れていない時間」。
+let capturedMs = 0;
 let recordRestarting = false;     // 復帰処理中（見張りの多重実行を防ぐ）
 let recordedDurationSec = 0;      // 保存された音声の実長（秒）
 let recordedBlob = null;
@@ -645,7 +652,14 @@ function startSegmentRecorder(stream) {
   }
   const chunks = [];
   rec.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) { chunks.push(e.data); recordChunkAt = Date.now(); }
+    if (e.data && e.data.size > 0) {
+      const now = Date.now();
+      // 実際に録れている時間を積む。チャンクが届いた区間だけを数えるので、
+      // 端末に録音を止められていた時間は加算されない（＝経過時間との差が欠落）。
+      if (recordChunkAt) capturedMs += Math.min(now - recordChunkAt, REC_TIMESLICE_MS * 2);
+      chunks.push(e.data);
+      recordChunkAt = now;
+    }
   };
   rec.onerror = () => { recordChunkAt = 0; }; // 見張り側で録り直す
   try { rec.start(REC_TIMESLICE_MS); }
@@ -757,12 +771,16 @@ async function finalizeRecordedAudio() {
   await sealCurrentSegment();
   const segs = recordedSegments.filter((b) => b && b.size > 0);
   recordedSegments = [];
+  segmentReport = { total: segs.length, merged: segs.length, failed: 0 };
   if (!segs.length) return null;
   if (segs.length === 1) return segs[0];
   try {
     return await mergeSegmentsToWav(segs);
-  } catch (_) {
-    // 結合に失敗したら、いちばん長い（大きい）セグメントを残す
+  } catch (err) {
+    console.warn('[NoteLoop] セグメントを結合できませんでした', err);
+    // 結合に失敗したら、いちばん長い（大きい）セグメントを残す。
+    // 残りは捨てることになるので、警告で必ず知らせる。
+    segmentReport = { total: segs.length, merged: 1, failed: segs.length - 1 };
     return segs.reduce((a, b) => (b.size > a.size ? b : a), segs[0]);
   }
 }
@@ -775,10 +793,11 @@ async function finalizeRecordedAudio() {
 async function mergeSegmentsToWav(segs) {
   const parts = [];
   let frames = 0;
+  segmentReport = { total: segs.length, merged: 0, failed: 0 };
   for (const s of segs) {
     try {
       const f32 = await decodeTo16kMono(s);
-      if (!f32 || !f32.length) continue;
+      if (!f32 || !f32.length) { segmentReport.failed++; continue; }
       const i16 = new Int16Array(f32.length);
       for (let i = 0; i < f32.length; i++) {
         const v = Math.max(-1, Math.min(1, f32[i]));
@@ -786,7 +805,13 @@ async function mergeSegmentsToWav(segs) {
       }
       parts.push(i16);
       frames += i16.length;
-    } catch (_) { /* 壊れたセグメントは飛ばして続ける */ }
+      segmentReport.merged++;
+    } catch (err) {
+      // 黙って捨てると「なぜか短い音声」だけが残り、原因が分からなくなる。
+      // 数を控えて、停止後の警告で必ず知らせる。
+      segmentReport.failed++;
+      console.warn('[NoteLoop] セグメントをデコードできませんでした', err);
+    }
   }
   if (!parts.length) throw new Error('結合できる音声がありませんでした');
   return new Blob([wavHeader(frames, SAMPLE_RATE), ...parts], { type: 'audio/wav' });
@@ -857,16 +882,25 @@ function showAudioShortfallWarning(wallSec, audioSec) {
   if (!audioWarn) return;
   const recovered = recordRecoverCount > 0
     ? `録音が途切れたため ${recordRecoverCount} 回自動で録り直しました。` : '';
-  // 長さが測れない／十分に録れている場合は、復帰があったときだけ知らせる
-  if (!audioSec || wallSec < 60 || audioSec >= wallSec * 0.9 - 5) {
-    if (recovered) { audioWarn.textContent = `⚠ ${recovered}`; audioWarn.hidden = false; }
+  // 結合できなかったセグメントがある＝その分の音声は失われている。
+  // 原因が「端末が録音を止めた」のか「結合に失敗した」のかで対処が違うので、必ず区別して伝える。
+  const dropped = segmentReport.failed > 0
+    ? `録音は ${segmentReport.total} 本に分かれ、うち ${segmentReport.failed} 本を音声として読み込めませんでした（その分は失われています）。` : '';
+  // 20秒以上・かつ1割以上足りないときを「欠落」とみなす。
+  // 以前は「1分以上の録音」に限っていたため、短い録音での欠落を見逃していた。
+  const missing = audioSec ? wallSec - audioSec : 0;
+  if (!audioSec || missing < 20 || audioSec >= wallSec * 0.9) {
+    if (recovered || dropped) { audioWarn.textContent = `⚠ ${dropped}${recovered}`; audioWarn.hidden = false; }
     return;
   }
+  audioShortfall = { wallSec, audioSec }; // AI議事録側でも注意を出す
   audioWarn.textContent =
     `⚠ 録音時間は ${formatDurationJp(wallSec)} ですが、保存された音声は ${formatDurationJp(audioSec)} でした。` +
-    `画面を消している間に、ブラウザ（または端末の省電力機能）が録音を止めた可能性があります。${recovered}` +
+    `${dropped}${recovered}` +
+    `画面を消している間に、ブラウザ（または端末の省電力機能）が録音を止めた可能性があります。` +
     `設定の「録音中は画面を常時オン」をON、端末のバッテリー最適化からブラウザを除外し、` +
-    `録音中は他のアプリに切り替えないようにすると安定します。`;
+    `録音中は他のアプリに切り替えないようにすると安定します。` +
+    `長い会議では、端末を充電しながら画面を点けたままにすると確実です。`;
   audioWarn.hidden = false;
 }
 
@@ -907,6 +941,9 @@ async function startRecording() {
   recordStalled = false;
   recordRecoverCount = 0;
   recordRestarting = false;
+  segmentReport = { total: 0, merged: 0, failed: 0 };
+  audioShortfall = null;
+  capturedMs = 0;
 
   // === ライブ字幕モード（Web Speech）＋ 音声録音を並行 ===
   // 先に録音用マイクを確保（getUserMedia → MediaRecorder）してから認識を開始する。
@@ -1412,11 +1449,25 @@ function cleanupTranscript(text) {
 }
 
 /** 録音 Blob を 16kHz モノラルの Float32 にデコード＆リサンプル */
+/**
+ * デコード用の AudioContext。呼び出しごとに new すると、
+ * ブラウザの同時 AudioContext 数の上限（Chrome は6程度）にすぐ達し、
+ * 以降の生成が例外になって「デコードできないセグメント」が量産される。
+ * 1つを使い回し、閉じない。
+ */
+let decodeCtx = null;
+function getDecodeCtx() {
+  if (!decodeCtx || decodeCtx.state === 'closed') {
+    decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return decodeCtx;
+}
+
 async function decodeTo16kMono(blob) {
   const arrayBuffer = await blob.arrayBuffer();
-  const tmp = new (window.AudioContext || window.webkitAudioContext)();
-  const decoded = await tmp.decodeAudioData(arrayBuffer);
-  tmp.close();
+  const ctx = getDecodeCtx();
+  // decodeAudioData は ArrayBuffer を detach するため、同じバッファは再利用できない
+  const decoded = await ctx.decodeAudioData(arrayBuffer);
   const frames = Math.ceil(decoded.duration * SAMPLE_RATE);
   const off = new OfflineAudioContext(1, Math.max(frames, 1), SAMPLE_RATE);
   const src = off.createBufferSource();
@@ -1462,11 +1513,29 @@ clearTranscript.addEventListener('click', () => {
 liveTranscript.addEventListener('input', updateHomeUI);
 
 /* ===== タイマー ===== */
+/**
+ * 「経過時間」と「実際に録れている時間」が離れてきたら、録音中に知らせる。
+ * 端末が録音を止めていることに会議の最中に気づけるようにするためのもので、
+ * 停止後に「29分のはずが2分しか残っていない」と分かる事態を防ぐ。
+ */
+function updateCapturedNotice(elapsedSec) {
+  if (!capturedHint) return;
+  if (!recording) { capturedHint.hidden = true; return; }
+  const capturedSec = Math.floor(capturedMs / 1000);
+  const lostSec = elapsedSec - capturedSec;
+  // 起動直後や数秒のずれでは出さない。20秒以上かつ2割以上ずれたときだけ。
+  if (elapsedSec < 30 || lostSec < 20 || capturedSec > elapsedSec * 0.8) { capturedHint.hidden = true; return; }
+  capturedHint.textContent = `⚠ 録音できているのは ${formatDurationJp(capturedSec)}（経過 ${formatDurationJp(elapsedSec)}）。`
+    + `端末が録音を止めています。画面を点けたままにしてください。`;
+  capturedHint.hidden = false;
+}
+
 function updateTimer() {
   const elapsed = Math.floor((Date.now() - startTime) / 1000);
   const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const s = String(elapsed % 60).padStart(2, '0');
   timerEl.textContent = `${m}:${s}`;
+  updateCapturedNotice(elapsed);
   // 通知の経過時間は 5 秒以上あいたら更新する。
   // （バックグラウンドではタイマーが間引かれて秒が飛ぶため、剰余ではなく差で判定）
   if (recording && (notifLastSec < 0 || elapsed - notifLastSec >= 5)) {
@@ -2962,9 +3031,16 @@ async function runAiAutoMinutes(opts) {
     if (mailBody && !mailBody.value.trim()) mailBody.value = text;
     saveAiTextToHistory(text); // 再読み込み・履歴からの再表示でも残るように保存
     const u = loadUsage();
-    const note = lastGeminiFallbackModel
+    let note = lastGeminiFallbackModel
       ? `<br>※選択中のモデルが使えなかったため <strong>${lastGeminiFallbackModel}</strong> で作成しました。設定→AI連携 でモデルを変更できます。`
       : '';
+    // 音声が途中までしか残っていない場合、議事録もその範囲しか含まない。
+    // 完全な議事録だと思い込むと危ないので、結果と一緒に必ず知らせる。
+    if (audioShortfall) {
+      note += `<br>⚠ <strong>この議事録は、残っている音声（${formatDurationJp(audioShortfall.audioSec)}）だけから作成されています。</strong>`
+        + `録音時間は ${formatDurationJp(audioShortfall.wallSec)} なので、会議の一部しか含まれていません。`
+        + `上の「録音した音声」の注意書きをご確認ください。`;
+    }
     setAiAutoStatus('ok', `✓ 議事録＋メール文面を生成しました（本日 ${u.requests}/${GEMINI_FREE_RPD}回・推定）。下で編集・コピー、メール本文にも反映済み。${note}`);
     // 自動実行では結果まで自動で表示されないと気づけないので、生成結果へスクロールする
     if (auto) scrollToEl('aiResultWrap');
