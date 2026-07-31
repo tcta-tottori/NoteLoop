@@ -131,7 +131,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.7';
+const APP_VERSION = 'Ver.5.8';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -2831,6 +2831,10 @@ function loadGeminiKey() { return (localStorage.getItem(GEMINI_KEY_KEY) || '').t
 const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash';
 // 選択モデルが 404（提供終了）や 429（無料枠なし）で使えないときに順に試す代替。
 const GEMINI_FALLBACK_MODELS = ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+// サーバ側の一時的な事情。待てば通ることが多いので、同じモデルで粘ってから代替へ移る。
+// 503（混雑）はモデルを変えても混んでいることが多く、待つほうが効く。
+const GEMINI_TRANSIENT_STATUS = [500, 502, 503, 504];
+const GEMINI_MAX_RETRY = 3;
 function loadGeminiModel() { return localStorage.getItem(GEMINI_MODEL_KEY) || GEMINI_DEFAULT_MODEL; }
 
 // APIキーの形式。Google AI Studio は従来の「AIza…」に加え、
@@ -2971,6 +2975,10 @@ function geminiHttpError(status, msg, model) {
   if (status === 429) {
     return new Error(`モデル「${model}」の利用枠に達しました。無料枠（請求先未設定）のプロジェクトでは最新モデル（gemini-3.6-flash / gemini-flash-latest）に割り当てが無く、常にこのエラーになります。設定→AI連携 のモデルを gemini-3.5-flash に変更してお試しください。`);
   }
+  if (GEMINI_TRANSIENT_STATUS.includes(status)) {
+    // Google側の一時的な事情。録音は保存済みなので、あとから作り直せば済む。
+    return new Error(`Gemini側が一時的に混み合っています（${status}）。しばらく待ってから「AIで議事録を作成（自動）」でやり直してください。録音音声は保存されているので、あとからでも議事録を作れます。`);
+  }
   return new Error('Gemini APIエラー（' + status + '）: ' + msg);
 }
 
@@ -3004,23 +3012,37 @@ async function geminiGenerateMinutes(onStage) {
   // 選択モデルが使えない（提供終了 / 無料枠なし）ときは代替モデルで自動的に再試行する。
   const tried = [];
   let data = null, lastErr = null, usedModel = model;
+  outer:
   for (const m of [model, ...GEMINI_FALLBACK_MODELS]) {
     if (tried.includes(m)) continue;
     tried.push(m);
     if (tried.length > 1) onStage && onStage(`${m} で作成し直しています…`);
-    const res = await fetch(`${GENAI_BASE}/v1beta/models/${encodeURIComponent(m)}:generateContent`, {
-      method: 'POST',
-      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (res.ok) { data = await res.json(); usedModel = m; break; }
 
-    let msg = String(res.status);
-    try { const e = await res.json(); msg = (e.error && e.error.message) || msg; } catch (_) {}
-    lastErr = geminiHttpError(res.status, msg, m);
-    // 404（モデルが無い）と 429（枠切れ）だけ代替モデルを試す。
-    // キー不正・権限・リクエスト不正はモデルを変えても直らないので即座に中断する。
-    if (res.status !== 404 && res.status !== 429) throw lastErr;
+    // 一時的な混雑（503など）は待てば通ることが多いので、同じモデルで数回粘る。
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(`${GENAI_BASE}/v1beta/models/${encodeURIComponent(m)}:generateContent`, {
+        method: 'POST',
+        headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) { data = await res.json(); usedModel = m; break outer; }
+
+      let msg = String(res.status);
+      try { const e = await res.json(); msg = (e.error && e.error.message) || msg; } catch (_) {}
+      lastErr = geminiHttpError(res.status, msg, m);
+
+      if (GEMINI_TRANSIENT_STATUS.includes(res.status) && attempt < GEMINI_MAX_RETRY) {
+        // 2秒 → 4秒 → 8秒 と間隔を空けて待つ
+        const waitMs = 2000 * Math.pow(2, attempt);
+        onStage && onStage(`Geminiが混み合っています。${Math.round(waitMs / 1000)}秒待って再試行します…（${attempt + 1}/${GEMINI_MAX_RETRY}）`);
+        await new Promise((r) => setTimeout(r, waitMs));
+        continue;
+      }
+      // 404（モデルが無い）/ 429（枠切れ）/ 粘っても復帰しない一時エラーは代替モデルへ。
+      // キー不正・権限・リクエスト不正はモデルを変えても直らないので即座に中断する。
+      if (res.status === 404 || res.status === 429 || GEMINI_TRANSIENT_STATUS.includes(res.status)) break;
+      throw lastErr;
+    }
   }
   if (!data) {
     if (tried.length > 1) {
