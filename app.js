@@ -131,7 +131,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.5.6';
+const APP_VERSION = 'Ver.5.7';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -916,6 +916,53 @@ recordBtn.addEventListener('click', async () => {
   return startRecording();
 });
 
+/* =========================================================
+ * ネイティブ録音（Androidアプリ版）
+ *   フォアグラウンドサービスで録るため、画面を消しても
+ *   他のアプリに切り替えても OS に録音を止められない。
+ *   ブラウザで開いた場合は NATIVE=false となり、従来どおり MediaRecorder を使う。
+ * =======================================================*/
+const NATIVE = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function'
+  && window.Capacitor.isNativePlatform());
+function nativeRecorder() {
+  return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Recorder) || null;
+}
+let nativeRecordingPath = null;
+
+/** ネイティブ録音を開始。成功したら true */
+async function startNativeRecording() {
+  const rec = nativeRecorder();
+  if (!rec) { showError('録音機能を利用できません（アプリの更新が必要かもしれません）。'); return false; }
+  try {
+    const r = await rec.start();
+    nativeRecordingPath = (r && r.path) || null;
+    return true;
+  } catch (err) {
+    const msg = (err && (err.message || err.errorMessage)) || String(err);
+    showError('録音を開始できませんでした: ' + msg);
+    return false;
+  }
+}
+
+/** ネイティブ録音を停止し、録れた音声を Blob で返す */
+async function stopNativeRecording() {
+  const rec = nativeRecorder();
+  if (!rec) return null;
+  try {
+    const r = await rec.stop();
+    nativeRecordingPath = (r && r.path) || nativeRecordingPath;
+    if (!r || !r.url) return null;
+    // base64 でブリッジを渡すと長時間録音で破綻するので、
+    // WebView から読める URL 経由で Blob として取り込む
+    const res = await fetch(r.url);
+    const blob = await res.blob();
+    return blob && blob.size > 0 ? new Blob([blob], { type: r.mimeType || 'audio/mp4' }) : null;
+  } catch (err) {
+    showError('録音の取り込みに失敗しました: ' + ((err && err.message) || err));
+    return null;
+  }
+}
+
 async function startRecording() {
   hideError();
   closeHistoryDetail(); // 履歴を見ていた場合はカード群を録音画面へ戻す
@@ -944,6 +991,25 @@ async function startRecording() {
   segmentReport = { total: 0, merged: 0, failed: 0 };
   audioShortfall = null;
   capturedMs = 0;
+
+  // === ネイティブ録音（アプリ版）===
+  // マイクはサービス側が握るので、WebView 側では getUserMedia を開かない
+  // （同時に掴むと機種によっては録音が失敗するため）。波形表示も行わない。
+  if (NATIVE) {
+    if (!(await startNativeRecording())) return;
+    liveMode = 'off';
+    activeEngine = 'whisper';
+    recording = true;
+    pendingChunks = [];
+    setAudioAvailable(false);
+    sttActivity = 0.2;
+    setStatus('working', '録音中（アプリが停止させません）');
+    updateHomeUI();
+    startTime = Date.now();
+    updateTimer();
+    timerInterval = setInterval(updateTimer, 250);
+    return;
+  }
 
   // === ライブ字幕モード（Web Speech）＋ 音声録音を並行 ===
   // 先に録音用マイクを確保（getUserMedia → MediaRecorder）してから認識を開始する。
@@ -1033,7 +1099,8 @@ async function stopRecording() {
   const wallSec = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
 
   // 録音した音声を確定（復帰で分割された場合は1本へ結合）
-  recordedBlob = await finalizeRecordedAudio();
+  // アプリ版はサービスが1本のファイルに録り続けているので、そのまま受け取る。
+  recordedBlob = NATIVE ? await stopNativeRecording() : await finalizeRecordedAudio();
   if (recordedBlob) {
     recordedDurationSec = await probeDurationSec(recordedBlob);
     player.src = URL.createObjectURL(recordedBlob);
@@ -1520,7 +1587,8 @@ liveTranscript.addEventListener('input', updateHomeUI);
  */
 function updateCapturedNotice(elapsedSec) {
   if (!capturedHint) return;
-  if (!recording) { capturedHint.hidden = true; return; }
+  // アプリ版はサービスが録り続けるので欠落しない（capturedMs も積まない）
+  if (!recording || NATIVE) { capturedHint.hidden = true; return; }
   const capturedSec = Math.floor(capturedMs / 1000);
   const lostSec = elapsedSec - capturedSec;
   // 起動直後や数秒のずれでは出さない。20秒以上かつ2割以上ずれたときだけ。
@@ -3299,7 +3367,9 @@ seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
 // 新しい版が出たら自動で反映されるよう、更新検出→再読み込みまで行う。
-if ('serviceWorker' in navigator) {
+// アプリ版（Capacitor）はアセットを APK に同梱しており、Service Worker で
+// 更新を取りに行く必要がない。登録すると再読み込みループの原因にもなるため行わない。
+if ('serviceWorker' in navigator && !NATIVE && !window.NOTELOOP_NATIVE_BUILD) {
   let swRefreshing = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (swRefreshing || recording) return; // 録音中は中断しない

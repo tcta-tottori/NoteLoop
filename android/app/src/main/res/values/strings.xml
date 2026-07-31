@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NOTELOOP</string>
+    <string name="title_activity_main">NOTELOOP</string>
+    <string name="package_name">jp.tcta.noteloop</string>
+    <string name="custom_url_scheme">jp.tcta.noteloop</string>
+</resources>

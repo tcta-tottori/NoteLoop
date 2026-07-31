@@ -184,3 +184,47 @@ npx serve .
 - 文字起こし用の音声は `AudioContext`（16kHz mono）で取得し、数秒ごとに Web Worker の Whisper へ渡して逐次表示します。
 - 再生用の音声は `MediaRecorder` で別途保持します（フィードバック防止のため、解析用ノードは gain 0 経由で接続）。
 - 本資料・実装は 2026年7月時点の一般的理解に基づく検討用です。各ライブラリ・サービスの最新情報と利用規約は実施時にご確認ください。
+
+## Androidアプリ（APK）版
+
+ブラウザ版に加えて、Androidアプリとしてビルドできます。中身は同じWebアプリ
+（Capacitor でネイティブに包んでいます）ですが、**録音だけはネイティブの
+フォアグラウンドサービスで行う**ため、画面を消しても他のアプリに切り替えても
+OSに録音を止められません。長時間の会議で音声が途中までしか残らない問題は、
+このアプリ版で解消します。
+
+### APKの入手
+
+`main` へのpushで GitHub Actions が APK をビルドします。
+
+1. GitHub の **Actions → Android APK** から最新の実行を開く
+2. 下部の **Artifacts → NOTELOOP-apk** をダウンロード（zip）
+3. 展開した `.apk` を端末に転送し、タップしてインストール
+   （「提供元不明のアプリ」の許可が必要です）
+
+手動で走らせる場合は Actions 画面の **Run workflow** から実行できます。
+
+### 手元でビルドする場合
+
+Android SDK（cmdline-tools / platform 34 / build-tools）と JDK 17以上が必要です。
+
+```bash
+npm ci
+npm run build          # www/ に配信用ファイルを集める
+npx cap sync android   # Android プロジェクトへ反映
+cd android && ./gradlew assembleDebug
+# → android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Web側を変更したら `npm run sync` で APK 側へ反映されます。
+
+### ブラウザ版との違い
+
+| | ブラウザ版 | アプリ版 |
+|---|---|---|
+| 録音 | MediaRecorder（OSに止められることがある） | フォアグラウンドサービス（止まらない） |
+| ライブ字幕 | Web Speech で表示 | 使わない（音声をAIに送って議事録化） |
+| 波形表示 | あり | なし（マイクはサービスが専有） |
+| 更新 | 再読み込みで自動 | APKの入れ替え |
+
+アプリ版でも設定・履歴・Gemini連携はブラウザ版と同じです（データは端末内に保存されます）。
