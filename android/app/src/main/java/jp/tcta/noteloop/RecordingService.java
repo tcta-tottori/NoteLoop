@@ -10,7 +10,9 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.media.MediaRecorder;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -33,8 +35,14 @@ public class RecordingService extends Service {
     public static final String EXTRA_OUTPUT_PATH = "outputPath";
 
     private static final String TAG = "NoteLoopRec";
-    private static final String CHANNEL_ID = "noteloop_recording";
+    // ロック画面に内容を出す設定（VISIBILITY_PUBLIC）を効かせるため、
+    // チャンネルを作り直している。既存チャンネルの設定は後から変更できない。
+    private static final String CHANNEL_ID = "noteloop_recording_v2";
+    private static final String CHANNEL_ID_OLD = "noteloop_recording";
     private static final int NOTIF_ID = 4711;
+
+    /** ゲージの更新間隔。動いて見える速さと電池消費のバランス。 */
+    private static final long GAUGE_TICK_MS = 500L;
 
     /** 録音状態。プラグインから参照するのでプロセス内で共有する。 */
     private static volatile boolean recording = false;
@@ -43,6 +51,19 @@ public class RecordingService extends Service {
     private static volatile String lastError = null;
 
     private MediaRecorder recorder;
+
+    /** 通知のゲージ更新用。通知を作り直さず、同じ Builder を使い回す。 */
+    private NotificationCompat.Builder notifBuilder;
+    private final Handler gaugeHandler = new Handler(Looper.getMainLooper());
+    private int gaugeLevel = 0; // 0..100（表示中のゲージの値）
+    private final Runnable gaugeTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!recording) return;
+            updateGauge();
+            gaugeHandler.postDelayed(this, GAUGE_TICK_MS);
+        }
+    };
 
     public static boolean isRecording() { return recording; }
     public static String getCurrentPath() { return currentPath; }
@@ -88,17 +109,27 @@ public class RecordingService extends Service {
         Intent stop = new Intent(this, RecordingService.class).setAction(ACTION_STOP);
         PendingIntent stopPi = PendingIntent.getService(this, 1, stop, piFlags);
 
-        Notification n = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("録音中")
-                .setContentText("NOTELOOP が会議を録音しています")
+        // 経過時間は setUsesChronometer で OS に数えさせる。画面を消していても
+        // ロック画面側で 1 秒ごとに進むため、こちらから更新しなくてもズレない。
+        notifBuilder = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("● 録音中")
+                .setContentText("画面を消しても録音は続いています")
                 .setSmallIcon(android.R.drawable.presence_audio_online)
                 .setContentIntent(contentPi)
                 .addAction(0, "停止", stopPi)
                 .setOngoing(true)
+                .setSilent(true)
+                .setOnlyAlertOnce(true)
+                .setShowWhen(true)
+                .setWhen(System.currentTimeMillis())
+                .setUsesChronometer(true)
+                // ロック画面でも内容（経過時間・ゲージ）が見えるようにする
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)
-                .build();
+                .setProgress(100, 2, false); // 声の大きさで動くゲージ
 
+        Notification n = notifBuilder.build();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
         } else {
@@ -106,14 +137,49 @@ public class RecordingService extends Service {
         }
     }
 
+    /**
+     * 通知のゲージをマイクの音量に合わせて動かす（ロック画面でも動いて見える）。
+     * getMaxAmplitude() は「前回呼んでからの最大振幅（0..32767）」を返すので、
+     * 一定間隔で呼べばそのままレベルメーターになる。
+     */
+    private void updateGauge() {
+        if (notifBuilder == null || !recording) return;
+        int amp = 0;
+        try {
+            if (recorder != null) amp = recorder.getMaxAmplitude();
+        } catch (Exception ignored) { /* 停止直後などは取得できない */ }
+
+        // 会議の話し声（数千程度）でしっかり振れるよう、平方根で持ち上げる
+        double norm = Math.min(1.0, amp / 10000.0);
+        int target = (int) Math.round(Math.sqrt(norm) * 100);
+        // アタックは速く、リリースはゆっくり（跳ねて滑らかに戻る動き）
+        gaugeLevel = target > gaugeLevel ? target : (int) Math.round(gaugeLevel * 0.65 + target * 0.35);
+
+        try {
+            notifBuilder.setProgress(100, Math.max(2, gaugeLevel), false);
+            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(NOTIF_ID, notifBuilder.build());
+        } catch (Exception e) {
+            // 通知が出せない（権限を切られた等）だけなら録音は続ける
+            Log.w(TAG, "通知を更新できませんでした", e);
+        }
+    }
+
     private void createChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm == null || nm.getNotificationChannel(CHANNEL_ID) != null) return;
+        if (nm == null) return;
+        // 旧チャンネル（ロック画面の表示設定が入っていない）は片付ける
+        try { nm.deleteNotificationChannel(CHANNEL_ID_OLD); } catch (Exception ignored) {}
+        if (nm.getNotificationChannel(CHANNEL_ID) != null) return;
         NotificationChannel ch = new NotificationChannel(
                 CHANNEL_ID, "録音", NotificationManager.IMPORTANCE_LOW);
-        ch.setDescription("録音中に表示され、ここから停止できます");
+        ch.setDescription("録音中に表示され、経過時間と音量のゲージ、停止ボタンが出ます");
         ch.setShowBadge(false);
+        ch.setSound(null, null);
+        ch.enableVibration(false);
+        // ロック画面に内容をそのまま出す（「録音中」と分かるようにするため）
+        ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
         nm.createNotificationChannel(ch);
     }
 
@@ -150,6 +216,10 @@ public class RecordingService extends Service {
             startedAtElapsed = SystemClock.elapsedRealtime();
             recording = true;
             lastError = null;
+            // 通知のゲージを動かし始める（フォアグラウンドサービスなので画面オフでも動く）
+            gaugeLevel = 0;
+            gaugeHandler.removeCallbacks(gaugeTick);
+            gaugeHandler.postDelayed(gaugeTick, GAUGE_TICK_MS);
             return true;
         } catch (Exception e) {
             lastError = String.valueOf(e.getMessage());
@@ -162,6 +232,7 @@ public class RecordingService extends Service {
     private void stopRecording() {
         if (!recording) return;
         recording = false;
+        gaugeHandler.removeCallbacks(gaugeTick);
         try {
             recorder.stop();
         } catch (Exception e) {
