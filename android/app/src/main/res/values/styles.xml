@@ -13,10 +13,19 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- ヘッダー上端と同じ色にして、ステータスバーとの境目を消す -->
+        <item name="android:statusBarColor">@color/statusBar</item>
+        <item name="android:navigationBarColor">@color/statusBar</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 
 
+    <!-- 実際に MainActivity に適用されるテーマ（AndroidManifest 参照）。
+         起動時からこの色にしておかないと、起動直後だけ黒い帯が見える。 -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
+        <item name="android:statusBarColor">@color/statusBar</item>
+        <item name="android:navigationBarColor">@color/statusBar</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

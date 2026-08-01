@@ -265,7 +265,8 @@ Web側を変更したら `npm run sync` で APK 側へ反映されます。
 
 - **● 録音中** と**経過時間**（`setUsesChronometer` で OS が数えるため、画面を消していてもズレません）
 - **音量ゲージ**: アプリ画面と同じ**縦バーのゲージ**。`MediaRecorder.getMaxAmplitude()` を
-  0.1 秒ごとに読み、1本＝0.1秒ぶんの音量として右から左へ流します（静かなときは丸い点）。
+  0.1 秒ごとに読み、**位置は動かさずに**その場で上下へ伸ばします（静かなときは丸い点）。
+  1本ごとに感度と揺れの速さを変えてあるので、横一直線にはなりません。
   Canvas で描いた画像をカスタム通知ビュー（`res/layout/notif_recording.xml` /
   `notif_recording_big.xml` ＋ `DecoratedCustomViewStyle`）の `ImageView` に流し込みます。
   描き替えは画面が点いている間は 0.4 秒ごと、消えている間は 1 秒ごと（`PowerManager.isInteractive`）。

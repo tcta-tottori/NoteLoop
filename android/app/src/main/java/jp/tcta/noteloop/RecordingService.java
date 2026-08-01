@@ -58,8 +58,8 @@ public class RecordingService extends Service {
     /** 通知に描くゲージ画像の大きさ（px）。表示側で横幅いっぱいに引き伸ばす。 */
     private static final int GAUGE_W = 560;
     private static final int GAUGE_H = 56;
-    /** ゲージが覚えておく音量の本数（＝流れていくバーの数） */
-    private static final int HIST = 64;
+    /** ゲージのバーの本数（位置は固定で、音量に応じて上下に伸びる） */
+    private static final int BARS = 26;
     /** バーの色（左が濃い青 → 右へ明るい水色。アプリ画面のゲージと同じ配色） */
     private static final int[] GAUGE_COLORS = { 0xFF2F4FC8, 0xFF3B6FE0, 0xFF4F9BF2, 0xFF7FD2FB };
     private static final float[] GAUGE_STOPS = { 0f, 0.35f, 0.62f, 1f };
@@ -84,12 +84,8 @@ public class RecordingService extends Service {
      */
     private static volatile float level = 0f;
 
-    /** 流れていくバーの記録。いちばん新しい音量が histAt の1つ手前に入る。 */
-    private final float[] histV = new float[HIST];
-    private final float[] histBias = new float[HIST];  // 中心のずれ（非対称にするため）
-    private final float[] histShape = new float[HIST]; // 高さの個体差
-    private int histAt = 0;
-    private long gaugeSeed = 0;
+    /** 各バーの現在の高さ（0..1）。位置は固定なので、ここだけが動く。 */
+    private final float[] barV = new float[BARS];
     private Paint gaugePaint;
 
     private final Runnable gaugeTick = new Runnable() {
@@ -204,24 +200,12 @@ public class RecordingService extends Service {
         float target = Math.min(1f, Math.max(0, amp) / 10000f);
         // アタックは速く、リリースはゆっくり（跳ねて滑らかに戻る動き）
         level = target > level ? target : level * 0.75f + target * 0.25f;
-        pushGaugeSlot(level);
     }
 
     /** 決まった見た目を再現するための擬似乱数（アプリ画面のゲージと同じ作り） */
     private static float gaugeNoise(double seed) {
         double x = Math.sin(seed * 12.9898) * 43758.5453;
         return (float) (x - Math.floor(x)); // 0..1
-    }
-
-    /** 新しいバーを1本ぶん記録する（古いものは押し出されて消える） */
-    private void pushGaugeSlot(float v) {
-        gaugeSeed++;
-        histV[histAt] = v;
-        // 中心のずれ。上寄り／下寄りが不規則に入れ替わり、左右対称にならない。
-        histBias[histAt] = gaugeNoise(gaugeSeed * 1.7) * 2f - 1f;
-        // 高さの個体差。同じ音量でも1本ごとに伸び方が変わる。
-        histShape[histAt] = 0.55f + gaugeNoise(gaugeSeed * 3.1) * 0.45f;
-        histAt = (histAt + 1) % HIST;
     }
 
     /** 画面が点いているか（消えている間は通知の描き替えを粗くして電池を節約する） */
@@ -234,8 +218,8 @@ public class RecordingService extends Service {
 
     /**
      * 通知に載せるゲージを描く。
-     * 1本＝0.1秒ぶんの音量で、右端が最新。左へ流れていき、静かなときは丸い点になる。
-     * アプリ画面のゲージと同じ描き方にそろえている。
+     * バーの位置は固定で、いまの音量に応じてその場で上下に伸びる。
+     * 静かなときは丸い点になる。アプリ画面のゲージと同じ見た目・動きにそろえている。
      */
     private Bitmap renderGauge() {
         Bitmap bmp = Bitmap.createBitmap(GAUGE_W, GAUGE_H, Bitmap.Config.ARGB_8888);
@@ -245,21 +229,30 @@ public class RecordingService extends Service {
             gaugePaint.setShader(new LinearGradient(
                     0, 0, GAUGE_W, 0, GAUGE_COLORS, GAUGE_STOPS, Shader.TileMode.CLAMP));
         }
-        final float barW = Math.max(4f, GAUGE_W / 90f);
-        final float pitch = barW * 2f;                    // バー同士の間隔
-        final int count = Math.min(HIST, (int) (GAUGE_W / pitch));
+        final float pitch = (float) GAUGE_W / BARS;
+        final float barW = pitch / 2f;                    // 間隔と同じだけ空ける
         final float maxH = GAUGE_H * 0.92f;               // いちばん大きい声のときの高さ
         final float minH = barW;                          // 無音は「点」になる
         final float mid = GAUGE_H / 2f;
+        final double now = SystemClock.elapsedRealtime() / 1000.0;
+        final float lv = level;
 
-        for (int i = 0; i < count; i++) {
-            // i=0 が左端（古い）、count-1 が右端（最新）
-            int idx = ((histAt - 1 - (count - 1 - i)) % HIST + HIST) % HIST;
-            float v = histV[idx];
-            float bh = minH + (maxH - minH) * v * histShape[idx];
-            float cy = mid + histBias[idx] * (maxH * 0.10f) * v;
-            float x = GAUGE_W - (count - i) * pitch;
-            RectF r = new RectF(x, cy - bh / 2f, x + barW, cy + bh / 2f);
+        for (int i = 0; i < BARS; i++) {
+            float t = BARS > 1 ? (float) i / (BARS - 1) : 0.5f;
+            // 中央ほど大きく振れる（両端は控えめ）
+            float env = (float) (0.35 + 0.65 * Math.pow(Math.sin(Math.PI * t), 0.7));
+            // 1本ごとに感度と揺れの速さを変え、横一直線にならないようにする
+            float gain = 0.7f + gaugeNoise(i * 3.9) * 0.6f;
+            float speed = 0.9f + gaugeNoise(i * 1.3) * 2.2f;
+            float phase = gaugeNoise(i * 2.7) * (float) Math.PI * 2f;
+            float wobble = (float) (0.55 + 0.45 * Math.sin(now * speed + phase));
+            float target = Math.min(1f, lv * gain * env * wobble);
+            // 伸びるのは速く、戻るのはゆっくり
+            barV[i] += (target - barV[i]) * (target > barV[i] ? 0.5f : 0.2f);
+
+            float bh = minH + (maxH - minH) * barV[i];
+            float x = i * pitch + (pitch - barW) / 2f;
+            RectF r = new RectF(x, mid - bh / 2f, x + barW, mid + bh / 2f);
             c.drawRoundRect(r, barW / 2f, barW / 2f, gaugePaint);
         }
         return bmp;
@@ -344,7 +337,7 @@ public class RecordingService extends Service {
             // 音量の読み取りと通知のゲージを動かし始める
             // （フォアグラウンドサービスなので画面オフでも止まらない）
             level = 0f;
-            java.util.Arrays.fill(histV, 0f);
+            java.util.Arrays.fill(barV, 0f);
             notifCountdown = NOTIF_EVERY_AWAKE;
             gaugeHandler.removeCallbacks(gaugeTick);
             gaugeHandler.postDelayed(gaugeTick, LEVEL_TICK_MS);
