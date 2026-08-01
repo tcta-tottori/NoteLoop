@@ -134,7 +134,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.6.7';
+const APP_VERSION = 'Ver.6.8';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1680,8 +1680,8 @@ function gaugeNoise(seed) {
 function newGaugeBar(i) {
   return {
     v: 0,                                        // いまの高さ 0..1
-    gain: 0.7 + gaugeNoise(i * 3.9) * 0.6,       // 音への感度の個体差
-    speed: 0.9 + gaugeNoise(i * 1.3) * 2.2,      // 揺れの速さ
+    gain: 0.8 + gaugeNoise(i * 3.9) * 0.35,      // 音への感度の個体差（控えめ）
+    speed: 1.0 + gaugeNoise(i * 1.3) * 1.6,      // 揺れの速さ
     phase: gaugeNoise(i * 2.7) * Math.PI * 2,    // 揺れの位相
   };
 }
@@ -1721,10 +1721,14 @@ function startNativeLevelPolling() {
     busy = false;
   }, 200);
 }
-/** 小さな音を持ち上げて、話し声で気持ちよく動く範囲に整える */
+/**
+ * ネイティブから受け取った音量（0..1）をそのまま使う。
+ * 対数目盛りとノイズゲートはサービス側で済ませてあるので、ここで持ち上げると
+ * 「静かでもバーが動く・少し大きい声で頭打ち」になってしまう。
+ */
 function setNativeLevel(v) {
   const n = typeof v === 'number' ? v : 0;
-  nativeLevel = Math.min(1, Math.pow(Math.max(0, n), 0.6) * 1.35);
+  nativeLevel = Math.max(0, Math.min(1, n));
 }
 function stopNativeLevelPolling() {
   if (nativeLevelTimer) clearInterval(nativeLevelTimer);
@@ -1776,8 +1780,9 @@ function waveLoop() {
     for (let i = 0; i < waveBuf.length; i++) { const x = (waveBuf[i] - 128) / 128; s += x * x; }
     const r = Math.sqrt(s / waveBuf.length);
     // ノイズゲート＋ゲイン: 静かなら凪(0)、声が大きいほど大きく（0〜1）
-    const gated = Math.max(0, r - 0.008);
-    target = Math.min(1, gated * 8);
+    const gated = Math.max(0, r - 0.012);
+    target = Math.min(1, gated * 7);
+    if (target < 0.05) target = 0; // ごくわずかな音では動かさない
   } else if (recording && activeEngine === 'webspeech') {
     target = sttActivity; // 音声解析なし → 発話イベントで揺らす
   } else {
@@ -1850,12 +1855,13 @@ function drawWaveFrame() {
   const w = wave.width, h = wave.height, mid = h * 0.6;
   ctx.clearRect(0, 0, w, h);
 
-  // バーの太さ。無音時の「点」の大きさでもあるので、高さに対して太くなりすぎ
+  // 本数は少なめ・間隔は広めにして、すっきり見せる。
+  const count = Math.max(10, Math.min(20, Math.round(w / 44)));
+  const pitch = w / count;
+  // バーの太さ（無音時の「点」の大きさでもある）。高さに対して太くなりすぎ
   // ないよう抑える（横長の画面でバーが潰れて高さの差が出なくなるのを防ぐ）。
-  const barW = Math.max(4, Math.min(Math.round(w / 90), Math.round(h * 0.12)));
-  const pitch = barW * 2;                          // バー同士の間隔（太さと同じだけ空ける）
-  const count = Math.max(1, Math.floor(w / pitch));
-  const maxH = h * 0.56;                           // いちばん大きい声のときの高さ
+  const barW = Math.max(4, Math.min(Math.round(pitch * 0.3), Math.round(h * 0.1)));
+  const maxH = h * 0.6;                            // いちばん大きい声のときの高さ
   const minH = barW;                               // 無音は「点」になる
   const left = (w - (count - 1) * pitch - barW) / 2; // 全体を中央に寄せる
 
@@ -1877,7 +1883,7 @@ function drawWaveFrame() {
   // 端の薄い2本ずつだけ透明度を変え、それ以外は1本のパスにまとめて一度に塗る。
   // （バーごとに fill + shadowBlur すると描画がとても重く、端末によっては
   //   WebView が詰まってネイティブからの音量を受け取れなくなる）
-  const fade = 2;
+  const fade = 1;
   ctx.beginPath();
   for (let i = 0; i < count; i++) {
     const b = gaugeBars[i];
@@ -1885,7 +1891,7 @@ function drawWaveFrame() {
     // 中央ほど大きく振れる（両端は控えめ）
     const env = 0.35 + 0.65 * Math.pow(Math.sin(Math.PI * t), 0.7);
     // 同じ音でも1本ずつ違う速さで揺れるので、横一直線にならない
-    const wobble = 0.55 + 0.45 * Math.sin(now * b.speed + b.phase);
+    const wobble = 0.7 + 0.3 * Math.sin(now * b.speed + b.phase);
     const target = Math.min(1, waveLevel * b.gain * env * wobble);
     // 伸びるのは速く、戻るのはゆっくり
     b.v += (target - b.v) * (target > b.v ? 0.45 : 0.12);
@@ -1901,8 +1907,7 @@ function drawWaveFrame() {
   for (let i = 0; i < count; i++) {
     if (i >= fade && i < count - fade) continue;
     const b = gaugeBars[i];
-    const d = Math.min(i, count - 1 - i);
-    ctx.globalAlpha = 0.3 + 0.35 * d;
+    ctx.globalAlpha = 0.45; // 端の1本だけ薄くして、両端を切り落として見せない
     ctx.beginPath();
     rrect(ctx, b.x, mid - b.h / 2, barW, b.h, barW / 2);
     ctx.fill();
