@@ -7,6 +7,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 
 import androidx.core.app.NotificationManagerCompat;
@@ -201,12 +203,45 @@ public class RecorderPlugin extends Plugin {
         call.resolve(r);
     }
 
+    /* ===== 音量の送信（片道） =====
+     * Web 側から毎回問い合わせる（往復）方式だと、描画で WebView が混んでいるときに
+     * 応答が溜まり、ゲージが固まったまま画面操作の瞬間だけ動く、という状態になる。
+     * こちらから一定間隔で送りつける形にすると詰まりにくい。 */
+    private static final long LEVEL_PUSH_MS = 120L;
+    private Handler levelHandler;
+    private final Runnable levelPush = new Runnable() {
+        @Override
+        public void run() {
+            if (!RecordingService.isRecording()) return; // 録音が終われば自然に止まる
+            JSObject ev = new JSObject();
+            ev.put("level", RecordingService.getLevel());
+            notifyListeners("level", ev);
+            if (levelHandler != null) levelHandler.postDelayed(this, LEVEL_PUSH_MS);
+        }
+    };
+
+    @PluginMethod
+    public void startLevelUpdates(PluginCall call) {
+        if (levelHandler == null) levelHandler = new Handler(Looper.getMainLooper());
+        levelHandler.removeCallbacks(levelPush);
+        levelHandler.post(levelPush);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void stopLevelUpdates(PluginCall call) {
+        if (levelHandler != null) levelHandler.removeCallbacks(levelPush);
+        call.resolve();
+    }
+
     @PluginMethod
     public void getStatus(PluginCall call) {
         JSObject r = new JSObject();
         r.put("recording", RecordingService.isRecording());
         r.put("elapsedMs", RecordingService.getElapsedMs());
-        // 診断用: いまの音量（0..1）と、マイクから読めた生の振幅（0..32767 / -1 は未取得）
+        // 診断用: 定期読み取りが生きているか（getLevel より先に読む）と、
+        // いまの音量（0..1）、マイクから読めた生の振幅（0..32767 / -1 は未取得）
+        r.put("sampleAgeMs", RecordingService.getSampleAgeMs());
         r.put("level", RecordingService.getLevel());
         r.put("amp", RecordingService.getLastAmp());
         String path = RecordingService.getCurrentPath();

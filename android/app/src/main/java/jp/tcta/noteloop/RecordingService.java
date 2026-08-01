@@ -17,8 +17,8 @@ import android.graphics.Shader;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
-import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Log;
@@ -55,9 +55,10 @@ public class RecordingService extends Service {
     private static final int NOTIF_EVERY_AWAKE = 4;  // 画面が点いている: 0.4秒ごと
     private static final int NOTIF_EVERY_ASLEEP = 10; // 画面が消えている: 1秒ごと（誰も見ていないので粗く）
 
-    /** 通知に描くゲージ画像の大きさ（px）。表示側で横幅いっぱいに引き伸ばす。 */
-    private static final int GAUGE_W = 560;
-    private static final int GAUGE_H = 56;
+    /** 通知に描くゲージ画像の大きさ（px）。表示側で横幅いっぱいに引き伸ばす。
+     *  通知の更新ごとに画像を送るため、大きくしすぎない。 */
+    private static final int GAUGE_W = 420;
+    private static final int GAUGE_H = 48;
     /** ゲージのバーの本数（位置は固定で、音量に応じて上下に伸びる） */
     private static final int BARS = 26;
     /** バーの色（左が濃い青 → 右へ明るい水色。アプリ画面のゲージと同じ配色） */
@@ -74,7 +75,11 @@ public class RecordingService extends Service {
 
     /** 通知のゲージ更新用。通知を作り直さず、同じ Builder を使い回す。 */
     private NotificationCompat.Builder notifBuilder;
-    private final Handler gaugeHandler = new Handler(Looper.getMainLooper());
+    /* 音量の読み取りと通知の描き替えは専用スレッドで回す。
+     * 画像の生成と通知の送信はそれなりに重く、UI スレッドでやると
+     * WebView とのやり取り（＝画面のゲージ）まで巻き込んで遅くなる。 */
+    private HandlerThread gaugeThread;
+    private Handler gaugeHandler;
     private int notifCountdown = 0;
     /**
      * いまの音の大きさ（0.0〜1.0）。
@@ -103,9 +108,24 @@ public class RecordingService extends Service {
                 notifCountdown = isScreenOn() ? NOTIF_EVERY_AWAKE : NOTIF_EVERY_ASLEEP;
                 updateGauge();
             }
-            gaugeHandler.postDelayed(this, LEVEL_TICK_MS);
+            if (gaugeHandler != null) gaugeHandler.postDelayed(this, LEVEL_TICK_MS);
         }
     };
+
+    /** 音量の読み取り＋通知のゲージ更新を、専用スレッドで回し始める */
+    private void startGaugeLoop() {
+        if (gaugeThread == null) {
+            gaugeThread = new HandlerThread("noteloop-gauge");
+            gaugeThread.start();
+            gaugeHandler = new Handler(gaugeThread.getLooper());
+        }
+        gaugeHandler.removeCallbacks(gaugeTick);
+        gaugeHandler.postDelayed(gaugeTick, LEVEL_TICK_MS);
+    }
+
+    private void stopGaugeLoop() {
+        if (gaugeHandler != null) gaugeHandler.removeCallbacks(gaugeTick);
+    }
 
     public static boolean isRecording() { return recording; }
 
@@ -124,6 +144,15 @@ public class RecordingService extends Service {
 
     /** 診断用: 直近に読めた生の振幅（0..32767）。-1 は一度も読めていない。 */
     public static int getLastAmp() { return lastAmp; }
+
+    /**
+     * 診断用: 最後に音量を読んでからの経過ミリ秒。
+     * 定期読み取りが動いていれば常に 0.1 秒程度。大きければ読み取りが止まっている。
+     * （getLevel より先に呼ぶこと。getLevel は必要なら読み直してこの値を戻すため）
+     */
+    public static long getSampleAgeMs() {
+        return lastSampleAt > 0 ? SystemClock.elapsedRealtime() - lastSampleAt : -1L;
+    }
     public static String getCurrentPath() { return currentPath; }
     public static String getLastError() { return lastError; }
 
@@ -375,8 +404,7 @@ public class RecordingService extends Service {
             lastSampleAt = SystemClock.elapsedRealtime();
             java.util.Arrays.fill(barV, 0f);
             notifCountdown = NOTIF_EVERY_AWAKE;
-            gaugeHandler.removeCallbacks(gaugeTick);
-            gaugeHandler.postDelayed(gaugeTick, LEVEL_TICK_MS);
+            startGaugeLoop();
             return true;
         } catch (Exception e) {
             lastError = String.valueOf(e.getMessage());
@@ -389,7 +417,7 @@ public class RecordingService extends Service {
     private void stopRecording() {
         if (!recording) return;
         recording = false;
-        gaugeHandler.removeCallbacks(gaugeTick);
+        stopGaugeLoop();
         level = 0f;
         activeRecorder = null; // 解放後の getMaxAmplitude を防ぐ
         try {
@@ -413,6 +441,11 @@ public class RecordingService extends Service {
     @Override
     public void onDestroy() {
         stopRecording();
+        if (gaugeThread != null) {
+            try { gaugeThread.quitSafely(); } catch (Exception ignored) {}
+            gaugeThread = null;
+            gaugeHandler = null;
+        }
         super.onDestroy();
     }
 

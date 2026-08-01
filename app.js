@@ -134,7 +134,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.6.5';
+const APP_VERSION = 'Ver.6.6';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1657,9 +1657,10 @@ function updateTimer() {
  *   1本ごとに感度と揺れの速さを変えてあるので、同じ音でも横一列には
  *   ならず、生きた動きに見える。
  * =======================================================*/
-let waveRAF = null, wavePhase = 0, waveLevel = 0.14, waveActive = false;
+let waveRAF = null, wavePhase = 0, waveLevel = 0.14, waveActive = false, waveLastDraw = 0;
 let nativeLevel = 0;       // アプリ版でネイティブから受け取った音量（0..1）
 let nativeLevelTimer = null;
+let nativeLevelSub = null; // ネイティブからの音量通知の購読
 let procProgress = 0;      // 高精度処理の推定進捗 0..1
 let lastDlProgress = 0;    // 直近のモデルDL進捗の時刻
 const waveBuf = new Uint8Array(1024);
@@ -1697,18 +1698,43 @@ function startNativeLevelPolling() {
   if (!NATIVE || nativeLevelTimer) return;
   const rec = nativeRecorder();
   if (!rec || typeof rec.getLevel !== 'function') return;
+  // ネイティブ側から音量を送ってもらう（片道）。
+  // 毎回こちらから問い合わせる（往復）方式だと、描画で WebView が混んでいるときに
+  // 応答が溜まってしまい、ゲージが固まったまま画面操作の瞬間だけ動く、という
+  // 挙動になっていた。送りっぱなしにすると詰まりにくい。
+  if (typeof rec.addListener === 'function') {
+    try {
+      nativeLevelSub = rec.addListener('level', (ev) => { setNativeLevel(ev && ev.level); });
+      rec.startLevelUpdates().catch(() => {});
+      return;
+    } catch (_) { nativeLevelSub = null; }
+  }
+  // 送信に対応していない版のアプリでは、間隔を空けて問い合わせる（保険）
+  let busy = false;
   nativeLevelTimer = setInterval(async () => {
+    if (busy) return;               // 前の応答が返る前に積み増さない
+    busy = true;
     try {
       const r = await rec.getLevel();
-      const v = r && typeof r.level === 'number' ? r.level : 0;
-      // 小さな音を持ち上げて、話し声で気持ちよく動く範囲に整える
-      nativeLevel = Math.min(1, Math.pow(Math.max(0, v), 0.6) * 1.35);
+      setNativeLevel(r && r.level);
     } catch (_) { /* 取れない版のアプリでは 0 のまま（ゲージは静かなまま） */ }
-  }, 90);
+    busy = false;
+  }, 200);
+}
+/** 小さな音を持ち上げて、話し声で気持ちよく動く範囲に整える */
+function setNativeLevel(v) {
+  const n = typeof v === 'number' ? v : 0;
+  nativeLevel = Math.min(1, Math.pow(Math.max(0, n), 0.6) * 1.35);
 }
 function stopNativeLevelPolling() {
   if (nativeLevelTimer) clearInterval(nativeLevelTimer);
   nativeLevelTimer = null;
+  if (nativeLevelSub) {
+    const rec = nativeRecorder();
+    if (rec && typeof rec.stopLevelUpdates === 'function') { try { rec.stopLevelUpdates(); } catch (_) {} }
+    Promise.resolve(nativeLevelSub).then((s) => { try { s.remove(); } catch (_) {} }).catch(() => {});
+    nativeLevelSub = null;
+  }
   nativeLevel = 0;
 }
 
@@ -1729,6 +1755,11 @@ function stopWave() {
 function waveLoop() {
   if (!waveActive) return;
   waveRAF = requestAnimationFrame(waveLoop);
+  // 30fps に間引く。端末によっては 60fps の描画で WebView が詰まり、
+  // ネイティブから送られる音量の受け取りまで遅れてしまうため。
+  const now = performance.now();
+  if (now - waveLastDraw < 32) return;
+  waveLastDraw = now;
   // 大きいほど速く動く（静かなときはゆっくり）
   wavePhase += 0.02 + waveLevel * 0.055;
   // 高精度処理中は「文字が打たれていく」別アニメーションを表示
@@ -1757,10 +1788,15 @@ function waveLoop() {
   waveLevel += (target - waveLevel) * k;
   drawWaveFrame();
 }
-/** 角丸矩形パス */
+/** 角丸矩形パス（新しいパスとして開始する） */
 function rrect(ctx, x, y, w, h, r) {
-  r = Math.min(r, h / 2, w / 2);
   ctx.beginPath();
+  rrectPath(ctx, x, y, w, h, r);
+}
+
+/** 角丸矩形を「いま組み立て中のパスに追加する」（まとめて一度に塗るため） */
+function rrectPath(ctx, x, y, w, h, r) {
+  r = Math.min(r, h / 2, w / 2);
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
   ctx.arcTo(x + w, y + h, x, y + h, r);
@@ -1837,9 +1873,12 @@ function drawWaveFrame() {
   grad.addColorStop(0.62, '#4f9bf2');
   grad.addColorStop(1.00, '#7fd2fb');
   ctx.fillStyle = grad;
-  ctx.shadowColor = 'rgba(79, 155, 242, .45)';
-  ctx.shadowBlur = Math.max(6, barW * 2);
 
+  // 端の薄い2本ずつだけ透明度を変え、それ以外は1本のパスにまとめて一度に塗る。
+  // （バーごとに fill + shadowBlur すると描画がとても重く、端末によっては
+  //   WebView が詰まってネイティブからの音量を受け取れなくなる）
+  const fade = 2;
+  ctx.beginPath();
   for (let i = 0; i < count; i++) {
     const b = gaugeBars[i];
     const t = count > 1 ? i / (count - 1) : 0.5;
@@ -1851,15 +1890,24 @@ function drawWaveFrame() {
     // 伸びるのは速く、戻るのはゆっくり
     b.v += (target - b.v) * (target > b.v ? 0.45 : 0.12);
 
-    const bh = minH + (maxH - minH) * b.v;
-    const x = left + i * pitch;
-    // 両端はうっすら消えて背景に溶け込む
-    const edge = Math.min(1, Math.min(t, 1 - t) / 0.09);
-    ctx.globalAlpha = 0.55 + 0.45 * edge;
-    rrect(ctx, x, mid - bh / 2, barW, bh, barW / 2);
+    b.h = minH + (maxH - minH) * b.v;
+    b.x = left + i * pitch;
+    if (i < fade || i >= count - fade) continue; // 端は後から薄く描く
+    rrectPath(ctx, b.x, mid - b.h / 2, barW, b.h, barW / 2);
+  }
+  ctx.fill();
+
+  // 両端はうっすらさせて背景に溶け込ませる
+  for (let i = 0; i < count; i++) {
+    if (i >= fade && i < count - fade) continue;
+    const b = gaugeBars[i];
+    const d = Math.min(i, count - 1 - i);
+    ctx.globalAlpha = 0.3 + 0.35 * d;
+    ctx.beginPath();
+    rrect(ctx, b.x, mid - b.h / 2, barW, b.h, barW / 2);
     ctx.fill();
   }
-  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
 }
 window.addEventListener('resize', () => { if (waveActive) resizeWave(); });
 
@@ -3518,6 +3566,10 @@ if (diagBtn) {
       lines.push(`録音サービス: ${s && s.recording ? '動作中' : '停止中'}`);
       if (s && typeof s.amp === 'number') {
         lines.push(`マイクの振幅: ${s.amp < 0 ? '未取得' : s.amp}（0〜32767）／ゲージ値: ${(s.level || 0).toFixed(2)}`);
+        if (typeof s.sampleAgeMs === 'number') {
+          const age = s.sampleAgeMs;
+          lines.push(`音量の読み取り: ${age < 0 ? '未実行' : (age / 1000).toFixed(1) + '秒前'}${s.recording && age > 1000 ? '（止まっています）' : ''}`);
+        }
         if (s.recording && s.amp === 0) lines.push('※ 音を出しながらもう一度押しても 0 のままなら、この端末では音量を読めていません。');
       }
     } catch (_) { lines.push('録音サービス: 状態を取得できません'); }
