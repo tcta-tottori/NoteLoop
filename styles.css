@@ -293,6 +293,13 @@ select:focus, input:focus, textarea:focus {
   color: var(--danger); border-radius: var(--radius-sm);
   padding: 11px 14px; font-size: 13.5px; margin-top: 12px;
 }
+/* 通知が切られているときの案内（エラーではないので警告色にする） */
+.notify-warn {
+  background: color-mix(in srgb, var(--amber) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--amber) 40%, var(--border));
+  color: var(--amber);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+}
 
 /* ---------- Section head (パネル内の見出し) ---------- */
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
