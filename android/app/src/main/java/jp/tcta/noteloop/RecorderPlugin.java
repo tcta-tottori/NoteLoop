@@ -207,7 +207,7 @@ public class RecorderPlugin extends Plugin {
      * Web 側から毎回問い合わせる（往復）方式だと、描画で WebView が混んでいるときに
      * 応答が溜まり、ゲージが固まったまま画面操作の瞬間だけ動く、という状態になる。
      * こちらから一定間隔で送りつける形にすると詰まりにくい。 */
-    private static final long LEVEL_PUSH_MS = 120L;
+    private static final long LEVEL_PUSH_MS = 70L;
     private Handler levelHandler;
     private final Runnable levelPush = new Runnable() {
         @Override

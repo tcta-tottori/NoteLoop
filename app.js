@@ -134,7 +134,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.6.8';
+const APP_VERSION = 'Ver.6.9';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1759,10 +1759,10 @@ function stopWave() {
 function waveLoop() {
   if (!waveActive) return;
   waveRAF = requestAnimationFrame(waveLoop);
-  // 30fps に間引く。端末によっては 60fps の描画で WebView が詰まり、
-  // ネイティブから送られる音量の受け取りまで遅れてしまうため。
+  // 描き替えは 50fps 程度まで。上限を設けておかないと、端末によっては
+  // 描画で WebView が詰まり、ネイティブから送られる音量の受け取りまで遅れる。
   const now = performance.now();
-  if (now - waveLastDraw < 32) return;
+  if (now - waveLastDraw < 20) return;
   waveLastDraw = now;
   // 大きいほど速く動く（静かなときはゆっくり）
   wavePhase += 0.02 + waveLevel * 0.055;
@@ -1788,8 +1788,8 @@ function waveLoop() {
   } else {
     target = 0.14 + Math.sin(wavePhase * 1.4) * 0.05; // 処理中はゆるやかに揺れる
   }
-  // アタックは速く、リリースはゆっくり → 自然な揺れ
-  const k = target > waveLevel ? 0.4 : 0.06;
+  // 上がるのは即座に、下がるのは少しだけ滑らかに（声にそのまま追従させる）
+  const k = target > waveLevel ? 0.7 : 0.25;
   waveLevel += (target - waveLevel) * k;
   drawWaveFrame();
 }
@@ -1890,11 +1890,11 @@ function drawWaveFrame() {
     const t = count > 1 ? i / (count - 1) : 0.5;
     // 中央ほど大きく振れる（両端は控えめ）
     const env = 0.35 + 0.65 * Math.pow(Math.sin(Math.PI * t), 0.7);
-    // 同じ音でも1本ずつ違う速さで揺れるので、横一直線にならない
-    const wobble = 0.7 + 0.3 * Math.sin(now * b.speed + b.phase);
+    // 同じ音でも1本ずつ少しだけ違う揺れ方をするので、横一直線にならない
+    const wobble = 0.85 + 0.15 * Math.sin(now * b.speed + b.phase);
     const target = Math.min(1, waveLevel * b.gain * env * wobble);
-    // 伸びるのは速く、戻るのはゆっくり
-    b.v += (target - b.v) * (target > b.v ? 0.45 : 0.12);
+    // 伸びるのは即座に、戻るのは少しだけ滑らかに（声にそのまま追従させる）
+    b.v += (target - b.v) * (target > b.v ? 0.9 : 0.35);
 
     b.h = minH + (maxH - minH) * b.v;
     b.x = left + i * pitch;
