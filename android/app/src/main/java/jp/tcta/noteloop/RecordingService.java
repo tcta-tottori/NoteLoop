@@ -45,7 +45,7 @@ public class RecordingService extends Service {
     private static final String TAG = "NoteLoopRec";
     // ロック画面に内容を出す設定（VISIBILITY_PUBLIC）を効かせるため、
     // チャンネルを作り直している。既存チャンネルの設定は後から変更できない。
-    private static final String CHANNEL_ID = "noteloop_recording_v2";
+    public static final String CHANNEL_ID = "noteloop_recording_v2";
     private static final String CHANNEL_ID_OLD = "noteloop_recording";
     private static final int NOTIF_ID = 4711;
 
@@ -83,6 +83,12 @@ public class RecordingService extends Service {
      * 通知のゲージも画面のゲージ（getLevel）も、この値を共有する。
      */
     private static volatile float level = 0f;
+    /** 直近に音量を読んだ時刻。読み取りが止まっていないかの判定に使う。 */
+    private static volatile long lastSampleAt = 0L;
+    /** 直近に読めた生の振幅（0..32767）。診断表示用。 */
+    private static volatile int lastAmp = -1;
+    /** 音量読み取りに使っている MediaRecorder（保険の読み取り用に静的に持つ） */
+    private static volatile MediaRecorder activeRecorder = null;
 
     /** 各バーの現在の高さ（0..1）。位置は固定なので、ここだけが動く。 */
     private final float[] barV = new float[BARS];
@@ -103,8 +109,21 @@ public class RecordingService extends Service {
 
     public static boolean isRecording() { return recording; }
 
-    /** 録音中の音量（0.0〜1.0）。画面上のゲージ表示に使う。 */
-    public static float getLevel() { return recording ? level : 0f; }
+    /**
+     * 録音中の音量（0.0〜1.0）。画面上のゲージ表示に使う。
+     *
+     * 通常はサービス側の定期読み取り（sampleLevel）の結果を返すが、
+     * 何らかの理由でその読み取りが止まっている端末でもゲージが動くよう、
+     * 値が古いときはこの場で読み直す（保険）。
+     */
+    public static float getLevel() {
+        if (!recording) return 0f;
+        if (SystemClock.elapsedRealtime() - lastSampleAt > 500L) sampleLevelNow();
+        return level;
+    }
+
+    /** 診断用: 直近に読めた生の振幅（0..32767）。-1 は一度も読めていない。 */
+    public static int getLastAmp() { return lastAmp; }
     public static String getCurrentPath() { return currentPath; }
     public static String getLastError() { return lastError; }
 
@@ -148,11 +167,12 @@ public class RecordingService extends Service {
         Intent stop = new Intent(this, RecordingService.class).setAction(ACTION_STOP);
         PendingIntent stopPi = PendingIntent.getService(this, 1, stop, piFlags);
 
-        // 経過時間は setUsesChronometer で OS に数えさせる。画面を消していても
-        // 通知の見出し部分で 1 秒ごとに進むため、こちらから更新しなくてもズレない。
-        // 本文はカスタムビュー（notif_recording.xml）にして、音量に連動する
-        // 縦バーのゲージを描く。見出し・操作ボタンは OS の体裁のまま使う
-        // （DecoratedCustomViewStyle）。
+        // たたんだ状態（ロック画面で見えるもの）は OS 標準の体裁のままにする。
+        // カスタムビューは端末のUIによっては描画されないことがあり、
+        // 「通知そのものが見えない」事故につながるため、まず確実に出す方を優先する。
+        //   ・経過時間 … setUsesChronometer（OS が数えるのでズレない）
+        //   ・音量    … setProgress のバー（0.4秒ごとに更新）
+        // 広げた状態では、アプリ画面と同じ縦バーのゲージ（自前で描いた画像）を出す。
         notifBuilder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("● 録音中")
                 .setContentText("画面を消しても録音は続いています")
@@ -169,15 +189,9 @@ public class RecordingService extends Service {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .setProgress(100, 2, false)
                 .setStyle(new NotificationCompat.DecoratedCustomViewStyle());
-        try {
-            Bitmap gauge = renderGauge(); // 開始直後は静かなので点が並ぶ
-            notifBuilder.setCustomContentView(buildGaugeView(R.layout.notif_recording, gauge, false));
-            notifBuilder.setCustomBigContentView(buildGaugeView(R.layout.notif_recording_big, gauge, true));
-        } catch (Exception e) {
-            // カスタムビューを作れない端末では、素の通知（見出し＋本文）のまま続ける
-            Log.w(TAG, "ゲージ付き通知を作れませんでした", e);
-        }
+        applyGaugeViews();
 
         Notification n = notifBuilder.build();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -192,12 +206,20 @@ public class RecordingService extends Service {
      * getMaxAmplitude() は「前回呼んでからの最大振幅（0..32767）」を返すので、
      * 一定間隔で呼べばそのままレベルメーターになる。
      */
-    private void sampleLevel() {
-        int amp = 0;
+    private void sampleLevel() { sampleLevelNow(); }
+
+    /** マイクの音量を1回読んで level を更新する（サービス側・プラグイン側の両方から呼ぶ） */
+    private static void sampleLevelNow() {
+        MediaRecorder r = activeRecorder;
+        if (r == null) return;
+        int amp = -1;
         try {
-            if (recorder != null) amp = recorder.getMaxAmplitude();
+            amp = r.getMaxAmplitude();
         } catch (Exception ignored) { /* 停止直後などは取得できない */ }
-        float target = Math.min(1f, Math.max(0, amp) / 10000f);
+        lastSampleAt = SystemClock.elapsedRealtime();
+        if (amp < 0) return;
+        lastAmp = amp;
+        float target = Math.min(1f, amp / 10000f);
         // アタックは速く、リリースはゆっくり（跳ねて滑らかに戻る動き）
         level = target > level ? target : level * 0.75f + target * 0.25f;
     }
@@ -262,10 +284,11 @@ public class RecordingService extends Service {
     private void updateGauge() {
         if (notifBuilder == null || !recording) return;
         try {
-            Bitmap gauge = renderGauge();
-            // RemoteViews は setXxx のたびに命令が積まれるため、毎回作り直す
-            notifBuilder.setCustomContentView(buildGaugeView(R.layout.notif_recording, gauge, false));
-            notifBuilder.setCustomBigContentView(buildGaugeView(R.layout.notif_recording_big, gauge, true));
+            // たたんだ状態は標準の体裁のまま、バーの伸び具合だけ更新する。
+            // 小さな音でもバーが動くよう、平方根で持ち上げる。
+            int shown = (int) Math.round(Math.sqrt(level) * 100);
+            notifBuilder.setProgress(100, Math.max(2, shown), false);
+            applyGaugeViews();
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(NOTIF_ID, notifBuilder.build());
         } catch (Exception e) {
@@ -274,13 +297,23 @@ public class RecordingService extends Service {
         }
     }
 
-    /** ゲージ入りの通知ビューを1枚作る */
-    private RemoteViews buildGaugeView(int layoutId, Bitmap gauge, boolean big) {
-        RemoteViews rv = new RemoteViews(getPackageName(), layoutId);
-        rv.setTextViewText(R.id.notif_title, "● 録音中");
-        if (big) rv.setTextViewText(R.id.notif_text, "画面を消しても録音は続いています");
-        rv.setImageViewBitmap(R.id.notif_gauge, gauge);
-        return rv;
+    /**
+     * 広げた状態の通知に、アプリ画面と同じ縦バーのゲージを載せる。
+     * RemoteViews は setXxx のたびに命令が積まれるため、毎回作り直す。
+     * 端末によってはカスタムビューが描かれないことがあるが、その場合でも
+     * たたんだ状態（標準の体裁）は出るので、通知が消えることはない。
+     */
+    private void applyGaugeViews() {
+        if (notifBuilder == null) return;
+        try {
+            RemoteViews rv = new RemoteViews(getPackageName(), R.layout.notif_recording_big);
+            rv.setTextViewText(R.id.notif_title, "● 録音中");
+            rv.setTextViewText(R.id.notif_text, "画面を消しても録音は続いています");
+            rv.setImageViewBitmap(R.id.notif_gauge, renderGauge());
+            notifBuilder.setCustomBigContentView(rv);
+        } catch (Exception e) {
+            Log.w(TAG, "ゲージ付きの通知ビューを作れませんでした", e);
+        }
     }
 
     private void createChannel() {
@@ -336,7 +369,10 @@ public class RecordingService extends Service {
             lastError = null;
             // 音量の読み取りと通知のゲージを動かし始める
             // （フォアグラウンドサービスなので画面オフでも止まらない）
+            activeRecorder = recorder;
             level = 0f;
+            lastAmp = -1;
+            lastSampleAt = SystemClock.elapsedRealtime();
             java.util.Arrays.fill(barV, 0f);
             notifCountdown = NOTIF_EVERY_AWAKE;
             gaugeHandler.removeCallbacks(gaugeTick);
@@ -355,6 +391,7 @@ public class RecordingService extends Service {
         recording = false;
         gaugeHandler.removeCallbacks(gaugeTick);
         level = 0f;
+        activeRecorder = null; // 解放後の getMaxAmplitude を防ぐ
         try {
             recorder.stop();
         } catch (Exception e) {

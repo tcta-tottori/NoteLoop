@@ -1,8 +1,15 @@
 package jp.tcta.noteloop;
 
 import android.Manifest;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.Settings;
+
+import androidx.core.app.NotificationManagerCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -40,9 +47,13 @@ public class RecorderPlugin extends Plugin {
 
     @PluginMethod
     public void start(PluginCall call) {
-        if (getPermissionState("microphone") != com.getcapacitor.PermissionState.GRANTED) {
-            // 通知権限（Android 13+）も一緒に求める。通知が出せないと
-            // フォアグラウンドサービスがユーザーから見えず、体験が悪くなる。
+        boolean needMic = getPermissionState("microphone") != com.getcapacitor.PermissionState.GRANTED;
+        // 通知（Android 13+）も要る。許可が無いと録音中の通知が通知領域にもロック画面にも
+        // 出ない（録音自体は続く）。以前はマイクが未許可のときしか要求していなかったため、
+        // 「マイクだけ許可・通知は拒否」の状態になると二度と聞かれないままだった。
+        boolean needNotif = Build.VERSION.SDK_INT >= 33
+                && getPermissionState("notifications") != com.getcapacitor.PermissionState.GRANTED;
+        if (needMic || needNotif) {
             requestPermissionForAliases(new String[]{ "microphone", "notifications" }, call, "permsCallback");
             return;
         }
@@ -55,7 +66,49 @@ public class RecorderPlugin extends Plugin {
             call.reject("マイクの使用が許可されていません");
             return;
         }
+        // 通知が拒否されていても録音は続けられる（Web 側が案内を出す）
         doStart(call);
+    }
+
+    /** 通知を出せる状態か（録音中の表示が出ないときの案内に使う） */
+    @PluginMethod
+    public void getNotificationState(PluginCall call) {
+        JSObject r = new JSObject();
+        Context ctx = getContext();
+        boolean enabled = true, channelEnabled = true;
+        try {
+            enabled = NotificationManagerCompat.from(ctx).areNotificationsEnabled();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+                NotificationChannel ch = nm != null ? nm.getNotificationChannel(RecordingService.CHANNEL_ID) : null;
+                // チャンネルは初回の録音で作られる。まだ無い場合は「有効」とみなす。
+                channelEnabled = ch == null || ch.getImportance() != NotificationManager.IMPORTANCE_NONE;
+            }
+        } catch (Exception ignored) {}
+        r.put("enabled", enabled);
+        r.put("channelEnabled", channelEnabled);
+        call.resolve(r);
+    }
+
+    /** このアプリの通知設定画面を開く */
+    @PluginMethod
+    public void openNotificationSettings(PluginCall call) {
+        Context ctx = getContext();
+        try {
+            Intent i;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                i = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, ctx.getPackageName());
+            } else {
+                i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(Uri.fromParts("package", ctx.getPackageName(), null));
+            }
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("設定画面を開けませんでした: " + e.getMessage());
+        }
     }
 
     private void doStart(PluginCall call) {
@@ -153,6 +206,9 @@ public class RecorderPlugin extends Plugin {
         JSObject r = new JSObject();
         r.put("recording", RecordingService.isRecording());
         r.put("elapsedMs", RecordingService.getElapsedMs());
+        // 診断用: いまの音量（0..1）と、マイクから読めた生の振幅（0..32767 / -1 は未取得）
+        r.put("level", RecordingService.getLevel());
+        r.put("amp", RecordingService.getLastAmp());
         String path = RecordingService.getCurrentPath();
         r.put("size", path != null ? new File(path).length() : 0);
         call.resolve(r);

@@ -29,6 +29,9 @@ const progressWrap   = $('progressWrap');
 const progressBar    = $('progressBar');
 const cancelProcBtn  = $('cancelProcBtn');
 const errorBox       = $('errorBox');
+const notifyWarn     = $('notifyWarn');
+const notifyWarnText = $('notifyWarnText');
+const notifyWarnBtn  = $('notifyWarnBtn');
 const audioWrap      = $('audioWrap');
 const audioEmptyNote = $('audioEmptyNote');
 const player         = $('player');
@@ -131,7 +134,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.6.4';
+const APP_VERSION = 'Ver.6.5';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -939,12 +942,44 @@ async function startNativeRecording() {
   try {
     const r = await rec.start();
     nativeRecordingPath = (r && r.path) || null;
+    warnIfNotificationsBlocked(); // 通知が切られていると録音中の表示が出ない
     return true;
   } catch (err) {
     const msg = (err && (err.message || err.errorMessage)) || String(err);
     showError('録音を開始できませんでした: ' + msg);
     return false;
   }
+}
+
+/**
+ * 通知が許可されていないと、録音中の通知（ロック画面の表示・停止ボタン）が
+ * どこにも出ない。録音は続くが気づけないので、その場で案内する。
+ */
+async function warnIfNotificationsBlocked() {
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.getNotificationState !== 'function') return;
+  try {
+    const s = await rec.getNotificationState();
+    if (s && s.enabled && s.channelEnabled) { hideNotifyWarn(); return; }
+    showNotifyWarn(s && !s.enabled
+      ? 'このアプリの通知が許可されていないため、録音中の通知（ロック画面の表示・停止ボタン）が出ません。録音は続いています。'
+      : '通知チャンネル「録音」がオフになっているため、録音中の通知が出ません。録音は続いています。');
+  } catch (_) { /* 取得できない版では何も出さない */ }
+}
+
+function showNotifyWarn(msg) {
+  if (!notifyWarn) return;
+  notifyWarnText.textContent = msg;
+  notifyWarn.hidden = false;
+}
+function hideNotifyWarn() { if (notifyWarn) notifyWarn.hidden = true; }
+
+if (notifyWarnBtn) {
+  notifyWarnBtn.addEventListener('click', async () => {
+    const rec = nativeRecorder();
+    if (!rec || typeof rec.openNotificationSettings !== 'function') return;
+    try { await rec.openNotificationSettings(); } catch (_) {}
+  });
 }
 
 /** ネイティブ録音を停止し、録れた音声を Blob で返す */
@@ -3455,6 +3490,50 @@ function updateModelWarn() {
 }
 accuracyModel.addEventListener('change', updateModelWarn);
 
+/* ===== 録音の診断（アプリ版のみ表示） =====
+ * 「ロック画面に表示が出ない」「ゲージが動かない」は原因が複数あり得るので、
+ * 通知の可否・サービスの状態・マイクから読めている音量をその場で確認できるようにする。 */
+const diagPanel = $('diagPanel');
+const diagBtn = $('diagBtn');
+const diagText = $('diagText');
+const diagNotifBtn = $('diagNotifBtn');
+if (diagPanel && NATIVE) diagPanel.hidden = false;
+if (diagBtn) {
+  diagBtn.addEventListener('click', async () => {
+    const rec = nativeRecorder();
+    if (!rec) { diagText.textContent = '録音機能を利用できません（アプリ版でのみ使えます）。'; return; }
+    const lines = [];
+    let blocked = false;
+    try {
+      const n = typeof rec.getNotificationState === 'function' ? await rec.getNotificationState() : null;
+      if (n) {
+        blocked = !n.enabled || !n.channelEnabled;
+        lines.push(`通知: ${n.enabled ? '許可' : '不許可'} / チャンネル「録音」: ${n.channelEnabled ? '有効' : '無効'}`);
+      } else {
+        lines.push('通知: 判定できません（アプリが古い可能性）');
+      }
+    } catch (_) { lines.push('通知: 取得に失敗'); }
+    try {
+      const s = await rec.getStatus();
+      lines.push(`録音サービス: ${s && s.recording ? '動作中' : '停止中'}`);
+      if (s && typeof s.amp === 'number') {
+        lines.push(`マイクの振幅: ${s.amp < 0 ? '未取得' : s.amp}（0〜32767）／ゲージ値: ${(s.level || 0).toFixed(2)}`);
+        if (s.recording && s.amp === 0) lines.push('※ 音を出しながらもう一度押しても 0 のままなら、この端末では音量を読めていません。');
+      }
+    } catch (_) { lines.push('録音サービス: 状態を取得できません'); }
+    diagText.textContent = lines.join(' / ');
+    if (diagNotifBtn) diagNotifBtn.hidden = !blocked;
+  });
+}
+if (diagNotifBtn) {
+  diagNotifBtn.addEventListener('click', async () => {
+    const rec = nativeRecorder();
+    if (rec && typeof rec.openNotificationSettings === 'function') {
+      try { await rec.openNotificationSettings(); } catch (_) {}
+    }
+  });
+}
+
 function showError(msg) { errorBox.textContent = msg; errorBox.hidden = false; }
 function hideError() { errorBox.hidden = true; errorBox.textContent = ''; }
 
@@ -3625,6 +3704,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !recording) return;
   try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch (_) {}
   resumeBackgroundKeepAlive(); // 無音再生が止まっていたら再開
+  if (NATIVE) warnIfNotificationsBlocked(); // 設定で通知を許可して戻ってきた場合に消す
   // Web Speech が停止していれば再開
   if (liveMode === 'webspeech' && !recognition) { try { beginRecognition(); } catch (_) {} }
   if (!wakeLock) acquireWakeLock(); // 画面復帰時にロックを取り直す（非表示中に自動解放されるため）
