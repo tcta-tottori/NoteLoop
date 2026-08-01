@@ -272,6 +272,18 @@ Web側を変更したら `npm run sync` で APK 側へ反映されます。
   描き替えは画面が点いている間は 0.4 秒ごと、消えている間は 1 秒ごと（`PowerManager.isInteractive`）。
 - **停止**アクション（ロック画面からそのまま録音を終了できます）
 
+### 録音エンジン
+
+録音は `AudioRecorderEngine`（`AudioRecord` で PCM を読み、`MediaCodec` で AAC に圧縮して
+`MediaMuxer` で m4a に書き出す）で行います。出来上がるファイルは従来と同じ
+**16kHz モノラル / AAC 32kbps の m4a** です。
+
+`MediaRecorder` に任せていた頃は、**`getMaxAmplitude()` が常に 0 を返す端末**があり、
+音量ゲージをどうやっても動かせませんでした。PCM を自分で読めば音量は確実に分かります。
+`AudioRecord` を初期化できない端末では、これまでどおり `MediaRecorder` に切り替えます
+（その場合ゲージは動かないことがありますが、録音はできます）。いま動いているエンジンは
+**設定 →「録音の診断」**に表示されます。
+
 音量は `RecordingService` の1か所だけで読みます（`getMaxAmplitude()` は「前回呼んでからの
 最大振幅」を返すため、複数箇所から呼ぶと値を食い合うため）。読み取った値は通知のゲージと、
 `Recorder.getLevel()` 経由でアプリ画面のゲージが共有します。定期読み取りが何らかの理由で
