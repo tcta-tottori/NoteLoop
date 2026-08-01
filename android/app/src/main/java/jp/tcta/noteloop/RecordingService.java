@@ -49,11 +49,11 @@ public class RecordingService extends Service {
     private static final String CHANNEL_ID_OLD = "noteloop_recording";
     private static final int NOTIF_ID = 4711;
 
-    /** 音量を読む間隔。1本のバーがこの時間ぶんの音量になる。 */
-    private static final long LEVEL_TICK_MS = 100L;
+    /** 音量を読む間隔。短いほど声への反応が早い。 */
+    private static final long LEVEL_TICK_MS = 50L;
     /** 通知のゲージを描き替える間隔（音量の読み取り何回ぶんか）。 */
-    private static final int NOTIF_EVERY_AWAKE = 4;  // 画面が点いている: 0.4秒ごと
-    private static final int NOTIF_EVERY_ASLEEP = 10; // 画面が消えている: 1秒ごと（誰も見ていないので粗く）
+    private static final int NOTIF_EVERY_AWAKE = 8;   // 画面が点いている: 0.4秒ごと
+    private static final int NOTIF_EVERY_ASLEEP = 20; // 画面が消えている: 1秒ごと（誰も見ていないので粗く）
 
     /** 通知に描くゲージ画像の大きさ（px）。表示側で横幅いっぱいに引き伸ばす。
      *  通知の更新ごとに画像を送るため、大きくしすぎない。 */
@@ -63,6 +63,8 @@ public class RecordingService extends Service {
     private static final int BARS = 16;
     /** これ以下の音は「無音」として扱う（振幅の全体に対する割合＝約 650/32767） */
     private static final float LEVEL_GATE = 0.02f;
+    /** ここで振り切れる（＝約 11500/32767。会議の声で上まで届く高さ） */
+    private static final float LEVEL_FULL = 0.35f;
     /** バーの色（左が濃い青 → 右へ明るい水色。アプリ画面のゲージと同じ配色） */
     private static final int[] GAUGE_COLORS = { 0xFF2F4FC8, 0xFF3B6FE0, 0xFF4F9BF2, 0xFF7FD2FB };
     private static final float[] GAUGE_STOPS = { 0f, 0.35f, 0.62f, 1f };
@@ -266,23 +268,24 @@ public class RecordingService extends Service {
         if (amp < 0) return;
         lastAmp = amp;
         float target = toLevel(amp);
-        // アタックは速く、リリースはゆっくり（跳ねて滑らかに戻る動き）
-        level = target > level ? target : level * 0.82f + target * 0.18f;
+        // 上がるのは即座に、下がるのは少しだけ滑らかに（カクつきを抑える程度）
+        level = target > level ? target : level * 0.55f + target * 0.45f;
     }
 
     /**
      * 振幅（0..32767）を、ゲージの高さに使う 0..1 へ変換する。
      *
-     * 単純な割り算だと、静かな部屋の物音でもバーが持ち上がり、少し大きい声で
-     * すぐ頭打ちになって「音の大きさで変わらない」見え方になる。人の耳に近い
-     * 対数目盛りにし、下限（ノイズゲート）より小さい音は 0（＝点のまま）にする。
+     * 声の大きさにそのまま比例させる（リニア）。ただし
+     *   ・下限（ノイズゲート）より小さい音は 0 ＝ 点のまま動かさない
+     *   ・会議の声で振り切れるよう、全体の 35% 程度を上限として扱う
+     * とし、生の振幅をそのまま割るより「素直に効く」ようにしている。
      */
     private static float toLevel(int amp) {
         float norm = amp / 32767f;
         if (norm <= LEVEL_GATE) return 0f;
-        double v = (Math.log10(norm) - Math.log10(LEVEL_GATE)) / -Math.log10(LEVEL_GATE);
-        if (v < 0.05) return 0f;    // ごくわずかな音は動かさない
-        return (float) Math.min(1.0, v);
+        float v = (norm - LEVEL_GATE) / (LEVEL_FULL - LEVEL_GATE);
+        if (v < 0.02f) return 0f;
+        return Math.min(1f, v);
     }
 
     /** 決まった見た目を再現するための擬似乱数（アプリ画面のゲージと同じ作り） */

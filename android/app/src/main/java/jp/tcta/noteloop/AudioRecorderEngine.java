@@ -127,8 +127,9 @@ public class AudioRecorderEngine {
     /* ===== ここから録音スレッド ===== */
 
     private void loop() {
-        // 0.1秒ぶんずつ読む（＝ゲージの更新間隔とそろえる）
-        byte[] buf = new byte[SAMPLE_RATE / 10 * 2];
+        // 細かめ（約 32ms ぶん）に読む。音量の反応を早くするため、
+        // ゲージの更新間隔より短くしておく。
+        byte[] buf = new byte[1024];
         try {
             while (running) {
                 int n = record.read(buf, 0, buf.length);
