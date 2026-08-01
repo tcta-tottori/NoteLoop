@@ -134,7 +134,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.6.6';
+const APP_VERSION = 'Ver.6.7';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -3563,7 +3563,7 @@ if (diagBtn) {
     } catch (_) { lines.push('通知: 取得に失敗'); }
     try {
       const s = await rec.getStatus();
-      lines.push(`録音サービス: ${s && s.recording ? '動作中' : '停止中'}`);
+      lines.push(`録音サービス: ${s && s.recording ? '動作中' : '停止中'}${s && s.engine ? `（${s.engine}）` : ''}`);
       if (s && typeof s.amp === 'number') {
         lines.push(`マイクの振幅: ${s.amp < 0 ? '未取得' : s.amp}（0〜32767）／ゲージ値: ${(s.level || 0).toFixed(2)}`);
         if (typeof s.sampleAgeMs === 'number') {

@@ -92,8 +92,10 @@ public class RecordingService extends Service {
     private static volatile long lastSampleAt = 0L;
     /** 直近に読めた生の振幅（0..32767）。診断表示用。 */
     private static volatile int lastAmp = -1;
-    /** 音量読み取りに使っている MediaRecorder（保険の読み取り用に静的に持つ） */
+    /** 音量読み取りに使っている MediaRecorder（切り替え時の保険。静的に持つ） */
     private static volatile MediaRecorder activeRecorder = null;
+    /** 自前の録音エンジン（こちらが使えるときは常にこちら） */
+    private static volatile AudioRecorderEngine engine = null;
 
     /** 各バーの現在の高さ（0..1）。位置は固定なので、ここだけが動く。 */
     private final float[] barV = new float[BARS];
@@ -144,6 +146,13 @@ public class RecordingService extends Service {
 
     /** 診断用: 直近に読めた生の振幅（0..32767）。-1 は一度も読めていない。 */
     public static int getLastAmp() { return lastAmp; }
+
+    /** 診断用: いま使っている録音エンジン */
+    public static String getEngineName() {
+        if (engine != null) return "AudioRecord";
+        if (activeRecorder != null) return "MediaRecorder";
+        return "-";
+    }
 
     /**
      * 診断用: 最後に音量を読んでからの経過ミリ秒。
@@ -239,12 +248,18 @@ public class RecordingService extends Service {
 
     /** マイクの音量を1回読んで level を更新する（サービス側・プラグイン側の両方から呼ぶ） */
     private static void sampleLevelNow() {
-        MediaRecorder r = activeRecorder;
-        if (r == null) return;
         int amp = -1;
-        try {
-            amp = r.getMaxAmplitude();
-        } catch (Exception ignored) { /* 停止直後などは取得できない */ }
+        AudioRecorderEngine eng = engine;
+        if (eng != null) {
+            // 自前エンジン: PCM から拾った最大振幅（前回読んでからのぶん）
+            amp = eng.takePeak();
+        } else {
+            MediaRecorder r = activeRecorder;
+            if (r == null) return;
+            try {
+                amp = r.getMaxAmplitude();
+            } catch (Exception ignored) { /* 停止直後などは取得できない */ }
+        }
         lastSampleAt = SystemClock.elapsedRealtime();
         if (amp < 0) return;
         lastAmp = amp;
@@ -369,6 +384,18 @@ public class RecordingService extends Service {
             lastError = "保存先が指定されていません";
             return false;
         }
+
+        // まずは自前のエンジン（AudioRecord）で録る。PCM を直接読むので
+        // 音量が必ず分かる（MediaRecorder.getMaxAmplitude() が常に 0 を返す
+        // 端末があり、それだとゲージが作れない）。
+        AudioRecorderEngine eng = new AudioRecorderEngine();
+        if (eng.start(path)) {
+            engine = eng;
+            beginRecordingState(path);
+            return true;
+        }
+        Log.w(TAG, "AudioRecord を使えないため MediaRecorder に切り替えます: " + eng.getError());
+
         try {
             File out = new File(path);
             File parent = out.getParentFile();
@@ -392,19 +419,8 @@ public class RecordingService extends Service {
             recorder.prepare();
             recorder.start();
 
-            currentPath = path;
-            startedAtElapsed = SystemClock.elapsedRealtime();
-            recording = true;
-            lastError = null;
-            // 音量の読み取りと通知のゲージを動かし始める
-            // （フォアグラウンドサービスなので画面オフでも止まらない）
             activeRecorder = recorder;
-            level = 0f;
-            lastAmp = -1;
-            lastSampleAt = SystemClock.elapsedRealtime();
-            java.util.Arrays.fill(barV, 0f);
-            notifCountdown = NOTIF_EVERY_AWAKE;
-            startGaugeLoop();
+            beginRecordingState(path);
             return true;
         } catch (Exception e) {
             lastError = String.valueOf(e.getMessage());
@@ -414,20 +430,44 @@ public class RecordingService extends Service {
         }
     }
 
+    /** 録音を開始できたときの共通処理（どちらのエンジンでも同じ） */
+    private void beginRecordingState(String path) {
+        currentPath = path;
+        startedAtElapsed = SystemClock.elapsedRealtime();
+        recording = true;
+        lastError = null;
+        // 音量の読み取りと通知のゲージを動かし始める
+        // （フォアグラウンドサービスなので画面オフでも止まらない）
+        level = 0f;
+        lastAmp = -1;
+        lastSampleAt = SystemClock.elapsedRealtime();
+        java.util.Arrays.fill(barV, 0f);
+        notifCountdown = NOTIF_EVERY_AWAKE;
+        startGaugeLoop();
+    }
+
     private void stopRecording() {
         if (!recording) return;
         recording = false;
         stopGaugeLoop();
         level = 0f;
         activeRecorder = null; // 解放後の getMaxAmplitude を防ぐ
-        try {
-            recorder.stop();
-        } catch (Exception e) {
-            // 極端に短い録音などで stop が例外になる。ファイルは残るのでそのまま進める。
-            Log.w(TAG, "stop に失敗しました", e);
-            lastError = "録音の終了処理に失敗しました: " + e.getMessage();
+
+        AudioRecorderEngine eng = engine;
+        engine = null;
+        if (eng != null) {
+            eng.stop(); // 書き切るまで待つ
+            if (eng.getError() != null) lastError = eng.getError();
+        } else {
+            try {
+                recorder.stop();
+            } catch (Exception e) {
+                // 極端に短い録音などで stop が例外になる。ファイルは残るのでそのまま進める。
+                Log.w(TAG, "stop に失敗しました", e);
+                lastError = "録音の終了処理に失敗しました: " + e.getMessage();
+            }
+            releaseRecorder();
         }
-        releaseRecorder();
         startedAtElapsed = 0L;
     }
 

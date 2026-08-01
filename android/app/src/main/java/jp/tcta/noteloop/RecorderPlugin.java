@@ -244,6 +244,7 @@ public class RecorderPlugin extends Plugin {
         r.put("sampleAgeMs", RecordingService.getSampleAgeMs());
         r.put("level", RecordingService.getLevel());
         r.put("amp", RecordingService.getLastAmp());
+        r.put("engine", RecordingService.getEngineName());
         String path = RecordingService.getCurrentPath();
         r.put("size", path != null ? new File(path).length() : 0);
         call.resolve(r);
