@@ -60,7 +60,9 @@ public class RecordingService extends Service {
     private static final int GAUGE_W = 420;
     private static final int GAUGE_H = 48;
     /** ゲージのバーの本数（位置は固定で、音量に応じて上下に伸びる） */
-    private static final int BARS = 26;
+    private static final int BARS = 16;
+    /** これ以下の音は「無音」として扱う（振幅の全体に対する割合＝約 650/32767） */
+    private static final float LEVEL_GATE = 0.02f;
     /** バーの色（左が濃い青 → 右へ明るい水色。アプリ画面のゲージと同じ配色） */
     private static final int[] GAUGE_COLORS = { 0xFF2F4FC8, 0xFF3B6FE0, 0xFF4F9BF2, 0xFF7FD2FB };
     private static final float[] GAUGE_STOPS = { 0f, 0.35f, 0.62f, 1f };
@@ -263,9 +265,24 @@ public class RecordingService extends Service {
         lastSampleAt = SystemClock.elapsedRealtime();
         if (amp < 0) return;
         lastAmp = amp;
-        float target = Math.min(1f, amp / 10000f);
+        float target = toLevel(amp);
         // アタックは速く、リリースはゆっくり（跳ねて滑らかに戻る動き）
-        level = target > level ? target : level * 0.75f + target * 0.25f;
+        level = target > level ? target : level * 0.82f + target * 0.18f;
+    }
+
+    /**
+     * 振幅（0..32767）を、ゲージの高さに使う 0..1 へ変換する。
+     *
+     * 単純な割り算だと、静かな部屋の物音でもバーが持ち上がり、少し大きい声で
+     * すぐ頭打ちになって「音の大きさで変わらない」見え方になる。人の耳に近い
+     * 対数目盛りにし、下限（ノイズゲート）より小さい音は 0（＝点のまま）にする。
+     */
+    private static float toLevel(int amp) {
+        float norm = amp / 32767f;
+        if (norm <= LEVEL_GATE) return 0f;
+        double v = (Math.log10(norm) - Math.log10(LEVEL_GATE)) / -Math.log10(LEVEL_GATE);
+        if (v < 0.05) return 0f;    // ごくわずかな音は動かさない
+        return (float) Math.min(1.0, v);
     }
 
     /** 決まった見た目を再現するための擬似乱数（アプリ画面のゲージと同じ作り） */
@@ -296,7 +313,7 @@ public class RecordingService extends Service {
                     0, 0, GAUGE_W, 0, GAUGE_COLORS, GAUGE_STOPS, Shader.TileMode.CLAMP));
         }
         final float pitch = (float) GAUGE_W / BARS;
-        final float barW = pitch / 2f;                    // 間隔と同じだけ空ける
+        final float barW = pitch * 0.3f;                  // 細めのバー＋広めの間隔
         final float maxH = GAUGE_H * 0.92f;               // いちばん大きい声のときの高さ
         final float minH = barW;                          // 無音は「点」になる
         final float mid = GAUGE_H / 2f;
@@ -308,10 +325,10 @@ public class RecordingService extends Service {
             // 中央ほど大きく振れる（両端は控えめ）
             float env = (float) (0.35 + 0.65 * Math.pow(Math.sin(Math.PI * t), 0.7));
             // 1本ごとに感度と揺れの速さを変え、横一直線にならないようにする
-            float gain = 0.7f + gaugeNoise(i * 3.9) * 0.6f;
-            float speed = 0.9f + gaugeNoise(i * 1.3) * 2.2f;
+            float gain = 0.8f + gaugeNoise(i * 3.9) * 0.35f;
+            float speed = 1.0f + gaugeNoise(i * 1.3) * 1.6f;
             float phase = gaugeNoise(i * 2.7) * (float) Math.PI * 2f;
-            float wobble = (float) (0.55 + 0.45 * Math.sin(now * speed + phase));
+            float wobble = (float) (0.7 + 0.3 * Math.sin(now * speed + phase));
             float target = Math.min(1f, lv * gain * env * wobble);
             // 伸びるのは速く、戻るのはゆっくり
             barV[i] += (target - barV[i]) * (target > barV[i] ? 0.5f : 0.2f);
