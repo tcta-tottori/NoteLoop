@@ -134,7 +134,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.6.9';
+const APP_VERSION = 'Ver.7.0';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1679,10 +1679,12 @@ function gaugeNoise(seed) {
 /** i 本目のバーの個性（毎回同じ値になるので、描き直しても暴れない） */
 function newGaugeBar(i) {
   return {
-    v: 0,                                        // いまの高さ 0..1
-    gain: 0.8 + gaugeNoise(i * 3.9) * 0.35,      // 音への感度の個体差（控えめ）
-    speed: 1.0 + gaugeNoise(i * 1.3) * 1.6,      // 揺れの速さ
-    phase: gaugeNoise(i * 2.7) * Math.PI * 2,    // 揺れの位相
+    v: 0,                                          // いまの高さ 0..1
+    gain: 0.45 + gaugeNoise(i * 3.9) * 0.95,       // 高さの個体差（大きめ＝ばらばらに伸びる）
+    speed: 0.8 + gaugeNoise(i * 1.3) * 3.0,        // 揺れの速さもばらばら
+    phase: gaugeNoise(i * 2.7) * Math.PI * 2,      // 揺れの位相
+    jitter: (gaugeNoise(i * 5.1) - 0.5) * 0.44,    // 位置のずれ（間隔を不揃いにする）
+    wide: 0.85 + gaugeNoise(i * 7.3) * 0.35,       // 太さの個体差
   };
 }
 
@@ -1890,16 +1892,19 @@ function drawWaveFrame() {
     const t = count > 1 ? i / (count - 1) : 0.5;
     // 中央ほど大きく振れる（両端は控えめ）
     const env = 0.35 + 0.65 * Math.pow(Math.sin(Math.PI * t), 0.7);
-    // 同じ音でも1本ずつ少しだけ違う揺れ方をするので、横一直線にならない
-    const wobble = 0.85 + 0.15 * Math.sin(now * b.speed + b.phase);
+    // 速さの違う2つの揺れを重ね、周期的に見えないようにする（長さがばらばらに）
+    const s1 = Math.sin(now * b.speed + b.phase);
+    const s2 = Math.sin(now * b.speed * 0.43 + b.phase * 1.7);
+    const wobble = 0.42 + 0.58 * (0.5 + 0.5 * (0.65 * s1 + 0.35 * s2));
     const target = Math.min(1, waveLevel * b.gain * env * wobble);
     // 伸びるのは即座に、戻るのは少しだけ滑らかに（声にそのまま追従させる）
     b.v += (target - b.v) * (target > b.v ? 0.9 : 0.35);
 
-    b.h = minH + (maxH - minH) * b.v;
-    b.x = left + i * pitch;
+    b.w = barW * b.wide;
+    b.h = Math.max(b.w, minH + (maxH - minH) * b.v);
+    b.x = left + i * pitch + b.jitter * pitch; // 間隔を不揃いにする
     if (i < fade || i >= count - fade) continue; // 端は後から薄く描く
-    rrectPath(ctx, b.x, mid - b.h / 2, barW, b.h, barW / 2);
+    rrectPath(ctx, b.x, mid - b.h / 2, b.w, b.h, b.w / 2);
   }
   ctx.fill();
 
@@ -1908,8 +1913,7 @@ function drawWaveFrame() {
     if (i >= fade && i < count - fade) continue;
     const b = gaugeBars[i];
     ctx.globalAlpha = 0.45; // 端の1本だけ薄くして、両端を切り落として見せない
-    ctx.beginPath();
-    rrect(ctx, b.x, mid - b.h / 2, barW, b.h, barW / 2);
+    rrect(ctx, b.x, mid - b.h / 2, b.w, b.h, b.w / 2);
     ctx.fill();
   }
   ctx.globalAlpha = 1;

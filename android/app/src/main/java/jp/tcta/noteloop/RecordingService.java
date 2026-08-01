@@ -52,7 +52,7 @@ public class RecordingService extends Service {
     /** 音量を読む間隔。短いほど声への反応が早い。 */
     private static final long LEVEL_TICK_MS = 50L;
     /** 通知のゲージを描き替える間隔（音量の読み取り何回ぶんか）。 */
-    private static final int NOTIF_EVERY_AWAKE = 8;   // 画面が点いている: 0.4秒ごと
+    private static final int NOTIF_EVERY_AWAKE = 5;   // 画面が点いている: 0.25秒ごと
     private static final int NOTIF_EVERY_ASLEEP = 20; // 画面が消えている: 1秒ごと（誰も見ていないので粗く）
 
     /** 通知に描くゲージ画像の大きさ（px）。表示側で横幅いっぱいに引き伸ばす。
@@ -100,6 +100,20 @@ public class RecordingService extends Service {
     private static volatile MediaRecorder activeRecorder = null;
     /** 自前の録音エンジン（こちらが使えるときは常にこちら） */
     private static volatile AudioRecorderEngine engine = null;
+
+    /**
+     * ステータスバーに出す小さいアイコンのコマ。
+     * 通知を出し直すたびに差し替えることで、録音中はイコライザーが動いて見える
+     * （YouTube などの再生中表示と同じ位置に出る）。音が無いときは平らなコマ。
+     */
+    private static final int[] EQ_FRAMES = {
+            R.drawable.ic_rec_eq_0, R.drawable.ic_rec_eq_1, R.drawable.ic_rec_eq_2,
+            R.drawable.ic_rec_eq_3, R.drawable.ic_rec_eq_4, R.drawable.ic_rec_eq_5,
+    };
+    private int eqFrame = 0;
+    /** 広げたときのゲージ（作り直しは間引く） */
+    private RemoteViews bigView;
+    private long bigViewAt = 0L;
 
     /** 各バーの現在の高さ（0..1）。位置は固定なので、ここだけが動く。 */
     private final float[] barV = new float[BARS];
@@ -218,7 +232,7 @@ public class RecordingService extends Service {
         notifBuilder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("● 録音中")
                 .setContentText("画面を消しても録音は続いています")
-                .setSmallIcon(android.R.drawable.presence_audio_online)
+                .setSmallIcon(R.drawable.ic_rec_eq_flat)
                 .setContentIntent(contentPi)
                 .addAction(0, "停止", stopPi)
                 .setOngoing(true)
@@ -327,19 +341,24 @@ public class RecordingService extends Service {
             float t = BARS > 1 ? (float) i / (BARS - 1) : 0.5f;
             // 中央ほど大きく振れる（両端は控えめ）
             float env = (float) (0.35 + 0.65 * Math.pow(Math.sin(Math.PI * t), 0.7));
-            // 1本ごとに感度と揺れの速さを変え、横一直線にならないようにする
-            float gain = 0.8f + gaugeNoise(i * 3.9) * 0.35f;
-            float speed = 1.0f + gaugeNoise(i * 1.3) * 1.6f;
+            // 1本ごとに高さ・太さ・位置・揺れ方を変え、不揃いに見せる（画面のゲージと同じ）
+            float gain = 0.45f + gaugeNoise(i * 3.9) * 0.95f;
+            float speed = 0.8f + gaugeNoise(i * 1.3) * 3.0f;
             float phase = gaugeNoise(i * 2.7) * (float) Math.PI * 2f;
-            float wobble = (float) (0.7 + 0.3 * Math.sin(now * speed + phase));
+            float jitter = (gaugeNoise(i * 5.1) - 0.5f) * 0.44f;
+            float wide = 0.85f + gaugeNoise(i * 7.3) * 0.35f;
+            double s1 = Math.sin(now * speed + phase);
+            double s2 = Math.sin(now * speed * 0.43 + phase * 1.7);
+            float wobble = (float) (0.42 + 0.58 * (0.5 + 0.5 * (0.65 * s1 + 0.35 * s2)));
             float target = Math.min(1f, lv * gain * env * wobble);
             // 伸びるのは速く、戻るのはゆっくり
-            barV[i] += (target - barV[i]) * (target > barV[i] ? 0.5f : 0.2f);
+            barV[i] += (target - barV[i]) * (target > barV[i] ? 0.5f : 0.25f);
 
-            float bh = minH + (maxH - minH) * barV[i];
-            float x = i * pitch + (pitch - barW) / 2f;
-            RectF r = new RectF(x, mid - bh / 2f, x + barW, mid + bh / 2f);
-            c.drawRoundRect(r, barW / 2f, barW / 2f, gaugePaint);
+            float bw = barW * wide;
+            float bh = Math.max(bw, minH + (maxH - minH) * barV[i]);
+            float x = i * pitch + (pitch - bw) / 2f + jitter * pitch;
+            RectF r = new RectF(x, mid - bh / 2f, x + bw, mid + bh / 2f);
+            c.drawRoundRect(r, bw / 2f, bw / 2f, gaugePaint);
         }
         return bmp;
     }
@@ -352,6 +371,10 @@ public class RecordingService extends Service {
             // 小さな音でもバーが動くよう、平方根で持ち上げる。
             int shown = (int) Math.round(Math.sqrt(level) * 100);
             notifBuilder.setProgress(100, Math.max(2, shown), false);
+            // ステータスバーのアイコンはコマを送って動かす（音が無いときは平ら）
+            notifBuilder.setSmallIcon(level <= 0f
+                    ? R.drawable.ic_rec_eq_flat
+                    : EQ_FRAMES[Math.abs(eqFrame++) % EQ_FRAMES.length]);
             applyGaugeViews();
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(NOTIF_ID, notifBuilder.build());
@@ -370,11 +393,18 @@ public class RecordingService extends Service {
     private void applyGaugeViews() {
         if (notifBuilder == null) return;
         try {
-            RemoteViews rv = new RemoteViews(getPackageName(), R.layout.notif_recording_big);
-            rv.setTextViewText(R.id.notif_title, "● 録音中");
-            rv.setTextViewText(R.id.notif_text, "画面を消しても録音は続いています");
-            rv.setImageViewBitmap(R.id.notif_gauge, renderGauge());
-            notifBuilder.setCustomBigContentView(rv);
+            long now = SystemClock.elapsedRealtime();
+            // 画像の作り直しは 0.4 秒に1回まで（通知自体はもっと細かく出し直すが、
+            // 広げたときのゲージのためだけに毎回描くと送信量が無駄に増える）
+            if (bigView == null || now - bigViewAt >= 400L) {
+                RemoteViews rv = new RemoteViews(getPackageName(), R.layout.notif_recording_big);
+                rv.setTextViewText(R.id.notif_title, "● 録音中");
+                rv.setTextViewText(R.id.notif_text, "画面を消しても録音は続いています");
+                rv.setImageViewBitmap(R.id.notif_gauge, renderGauge());
+                bigView = rv;
+                bigViewAt = now;
+            }
+            notifBuilder.setCustomBigContentView(bigView);
         } catch (Exception e) {
             Log.w(TAG, "ゲージ付きの通知ビューを作れませんでした", e);
         }
