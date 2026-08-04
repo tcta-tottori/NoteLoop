@@ -40,6 +40,11 @@ public class AudioRecorderEngine {
     /** 前回 takePeak() を呼んでからの最大振幅（0..32767）。MediaRecorder と同じ意味。 */
     private volatile int peak = 0;
     private volatile boolean wroteAny = false;
+    /** ライブ文字起こし用に PCM を溜めるか（Web 側が必要なときだけ ON） */
+    private volatile boolean pcmTap = false;
+    /** 溜めておく PCM。取りに来ない間は上限で捨てる（メモリを食わない） */
+    private final java.io.ByteArrayOutputStream pcmBuf = new java.io.ByteArrayOutputStream();
+    private static final int PCM_MAX = SAMPLE_RATE * 2 * 30; // 約30秒ぶん
 
     private int trackIndex = -1;
     private boolean muxerStarted = false;
@@ -111,6 +116,26 @@ public class AudioRecorderEngine {
         }
     }
 
+    /**
+     * ライブ文字起こし用の PCM 取り出しを開始／終了する。
+     * 録音そのものには影響しない（同じ読み取りを横取りするだけなので、
+     * マイクを二重に開かずに済む＝録音中でも文字起こしができる）。
+     */
+    public void setPcmTap(boolean on) {
+        synchronized (pcmBuf) { pcmBuf.reset(); }
+        pcmTap = on;
+    }
+
+    /** 溜まった PCM（16kHz / 16bit / モノラル）を取り出して空にする。無ければ null。 */
+    public byte[] takePcm() {
+        synchronized (pcmBuf) {
+            if (pcmBuf.size() == 0) return null;
+            byte[] out = pcmBuf.toByteArray();
+            pcmBuf.reset();
+            return out;
+        }
+    }
+
     /** 録音を止め、ファイルを閉じる。書き出しが終わるまで待つ。 */
     public void stop() {
         running = false;
@@ -135,6 +160,7 @@ public class AudioRecorderEngine {
                 int n = record.read(buf, 0, buf.length);
                 if (n > 0) {
                     updatePeak(buf, n);
+                    if (pcmTap) tapPcm(buf, n);
                     encode(buf, n);
                 } else if (n < 0) {
                     error = "マイクの読み取りに失敗しました (" + n + ")";
@@ -161,6 +187,14 @@ public class AudioRecorderEngine {
             if (a > p) p = a;
         }
         if (p > peak) peak = p;
+    }
+
+    /** ライブ文字起こし用に PCM を溜める（上限を超えたら古い分は捨てる） */
+    private void tapPcm(byte[] b, int len) {
+        synchronized (pcmBuf) {
+            if (pcmBuf.size() + len > PCM_MAX) pcmBuf.reset();
+            pcmBuf.write(b, 0, len);
+        }
     }
 
     /** PCM をエンコーダへ渡す（入り切らなければ分割して渡す） */

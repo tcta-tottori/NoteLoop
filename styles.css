@@ -24,14 +24,8 @@
   --radius: 18px;
   --radius-sm: 12px;
   --nav-h: 66px;
-  /* 録音中に画面のふちへ出す赤枠の太さ・丸み。--rec-inset は、その枠に
-     隠れないよう画面の中身を内側へ寄せる量（録音中だけ 0 以外になる）。 */
-  --rec-frame-w: 10px;
-  --rec-frame-r: 34px;
-  --rec-inset: 0px;
   color-scheme: dark; /* 音声プレイヤー・入力欄など標準UIもダークにする */
 }
-body.is-recording { --rec-inset: 16px; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -507,67 +501,33 @@ select:focus, input:focus, textarea:focus {
 /* 録音中は経過時間も白で（ゲージの白いバーと合わせる） */
 body.is-recording .wave-timer { color: #fff; }
 
-/* ---------- Home: 録音中のリアルタイム文字起こし ---------- */
+/* ---------- Home: 録音中のリアルタイム文字起こし（枠なし・地の上に直接） ---------- */
 .live-now {
   position: relative;
-  margin: -4px 0 14px;
-  padding: 14px 16px 16px;
-  border-radius: var(--radius);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-md);
+  margin: 2px 0 14px;
+  padding: 0 2px;
+  background: none; border: none; box-shadow: none;
   animation: fade .25s ease;
 }
 .live-now-head {
   display: flex; align-items: center; gap: 7px;
-  font-size: 12px; font-weight: 800; color: var(--muted); letter-spacing: .02em;
-  margin-bottom: 8px;
+  font-size: 12px; font-weight: 700; color: var(--faint); letter-spacing: .02em;
+  margin-bottom: 6px;
 }
 .live-now-dot {
   width: 8px; height: 8px; border-radius: 50%; flex: none;
   background: #ff4d4f; box-shadow: 0 0 8px #ff4d4f; animation: blink 1s infinite;
 }
 .live-now-body {
-  max-height: 44vh; overflow-y: auto;
-  font-size: 15.5px; line-height: 1.9; color: var(--text);
+  max-height: 46vh; overflow-y: auto;
+  font-size: 15.5px; line-height: 1.95; color: var(--text);
   white-space: pre-wrap; word-break: break-word;
-  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,.3) 0, #000 26%);
-  mask-image: linear-gradient(to bottom, rgba(0,0,0,.3) 0, #000 26%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,.28) 0, #000 26%);
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,.28) 0, #000 26%);
 }
 .live-now-body .live-line { color: var(--muted); }
 .live-now-body .live-line.now { color: var(--text); font-weight: 700; }
-.live-now-body .live-wait { color: var(--faint); font-size: 13px; font-weight: 600; line-height: 1.7; }
-
-/* ---------- 録音中: 画面外枠の赤い枠（点滅しない・角はスマホ画面のように丸く） ---------- */
-.rec-frame { position: fixed; inset: 0; z-index: 70; pointer-events: none; }
-.rec-frame-edge {
-  position: absolute; inset: 0;
-  border: var(--rec-frame-w) solid rgba(225, 29, 40, .96);
-  border-radius: var(--rec-frame-r);
-  /* 角の外側（丸みの外）も赤で埋めて、画面のふちまで途切れずに囲う。
-     アプリ版はステータスバー・下部バーも赤いので、そこまで赤がつながる。 */
-  box-shadow: 0 0 0 100vmax rgba(225, 29, 40, .96), inset 0 0 26px rgba(225, 29, 40, .22);
-}
-
-/* 赤枠を出している間は、ロゴ・メニュー・ボタンが枠に隠れないよう内側へ寄せる */
-body.is-recording .app-header {
-  top: var(--rec-inset);
-  margin: var(--rec-inset) var(--rec-inset) 0;
-  border-radius: 16px 16px 0 0;
-}
-body.is-recording .header-glow { top: var(--rec-inset); left: var(--rec-inset); right: var(--rec-inset); }
-body.is-recording .wave-wrap { width: calc(100vw - var(--rec-inset) * 2); }
-body.is-recording .app-main { padding-left: calc(clamp(14px, 3vw, 22px) + var(--rec-inset) / 2); padding-right: calc(clamp(14px, 3vw, 22px) + var(--rec-inset) / 2); }
-body.is-recording .mic-dock {
-  bottom: calc(env(safe-area-inset-bottom) + 24px + var(--rec-inset));
-  padding-left: calc(16px + var(--rec-inset)); padding-right: calc(16px + var(--rec-inset));
-}
-body.is-recording .mic-tools-btn { right: calc(clamp(16px, 6vw, 40px) + var(--rec-inset)); }
-body.is-recording .rec-hint { bottom: calc(env(safe-area-inset-bottom) + 104px + var(--rec-inset)); }
-body.is-recording .drawer {
-  top: var(--rec-inset); bottom: var(--rec-inset); left: var(--rec-inset);
-  border-radius: 0 18px 18px 0;
-}
+.live-now-body .live-wait { color: var(--faint); font-size: 13px; font-weight: 600; line-height: 1.8; }
 
 /* ---------- 議事録の生成中（進捗率・完了目安時間） ---------- */
 .gen-progress {

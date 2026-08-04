@@ -41,10 +41,9 @@ const downloadAudio  = $('downloadAudio');
 const downloadWav    = $('downloadWav');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
-// 録音中のリアルタイム表示 / 赤い外枠
+// 録音中のリアルタイム表示
 const liveNowPanel   = $('liveNowPanel');
 const liveNowText    = $('liveNowText');
-const recFrame       = $('recFrame');
 
 const LANGUAGE       = 'japanese';   // 日本語固定
 const engineSelect   = $('engineSelect');
@@ -137,12 +136,8 @@ const meetingModalDone  = $('meetingModalDone');
 const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
-// 画面いちばん外のバー（ステータスバー／下部）の色。録音中だけ赤にする。
-const BASE_BAR_COLOR = '#17181b';
-const REC_BAR_COLOR  = '#e11d28';
-
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.3';
+const APP_VERSION = 'Ver.7.4';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -392,28 +387,9 @@ function updateHomeUI() {
   if (showWave) startWave(); else stopWave();
 }
 
-/** 録音中だけ画面の外枠を赤くする（ステータスバー・下部のバーも含めて） */
-let recBarsOn = null;
+/** 録音中の見た目（経過時間の色など）を切り替える */
 function updateRecFrame() {
   document.body.classList.toggle('is-recording', recording);
-  if (recFrame) recFrame.hidden = !recording;
-  setSystemBarsRecording(recording);
-}
-
-/**
- * 画面いちばん外のステータスバー／下部バーの色を切り替える。
- * アプリ版はネイティブ側（Recorder.setRecordingBars）で、ブラウザ版は
- * theme-color を差し替えて赤くする。
- */
-function setSystemBarsRecording(on) {
-  if (recBarsOn === on) return;
-  recBarsOn = on;
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', on ? REC_BAR_COLOR : BASE_BAR_COLOR);
-  const rec = nativeRecorder();
-  if (rec && typeof rec.setRecordingBars === 'function') {
-    try { rec.setRecordingBars({ recording: on }); } catch (_) { /* 古い版のアプリでは何もしない */ }
-  }
 }
 
 /**
@@ -425,9 +401,12 @@ function renderLiveNow() {
   if (!liveNowText) return;
   const raw = liveTranscript.value.trim();
   if (!raw) {
-    liveNowText.innerHTML = (liveMode === 'webspeech')
-      ? '<span class="live-wait">音声を認識しています…　話し始めるとここに文字が表示されます。</span>'
-      : '<span class="live-wait">録音モードのため、録音中の文字起こしは行いません。停止後に「AIで議事録を作成」で文字起こし＋議事録を作成します（設定でライブ字幕モードに変更できます）。</span>';
+    liveNowText.innerHTML =
+      liveMode === 'webspeech' ? '<span class="live-wait">音声を認識しています…　話し始めるとここに文字が表示されます。</span>'
+    : liveMode === 'native'    ? (liveWhisperFailed
+        ? '<span class="live-wait">録音中の文字起こしを準備できませんでした（初回はモデルの読み込みにネット接続が必要です）。<strong>録音は続いています</strong>。停止後の「AIで議事録を作成」で全体を文字起こしできます。</span>'
+        : '<span class="live-wait">端末内で文字起こししています…　数秒ごとにまとめて表示されます（初回はモデルの読み込みに少し時間がかかります）。</span>')
+    :                            '<span class="live-wait">録音モードのため、録音中の文字起こしは行いません。停止後に「AIで議事録を作成」で文字起こし＋議事録を作成します（設定でライブ字幕モードに変更できます）。</span>';
     return;
   }
   const lines = raw.split('\n').filter((l) => l.trim());
@@ -503,7 +482,14 @@ function handleWorkerMessage(e) {
         if (finalResolve) { finalResolve(); finalResolve = null; }
       } else {
         workerBusy = false;
-        showError('文字起こしエラー: ' + msg.message);
+        // 録音中のライブ表示は、失敗しても録音・停止後の文字起こしには影響しない。
+        // エラー表示で画面を埋めず、その場に一度だけ案内する。
+        if (liveWhisperOn) {
+          liveWhisperFailed = true;
+          renderLiveNow();
+        } else {
+          showError('文字起こしエラー: ' + msg.message);
+        }
       }
       break;
   }
@@ -1101,7 +1087,14 @@ async function startRecording() {
     pendingChunks = [];
     setAudioAvailable(false);
     sttActivity = 0.2;
-    setStatus('working', '録音中（アプリが停止させません）');
+    // ライブ字幕がONなら、録音サービスの音声を端末内Whisperで文字にする
+    // （マイクは1つしか開かないので録音は止まらない）
+    if (liveEnabled && liveEnabled.checked && await startNativeLiveTranscribe()) {
+      liveMode = 'native';
+      setStatus('working', '録音中・文字起こし中（端末内）');
+    } else {
+      setStatus('working', '録音中（アプリが停止させません）');
+    }
     updateHomeUI();
     startTime = Date.now();
     updateTimer();
@@ -1183,7 +1176,7 @@ async function stopRecording() {
   recording = false;
   recHint.hidden = true;
   timerEl.hidden = true;
-  updateRecFrame();   // 赤い外枠は停止と同時に消す
+  updateRecFrame();
 
   clearInterval(timerInterval);
   clearInterval(liveTimer); liveTimer = null;
@@ -1193,6 +1186,7 @@ async function stopRecording() {
   stopBackgroundKeepAlive();
 
   if (liveMode === 'webspeech') stopWebSpeech();
+  if (liveWhisperOn) stopNativeLiveTranscribe();   // アプリ版のライブ文字起こしを終える
 
   // 経過時間（実際に録っていたはずの長さ）を先に確定させる
   const wallSec = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
@@ -1683,8 +1677,81 @@ function drainPending() {
   pendingChunks = [];
   return out;
 }
-// ライブ表示は Web Speech に一本化したため、Whisper へのライブ送信は行わない（no-op）。
-function maybeSendChunk() { /* Whisper-live 廃止 */ }
+/* =========================================================
+ * アプリ版のライブ文字起こし（録音中でも動く方式）
+ *   Android は同じマイクを「録音」と「音声認識」で二重に開けないため、
+ *   録音サービスがマイクから読んでいる PCM をそのまま受け取り、
+ *   端末内の Whisper（worker.js）で文字にする。マイクは1つしか開かないので
+ *   録音が止まる心配がなく、外部送信も無い。
+ * =======================================================*/
+const LIVE_MODEL = 'Xenova/whisper-tiny';   // ライブ用の軽いモデル（初回のみDL）
+const LIVE_CHUNK_SEC = 8;                   // これだけ溜まったら1回まわす
+let nativePcmSub = null;
+let liveWhisperOn = false;
+let liveWhisperFailed = false;  // モデル読み込み等に失敗したか（案内の切り替え用）
+
+/** 録音サービスからの PCM 受け取りを開始する。使えなければ false。 */
+async function startNativeLiveTranscribe() {
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.startPcmUpdates !== 'function') return false; // 古い版のアプリ
+  try {
+    const r = await rec.startPcmUpdates();
+    if (r && r.available === false) return false;   // PCM を取り出せない録音方式
+  } catch (_) { return false; }
+  liveWhisperOn = true;
+  liveWhisperFailed = false;
+  pendingChunks = [];
+  workerBusy = false;
+  worker.postMessage({ type: 'load', model: LIVE_MODEL, device: 'wasm' });
+  try { nativePcmSub = rec.addListener('pcm', onNativePcm); } catch (_) { nativePcmSub = null; }
+  return true;
+}
+
+/** PCM の受け取りを終える */
+function stopNativeLiveTranscribe() {
+  if (!liveWhisperOn) return;
+  liveWhisperOn = false;
+  const rec = nativeRecorder();
+  if (rec && typeof rec.stopPcmUpdates === 'function') { try { rec.stopPcmUpdates(); } catch (_) {} }
+  if (nativePcmSub) {
+    Promise.resolve(nativePcmSub).then((s) => { try { s.remove(); } catch (_) {} }).catch(() => {});
+    nativePcmSub = null;
+  }
+  pendingChunks = [];
+}
+
+/** ネイティブから届いた PCM（base64 の 16bit LE）を Float32 に直して溜める */
+function onNativePcm(ev) {
+  if (!liveWhisperOn || !ev || !ev.data) return;
+  let bin;
+  try { bin = atob(ev.data); } catch (_) { return; }
+  const n = bin.length >> 1;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const lo = bin.charCodeAt(i * 2), hi = bin.charCodeAt(i * 2 + 1);
+    let v = (hi << 8) | lo;
+    if (v > 32767) v -= 65536;
+    out[i] = v / 32768;
+  }
+  pendingChunks.push(out);
+  // 溜め込みすぎない（処理が追いつかないときは古い分から捨てる）
+  let backlog = totalSamples(pendingChunks);
+  const maxSamples = SAMPLE_RATE * LIVE_CHUNK_SEC * 3;
+  while (backlog > maxSamples && pendingChunks.length > 1) backlog -= pendingChunks.shift().length;
+  maybeSendChunk();
+}
+
+/** 溜まった音声がまとまったら Whisper へ渡す（前の処理が終わるまでは待つ） */
+function maybeSendChunk() {
+  if (!liveWhisperOn || workerBusy) return;
+  if (totalSamples(pendingChunks) < SAMPLE_RATE * LIVE_CHUNK_SEC) return;
+  const audio = drainPending();
+  workerBusy = true;
+  worker.postMessage(
+    { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: LIVE_MODEL, language: LANGUAGE, device: 'wasm' },
+    [audio.buffer]
+  );
+}
 /** 記号・句読点だけ（「！！！」等のハルシネーション）かどうか */
 function isJunkChunk(text) {
   const t = (text || '').trim();
@@ -1768,17 +1835,28 @@ function gaugeNoise(seed) {
   return x - Math.floor(x); // 0..1
 }
 
+/**
+ * i 本目のバーの、いまの乱数値（0..1）。
+ * tn の整数が変わるたびに別の乱数へ、その間はなめらかに繋ぐ。
+ * 一定の周期で揺れる sin と違い、伸びる長さが毎回変わって見える。
+ */
+function barRandom(i, tn) {
+  const k = Math.floor(tn), f = tn - k;
+  const sm = f * f * (3 - 2 * f);
+  return gaugeNoise(i * 17.3 + k * 1.7) * (1 - sm) + gaugeNoise(i * 17.3 + (k + 1) * 1.7) * sm;
+}
+
 /** i 本目のバーの個性（毎回同じ値になるので、描き直しても暴れない） */
 function newGaugeBar(i) {
   return {
     v: 0,                                          // いまの高さ 0..1
-    gain: 0.40 + gaugeNoise(i * 3.9) * 1.15,       // 伸びやすさの個体差（大きいほど高く伸びる）
-    speed: 0.8 + gaugeNoise(i * 1.3) * 3.0,        // 揺れの速さもばらばら
+    gain: 0.55 + gaugeNoise(i * 3.9) * 1.15,       // 伸びやすさの個体差（大きいほど高く伸びる）
+    speed: 1.6 + gaugeNoise(i * 1.3) * 5.2,        // 揺れの速さもばらばら（速め）
     phase: gaugeNoise(i * 2.7) * Math.PI * 2,      // 揺れの位相
-    // 揺れ幅の下限。大きい＝あまり縮まない（動く長さが短い）、
-    // 小さい＝大きく伸び縮みする。本ごとに動く量そのものを変える。
-    lo: 0.10 + gaugeNoise(i * 8.7) * 0.55,
-    drift: 0.07 + gaugeNoise(i * 4.4) * 0.22,      // ゆっくり形が変わる（周期的に見せない）
+    // 揺れ幅の下限。小さいほど大きく伸び縮みする（本ごとに動く量そのものを変える）
+    lo: 0.04 + gaugeNoise(i * 8.7) * 0.34,
+    // 乱数の切り替わる間隔（秒）。短いほど機敏にパタパタ動く。
+    step: 0.085 + gaugeNoise(i * 4.4) * 0.115,
   };
 }
 
@@ -1884,8 +1962,8 @@ function waveLoop() {
   } else {
     target = 0.14 + Math.sin(wavePhase * 1.4) * 0.05; // 処理中はゆるやかに揺れる
   }
-  // 上がるのは即座に、下がるのは少しだけ滑らかに（声にそのまま追従させる）
-  const k = target > waveLevel ? 0.7 : 0.25;
+  // 上がるのは即座に、下がるのも速めに（声にきびきび追従させる）
+  const k = target > waveLevel ? 0.9 : 0.45;
   waveLevel += (target - waveLevel) * k;
   drawWaveFrame();
 }
@@ -1981,16 +2059,15 @@ function drawWaveFrame() {
     const t = count > 1 ? i / (count - 1) : 0.5;
     // 中央ほど大きく振れる（両端は控えめ）。山はゆるめにして、隣り合う本の
     // 差が「きれいな弧」に見えないようにする。
-    const env = 0.5 + 0.5 * Math.pow(Math.sin(Math.PI * t), 0.5);
-    // 速さの違う3つの揺れを重ね、周期的に見えないようにする（長さがばらばらに）
+    const env = 0.55 + 0.45 * Math.pow(Math.sin(Math.PI * t), 0.5);
+    // 本ごとに違う間隔で切り替わる乱数（なめらかに繋ぐ）。これが主役で、
+    // sin の揺れを少し混ぜる。同じ音量でも本ごとに伸びる長さが変わる。
+    const rnd = barRandom(i, now / b.step);
     const s1 = Math.sin(now * b.speed + b.phase);
-    const s2 = Math.sin(now * b.speed * 0.43 + b.phase * 1.7);
-    const s3 = Math.sin(now * b.drift + b.phase * 0.6);   // ゆっくり形を変える
-    // 揺れ幅は本ごとに違う（lo が大きい本はあまり動かず、小さい本は大きく動く）
-    const wobble = b.lo + (1 - b.lo) * (0.5 + 0.5 * (0.55 * s1 + 0.3 * s2 + 0.15 * s3));
+    const wobble = b.lo + (1 - b.lo) * (0.72 * rnd + 0.28 * (0.5 + 0.5 * s1));
     const target = Math.min(1, waveLevel * b.gain * env * wobble);
-    // 伸びるのは即座に、戻るのは少しだけ滑らかに（声にそのまま追従させる）
-    b.v += (target - b.v) * (target > b.v ? 0.9 : 0.35);
+    // 伸びるのは即座に、戻るのも速めに（声にきびきび追従させる）
+    b.v += (target - b.v) * (target > b.v ? 1 : 0.5);
 
     b.w = barW;                                    // 太さも揃える
     b.h = Math.max(b.w, minH + (maxH - minH) * b.v);
@@ -3673,13 +3750,15 @@ const isMobileDevice = IS_TOUCH_DEVICE;
 function applyLiveUI() {
   if (!liveHint) return;
   if (NATIVE) {
-    // アプリ版はマイクを録音サービスが握る。Android では同じマイクを
-    // 音声認識と同時には使えず、併用すると録音が失敗しうるため、
-    // 「録音を優先」して字幕は出さない（停止後に音声をAIへ送れば文字起こしできる）。
-    liveEnabled.checked = false;
-    liveEnabled.disabled = true;
-    liveHint.innerHTML = 'アプリ版は<strong>録音を優先</strong>します（マイクは録音サービスが使用するため、リアルタイム字幕とは同時に使えません）。'
-      + '画面を消しても録音は止まらず、停止後に<strong>「音声をAIに送る（Gemini）」</strong>で高精度な文字起こし＋議事録を作れます。';
+    // アプリ版は Android の制約で、同じマイクを録音と音声認識で二重に開けない。
+    // そこで録音サービスが読んでいる音声をそのまま受け取り、端末内の Whisper で
+    // 文字にする。マイクは1つしか開かないので、録音は止まらない。
+    liveEnabled.disabled = false;
+    liveHint.innerHTML = liveEnabled.checked
+      ? '<strong>ON = 録音しながら文字起こし。</strong>録音中の音声を<strong>端末内で</strong>文字にします（外部送信なし・オフライン可）。'
+        + '数秒ごとにまとめて表示され、初回だけモデル（約40MB）を読み込みます。端末が熱くなる・電池を使う点はご了承ください。'
+        + '<br>※画面を消している間は表示が止まることがありますが、<strong>録音は最後まで続きます</strong>（停止後にAIが全体を文字起こしします）。'
+      : '<strong>OFF = 録音のみ。</strong>録音中は文字を出さず、<strong>音声の保存を最優先</strong>します。停止後に<strong>「AIで議事録を作成」</strong>で高精度な文字起こし＋議事録を作成（推奨）。';
     return;
   }
   if (!getSR()) {
