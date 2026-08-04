@@ -41,6 +41,10 @@ const downloadAudio  = $('downloadAudio');
 const downloadWav    = $('downloadWav');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
+// 録音中のリアルタイム表示 / 赤い外枠
+const liveNowPanel   = $('liveNowPanel');
+const liveNowText    = $('liveNowText');
+const recFrame       = $('recFrame');
 
 const LANGUAGE       = 'japanese';   // 日本語固定
 const engineSelect   = $('engineSelect');
@@ -134,7 +138,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.0';
+const APP_VERSION = 'Ver.7.1';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -232,6 +236,8 @@ let recognition = null;
 let sttBase = '';       // 録音開始時点の既存テキスト
 let sttSegs = [];       // 確定済みセグメント（過去の認識インスタンス分）
 let sttCurFinal = '';   // 現インスタンスの確定分
+let lastSttTs = 0;      // 直近に認識結果を受け取った時刻（見張り用）
+let lastSttKick = 0;    // 直近に認識を作り直した時刻
 
 /* =========================================================
  * 画面切り替え（ハンバーガー → 左ドロワー）
@@ -371,11 +377,43 @@ function updateHomeUI() {
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   // マイク選択・編集バー: 録音中、または待機（結果なし）のときに表示
   if (homeActions) homeActions.hidden = !(recording || (!homeProcessing && !hasText && !hasAudio));
-  transcriptPanel.hidden = !(recording || hasText || hasAudio);
-  transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
+  // 録音中は読み取り専用のリアルタイム表示、停止後は編集できるテキストエリアに切り替える
+  if (liveNowPanel) liveNowPanel.hidden = !recording;
+  transcriptPanel.hidden = recording || !(hasText || hasAudio);
+  transcriptPanel.classList.toggle('fade-old', homeProcessing); // 文字起こし中は上側を薄く
+  if (recording) renderLiveNow();
+  updateRecFrame();
   updateFabState();
 
   if (showWave) startWave(); else stopWave();
+}
+
+/** 録音中だけ画面の外枠に赤い枠＋内側へ広がる波を表示する */
+function updateRecFrame() {
+  document.body.classList.toggle('is-recording', recording);
+  if (recFrame) recFrame.hidden = !recording;
+}
+
+/**
+ * 録音中のリアルタイム文字起こし表示を更新する。
+ * 直近の1行を濃く、それ以前を薄く表示し、常に最新行までスクロールする。
+ * 録音モード（ライブ字幕OFF）のときは、文字が出ない理由をそのまま案内する。
+ */
+function renderLiveNow() {
+  if (!liveNowText) return;
+  const raw = liveTranscript.value.trim();
+  if (!raw) {
+    liveNowText.innerHTML = (liveMode === 'webspeech')
+      ? '<span class="live-wait">音声を認識しています…　話し始めるとここに文字が表示されます。</span>'
+      : '<span class="live-wait">録音モードのため、録音中の文字起こしは行いません。停止後に「AIで議事録を作成」で文字起こし＋議事録を作成します（設定でライブ字幕モードに変更できます）。</span>';
+    return;
+  }
+  const lines = raw.split('\n').filter((l) => l.trim());
+  const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  liveNowText.innerHTML = lines
+    .map((l, i) => `<div class="live-line${i === lines.length - 1 ? ' now' : ''}">${esc(l)}</div>`)
+    .join('');
+  liveNowText.scrollTop = liveNowText.scrollHeight;
 }
 
 /** 録音ボタンの段階変化: 録音 → 文字起こし中 → 議事録作成 → メール */
@@ -1123,6 +1161,7 @@ async function stopRecording() {
   recording = false;
   recHint.hidden = true;
   timerEl.hidden = true;
+  updateRecFrame();   // 赤い外枠は停止と同時に消す
 
   clearInterval(timerInterval);
   clearInterval(liveTimer); liveTimer = null;
@@ -1238,7 +1277,34 @@ function startWebSpeech() {
   sttBase = liveTranscript.value.trim();
   sttSegs = [];
   sttCurFinal = '';
+  lastSttTs = Date.now();
+  lastSttKick = Date.now();
   return beginRecognition();
+}
+
+/**
+ * 認識が無反応のまま止まっている（onend も来ない）ときに作り直す。
+ * 録音そのものはそのままなので、音声の保存には影響しない。
+ */
+function kickRecognition() {
+  if (!recording || liveMode !== 'webspeech') return;
+  lastSttKick = lastSttTs = Date.now();
+  if (recognition) {
+    try { recognition.onend = null; recognition.onresult = null; recognition.onerror = null; } catch (_) {}
+    try { recognition.stop(); } catch (_) {}
+    try { recognition.abort(); } catch (_) {}
+    recognition = null;
+    commitSttSegment();
+  }
+  beginRecognition();
+}
+
+/** 一定時間なにも認識結果が来なければ認識を作り直す（リアルタイム表示が止まるのを防ぐ） */
+function watchRecognition() {
+  if (!recording || liveMode !== 'webspeech') return;
+  const now = Date.now();
+  if (now - lastSttTs < 9000 || now - lastSttKick < 9000) return;
+  kickRecognition();
 }
 
 /** 確定セグメント＋現在の認識結果を結合して表示用テキストを作る */
@@ -1266,6 +1332,8 @@ function onSpeechResult(e) {
   sttCurFinal = finalText;
   liveTranscript.value = composeSpeech(interim);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
+  if (recording) renderLiveNow();   // 録音中のリアルタイム表示へ反映
+  lastSttTs = Date.now();
   sttActivity = 0.9; // 発話に反応して波を動かす
 }
 
@@ -1606,6 +1674,7 @@ function appendTranscript(text) {
   const cur = liveTranscript.value.trimEnd();
   liveTranscript.value = formatTranscript(cur ? cur + ' ' + text : text);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
+  if (recording) renderLiveNow();   // 録音中のリアルタイム表示へ反映
 }
 clearTranscript.addEventListener('click', () => {
   liveTranscript.value = '';
@@ -1648,12 +1717,13 @@ function updateTimer() {
     notifLastSec = elapsed;
     showRecordingNotification(`${m}:${s}`, recordStalled);
   }
+  watchRecognition(); // リアルタイム文字起こしが止まっていないか見張る
 }
 
 /* =========================================================
  * 上部の録音ゲージ（音量に連動する縦バー）
- *   点（バー）の位置は動かさない。周囲の音の大きさに応じて、その場で
- *   上下に伸び縮みする。静かなときは全部が丸い点に戻る。
+ *   等間隔・同じ太さの白いバーを並べる。位置は動かさず、周囲の音の
+ *   大きさに応じてその場で上下に伸び縮みする。静かなときは全部が丸い点に戻る。
  *   1本ごとに感度と揺れの速さを変えてあるので、同じ音でも横一列には
  *   ならず、生きた動きに見える。
  * =======================================================*/
@@ -1683,8 +1753,6 @@ function newGaugeBar(i) {
     gain: 0.45 + gaugeNoise(i * 3.9) * 0.95,       // 高さの個体差（大きめ＝ばらばらに伸びる）
     speed: 0.8 + gaugeNoise(i * 1.3) * 3.0,        // 揺れの速さもばらばら
     phase: gaugeNoise(i * 2.7) * Math.PI * 2,      // 揺れの位相
-    jitter: (gaugeNoise(i * 5.1) - 0.5) * 0.44,    // 位置のずれ（間隔を不揃いにする）
-    wide: 0.85 + gaugeNoise(i * 7.3) * 0.35,       // 太さの個体差
   };
 }
 
@@ -1857,15 +1925,14 @@ function drawWaveFrame() {
   const w = wave.width, h = wave.height, mid = h * 0.6;
   ctx.clearRect(0, 0, w, h);
 
-  // 本数は少なめ・間隔は広めにして、すっきり見せる。
-  const count = Math.max(10, Math.min(20, Math.round(w / 44)));
-  const pitch = w / count;
+  // 等間隔・同じ太さで並べる（見た目は白一色のシンプルなゲージ）。
+  const count = Math.max(13, Math.min(25, Math.round(w / 40)));
+  const pitch = w / (count + 1);                   // 左右に同じ余白を残して等間隔に
   // バーの太さ（無音時の「点」の大きさでもある）。高さに対して太くなりすぎ
   // ないよう抑える（横長の画面でバーが潰れて高さの差が出なくなるのを防ぐ）。
-  const barW = Math.max(4, Math.min(Math.round(pitch * 0.3), Math.round(h * 0.1)));
+  const barW = Math.max(4, Math.min(Math.round(pitch * 0.32), Math.round(h * 0.1)));
   const maxH = h * 0.6;                            // いちばん大きい声のときの高さ
   const minH = barW;                               // 無音は「点」になる
-  const left = (w - (count - 1) * pitch - barW) / 2; // 全体を中央に寄せる
 
   if (gaugeBars.length !== count) {
     gaugeBars = [];
@@ -1874,18 +1941,11 @@ function drawWaveFrame() {
 
   const now = performance.now() / 1000;
 
-  // 左が濃い青、右へいくほど明るい水色
-  const grad = ctx.createLinearGradient(0, 0, w, 0);
-  grad.addColorStop(0.00, '#2f4fc8');
-  grad.addColorStop(0.35, '#3b6fe0');
-  grad.addColorStop(0.62, '#4f9bf2');
-  grad.addColorStop(1.00, '#7fd2fb');
-  ctx.fillStyle = grad;
+  ctx.fillStyle = '#ffffff';
 
-  // 端の薄い2本ずつだけ透明度を変え、それ以外は1本のパスにまとめて一度に塗る。
+  // 1本のパスにまとめて一度に塗る。
   // （バーごとに fill + shadowBlur すると描画がとても重く、端末によっては
   //   WebView が詰まってネイティブからの音量を受け取れなくなる）
-  const fade = 1;
   ctx.beginPath();
   for (let i = 0; i < count; i++) {
     const b = gaugeBars[i];
@@ -1900,23 +1960,12 @@ function drawWaveFrame() {
     // 伸びるのは即座に、戻るのは少しだけ滑らかに（声にそのまま追従させる）
     b.v += (target - b.v) * (target > b.v ? 0.9 : 0.35);
 
-    b.w = barW * b.wide;
+    b.w = barW;                                    // 太さも揃える
     b.h = Math.max(b.w, minH + (maxH - minH) * b.v);
-    b.x = left + i * pitch + b.jitter * pitch; // 間隔を不揃いにする
-    if (i < fade || i >= count - fade) continue; // 端は後から薄く描く
+    b.x = (i + 1) * pitch - b.w / 2;               // 位置は等間隔（ずらさない）
     rrectPath(ctx, b.x, mid - b.h / 2, b.w, b.h, b.w / 2);
   }
   ctx.fill();
-
-  // 両端はうっすらさせて背景に溶け込ませる
-  for (let i = 0; i < count; i++) {
-    if (i >= fade && i < count - fade) continue;
-    const b = gaugeBars[i];
-    ctx.globalAlpha = 0.45; // 端の1本だけ薄くして、両端を切り落として見せない
-    rrect(ctx, b.x, mid - b.h / 2, b.w, b.h, b.w / 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
 }
 window.addEventListener('resize', () => { if (waveActive) resizeWave(); });
 
@@ -2680,8 +2729,11 @@ async function openMinutes(item) {
   fillMinutesUI({ summary: item.summary || [], decisions: item.decisions || [], todos: item.todos || [] });
   liveTranscript.value = item.transcript || '';
   // AIが作った議事録＋メール文面も復元する（自動生成分を含む）
+  // 保存してあるのは生成された全文なので、議事録／メール件名／本文に分けて戻す。
   if (aiResult) {
-    aiResult.value = item.aiText || '';
+    mailAuto = { subject: '', body: '' };
+    if (item.aiText) applyAiOutput(item.aiText);
+    else aiResult.value = '';
     if (aiResultWrap) aiResultWrap.hidden = !item.aiText;
   }
 
@@ -3280,6 +3332,131 @@ function saveAiTextToHistory(text) {
  * @param {{auto?: boolean}} [opts] auto=true なら録音停止直後の自動実行
  * @returns {Promise<boolean>} 生成できたら true
  */
+/* ===== 生成中の進捗表示（進捗率＋完了までの目安時間） ===== */
+const genProgress      = $('genProgress');
+const genProgressBar   = $('genProgressBar');
+const genProgressPct   = $('genProgressPct');
+const genProgressLabel = $('genProgressLabel');
+const genProgressEta   = $('genProgressEta');
+let genTimer = null, genStart = 0, genEst = 0, genStage = '';
+
+/** 録音の長さから完了までの目安（秒）を見積もる */
+function estimateGenSeconds() {
+  const d = recordedDurationSec || 0;
+  return Math.min(600, Math.max(15, 15 + d * 0.12));
+}
+
+/** 進捗表示を出して、目安時間のカウントダウンを始める */
+function startGenProgress() {
+  if (!genProgress) return;
+  genStart = Date.now();
+  genEst = estimateGenSeconds();
+  genStage = 'AIが議事録を作成中…';
+  genProgress.hidden = false;
+  clearInterval(genTimer);
+  tickGenProgress();
+  genTimer = setInterval(tickGenProgress, 250);
+}
+
+/** 生成の段階（音声を準備中／アップロード中／作成中）を表示に反映 */
+function setGenStage(text) {
+  genStage = (text || '').replace(/^録音が終わりました。/, '') || genStage;
+  tickGenProgress();
+}
+
+function tickGenProgress() {
+  if (!genProgress || genProgress.hidden) return;
+  const el = (Date.now() - genStart) / 1000;
+  // 見積もりを超えても止まって見えないよう、95%へゆっくり漸近させる
+  let p = el < genEst ? (el / genEst) * 0.95 : 0.95 + 0.04 * (1 - Math.exp(-(el - genEst) / 60));
+  p = Math.min(0.99, p);
+  const pct = Math.round(p * 100);
+  genProgressBar.style.width = pct + '%';
+  genProgressPct.textContent = pct + '%';
+  genProgressLabel.textContent = genStage;
+  const remain = Math.ceil(genEst - el);
+  genProgressEta.textContent = remain > 0 ? `完了まで約 ${formatDurationJp(remain)}` : 'まもなく完了します…';
+}
+
+/** 生成の終了。成功なら100%を見せてから閉じる */
+function endGenProgress(ok) {
+  clearInterval(genTimer); genTimer = null;
+  if (!genProgress) return;
+  if (!ok) { genProgress.hidden = true; return; }
+  genProgressBar.style.width = '100%';
+  genProgressPct.textContent = '100%';
+  genProgressLabel.textContent = '議事録の作成が完了しました';
+  genProgressEta.textContent = '完了';
+  setTimeout(() => { genProgress.hidden = true; }, 1200);
+}
+
+/* ===== AIの出力を「議事録」「メール件名」「メール本文」に切り分ける ===== */
+/** 「【1. 議事録】」などの見出し行を落とす */
+function stripMinutesHeader(t) {
+  return String(t || '')
+    .replace(/^[ \t>*#]*[【\[(（]?[ \t]*(?:[1１][ \t]*[.．、]?[ \t]*)?議事録[ \t]*[】\])）]?[ \t]*[:：]?[ \t]*$/m, '')
+    .trim();
+}
+
+/**
+ * Gemini の出力（議事録＋メール文面）を3つに分ける。
+ * 「メール文面」または「件名：」の行から後ろをメールとして扱い、
+ * それより前を議事録とする。見つからないときは全文を議事録にする。
+ */
+function splitAiOutput(text) {
+  const src = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!src) return { minutes: '', subject: '', body: '' };
+  const lines = src.split('\n');
+  let mailStart = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].replace(/^[\s>*#・\-–—]+/, '').trim();
+    if (/^[【\[(（]?[ \t]*(?:[2２][ \t]*[.．、]?[ \t]*)?メール(文面|文|案|ドラフト)/.test(l)) { mailStart = i; break; }
+    if (/^[【\[(（]?[ \t]*件名[ \t]*[】\])）]?[ \t]*[:：]/.test(l)) { mailStart = i; break; }
+  }
+  if (mailStart < 0) return { minutes: stripMinutesHeader(src), subject: '', body: '' };
+
+  const minutes = stripMinutesHeader(lines.slice(0, mailStart).join('\n').trim());
+  const mailPart = lines.slice(mailStart).join('\n');
+
+  let subject = '';
+  const sm = mailPart.match(/^[ \t>*#]*[【\[(（]?[ \t]*件名[ \t]*[】\])）]?[ \t]*[:：][ \t]*(.*)$/m);
+  if (sm) subject = (sm[1] || '').trim();
+
+  let body = '';
+  const bm = mailPart.match(/^[ \t>*#]*[【\[(（]?[ \t]*本文[ \t]*[】\])）]?[ \t]*[:：]?[ \t]*(.*)$/m);
+  if (bm) {
+    body = ((bm[1] || '') + '\n' + mailPart.slice(bm.index + bm[0].length)).trim();
+  } else if (sm) {
+    body = mailPart.slice(sm.index + sm[0].length).trim();
+  } else {
+    body = mailPart.replace(/^[^\n]*\n?/, '').trim(); // 見出し行だけ落とす
+  }
+  return { minutes, subject, body };
+}
+
+// 自動で入れた件名・本文（利用者が手で直した内容を上書きしないための控え）
+let mailAuto = { subject: '', body: '' };
+
+/**
+ * AIの生成結果を各枠へ出力する。
+ * 議事録枠には議事録のみ、メール枠には件名と貼り付け用の本文をそれぞれ入れる。
+ */
+function applyAiOutput(text) {
+  const parts = splitAiOutput(text);
+  if (aiResult) aiResult.value = parts.minutes || text;
+  if (mailSubject && parts.subject
+      && (!mailSubject.value.trim() || mailSubject.value === mailAuto.subject)) {
+    mailSubject.value = parts.subject;
+    mailAuto.subject = parts.subject;
+  }
+  if (mailBody && parts.body
+      && (!mailBody.value.trim() || mailBody.value === mailAuto.body)) {
+    mailBody.value = parts.body;
+    mailAuto.body = parts.body;
+  }
+  return parts;
+}
+
 let aiAutoRunning = false;
 async function runAiAutoMinutes(opts) {
   const auto = !!(opts && opts.auto);
@@ -3295,13 +3472,13 @@ async function runAiAutoMinutes(opts) {
   aiAutoRunning = true;
   const orig = aiAutoBtn ? aiAutoBtn.innerHTML : '';
   if (aiAutoBtn) { aiAutoBtn.disabled = true; aiAutoBtn.textContent = 'AIが作成中…'; }
+  startGenProgress(); // 進捗率と完了までの目安時間を表示
   try {
     const prefix = auto ? '録音が終わりました。' : '';
-    const text = await geminiGenerateMinutes((s) => setAiAutoStatus('', prefix + s));
-    aiResult.value = text;
+    const text = await geminiGenerateMinutes((s) => { setGenStage(s); setAiAutoStatus('', prefix + s); });
+    const parts = applyAiOutput(text); // 議事録枠は議事録のみ、メール枠は件名・本文へ
     aiResultWrap.hidden = false;
     ensureAutoTitle();
-    if (mailBody && !mailBody.value.trim()) mailBody.value = text;
     saveAiTextToHistory(text); // 再読み込み・履歴からの再表示でも残るように保存
     const u = loadUsage();
     let note = lastGeminiFallbackModel
@@ -3314,11 +3491,16 @@ async function runAiAutoMinutes(opts) {
         + `録音時間は ${formatDurationJp(audioShortfall.wallSec)} なので、会議の一部しか含まれていません。`
         + `上の「録音した音声」の注意書きをご確認ください。`;
     }
-    setAiAutoStatus('ok', `✓ 議事録＋メール文面を生成しました（本日 ${u.requests}/${GEMINI_FREE_RPD}回・推定）。下で編集・コピー、メール本文にも反映済み。${note}`);
+    endGenProgress(true);
+    const mailNote = (parts.subject || parts.body)
+      ? '下の「メールを作成」に<strong>件名と本文</strong>を入れました。'
+      : 'メール文面が読み取れなかったため、全文を議事録欄に入れました。';
+    setAiAutoStatus('ok', `✓ 議事録を作成しました（本日 ${u.requests}/${GEMINI_FREE_RPD}回・推定）。${mailNote}${note}`);
     // 自動実行では結果まで自動で表示されないと気づけないので、生成結果へスクロールする
     if (auto) scrollToEl('aiResultWrap');
     return true;
   } catch (err) {
+    endGenProgress(false);
     const msg = (err && err.noKey) ? 'APIキーが未設定です。設定→AI連携で入力してください。'
               : (err && err.message ? err.message : String(err));
     // 自動実行の失敗は「手動でやり直せる」ことまで伝える

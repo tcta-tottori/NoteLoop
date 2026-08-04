@@ -73,6 +73,15 @@
       <!-- 経過時間より実際の録音が短くなったときの注意（録音中に気づけるように） -->
       <p class="captured-hint" id="capturedHint" role="status" aria-live="polite" hidden></p>
 
+      <!-- 録音中のリアルタイム文字起こし（読み取り専用・自動スクロール） -->
+      <div class="live-now" id="liveNowPanel" hidden>
+        <div class="live-now-head">
+          <span class="live-now-dot" aria-hidden="true"></span>
+          <span>リアルタイム文字起こし</span>
+        </div>
+        <div class="live-now-body" id="liveNowText" role="status" aria-live="polite"></div>
+      </div>
+
       <!-- モデル読み込み・処理状況（必要時のみ） -->
       <div id="statusBar" class="status-bar home-status" role="status" aria-live="polite" hidden>
         <span id="modelStatus" class="status-chip">モデル未読み込み</span>
@@ -134,13 +143,22 @@
           <p class="route-title">録音音声から議事録を作成 <span class="route-badge">Gemini・おすすめ</span></p>
           <p class="field-hint" id="aiAutoModeHint"></p>
           <button class="primary-btn ai-auto-btn" id="aiAutoBtn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/><path d="M19 3v4M21 5h-4"/></svg> AIで議事録を作成（自動）</button>
+          <!-- 生成中の進捗率と完了までの目安時間 -->
+          <div class="gen-progress" id="genProgress" hidden>
+            <div class="gen-progress-head">
+              <span class="gen-progress-label" id="genProgressLabel">AIが議事録を作成中…</span>
+              <span class="gen-progress-pct" id="genProgressPct">0%</span>
+            </div>
+            <div class="progress"><div class="progress-bar" id="genProgressBar"></div></div>
+            <p class="gen-progress-eta" id="genProgressEta">完了まで約 —</p>
+          </div>
           <div class="claude-status" id="aiAutoStatus" hidden></div>
           <div class="ai-result-wrap" id="aiResultWrap" hidden>
-            <label class="mini-label" for="aiResult"><span class="tag tag-sum">AI議事録＋メール（編集可）</span></label>
-            <textarea id="aiResult" class="minutes-area" rows="12" placeholder="生成された議事録とメール文面がここに表示されます。"></textarea>
+            <label class="mini-label" for="aiResult"><span class="tag tag-sum">AI議事録（編集可）</span></label>
+            <textarea id="aiResult" class="minutes-area" rows="12" placeholder="生成された議事録がここに表示されます。メールの件名・本文は下の「メールを作成」に入ります。"></textarea>
             <div class="claude-actions" style="margin-top:8px;">
               <button class="secondary-btn" id="aiResultCopy" type="button">コピー</button>
-              <button class="secondary-btn" id="aiResultToMail" type="button">メール本文に使う</button>
+              <button class="secondary-btn" id="aiResultToMail" type="button">議事録を本文に使う</button>
             </div>
           </div>
           <details class="claude-preview" style="margin-top:12px;">
@@ -217,12 +235,12 @@
           <input id="mailTo" type="text" placeholder="例: taro@example.com, hanako@example.com" />
         </div>
         <div class="field settings-field">
-          <label for="mailSubject">件名</label>
-          <input id="mailSubject" type="text" placeholder="件名" />
+          <label for="mailSubject">件名（AIが生成した件名）</label>
+          <input id="mailSubject" type="text" placeholder="AIで議事録を作成すると、ここに件名が入ります。" />
         </div>
         <div class="field settings-field">
-          <label for="mailBody">本文（アプリの議事録から作成 / AIの議事録を貼り付け）</label>
-          <textarea id="mailBody" class="minutes-area" rows="10" placeholder="ここに本文を入力。下の「アプリの議事録から本文を作成」で自動生成、またはAIで作った議事録を貼り付けてください。"></textarea>
+          <label for="mailBody">本文（メールに貼り付ける内容）</label>
+          <textarea id="mailBody" class="minutes-area" rows="12" placeholder="AIで議事録を作成すると、ここに貼り付け用の本文が入ります。手入力や貼り付けもできます。"></textarea>
           <button id="mailFromMinutes" class="chip-btn" type="button" style="margin-top:8px;">アプリの議事録から本文を作成</button>
         </div>
         <span class="export-heading">送信・書き出し</span>
@@ -497,7 +515,7 @@
       <div class="panel" id="man-screens">
         <h3 class="settings-group-title">画面の説明</h3>
         <ul class="man-def">
-          <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と波形、ライブ文字起こしを表示。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
+          <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と白いゲージ、リアルタイム文字起こし（ライブ字幕モード時）を表示し、画面のふちが赤く光ります。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
           <li><b>履歴</b><span>保存した議事録をカードで一覧。カードをタップすると<b>この画面のまま</b>、音声の再生・保存、AI議事録、書き出し、メール作成まで確認・編集できます（「一覧へ戻る」で一覧に戻ります）。右下のアイコンで削除・音声保存。最大10件を保存します。</span></li>
           <li><b>設定</b><span>文字起こしエンジンの切替、<b>実行バックエンド（WebGPU / WASM）</b>、高精度モデル（tiny〜large-v3-turbo）、録音中の画面常時オン、Claude の指示テンプレートを設定できます。</span></li>
           <li><b>メニュー</b><span>左上の三本線（PC では常時左側）から各画面へ移動。上部に現在のバージョンを表示します。</span></li>
@@ -591,6 +609,14 @@
     </section>
 
   </main>
+
+  <!-- 録音中: 画面の外枠を赤く囲い、枠から内側へ波が広がるアニメーション -->
+  <div class="rec-frame" id="recFrame" aria-hidden="true" hidden>
+    <span class="rec-frame-edge"></span>
+    <span class="rec-frame-wave"></span>
+    <span class="rec-frame-wave"></span>
+    <span class="rec-frame-wave"></span>
+  </div>
 
   <!-- 会議情報・マイク設定ポップアップ（1画面に集約） -->
   <div id="meetingModal" class="modal-overlay" hidden>
