@@ -142,7 +142,7 @@ const BASE_BAR_COLOR = '#17181b';
 const REC_BAR_COLOR  = '#e11d28';
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.2';
+const APP_VERSION = 'Ver.7.3';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1772,9 +1772,13 @@ function gaugeNoise(seed) {
 function newGaugeBar(i) {
   return {
     v: 0,                                          // いまの高さ 0..1
-    gain: 0.45 + gaugeNoise(i * 3.9) * 0.95,       // 高さの個体差（大きめ＝ばらばらに伸びる）
+    gain: 0.40 + gaugeNoise(i * 3.9) * 1.15,       // 伸びやすさの個体差（大きいほど高く伸びる）
     speed: 0.8 + gaugeNoise(i * 1.3) * 3.0,        // 揺れの速さもばらばら
     phase: gaugeNoise(i * 2.7) * Math.PI * 2,      // 揺れの位相
+    // 揺れ幅の下限。大きい＝あまり縮まない（動く長さが短い）、
+    // 小さい＝大きく伸び縮みする。本ごとに動く量そのものを変える。
+    lo: 0.10 + gaugeNoise(i * 8.7) * 0.55,
+    drift: 0.07 + gaugeNoise(i * 4.4) * 0.22,      // ゆっくり形が変わる（周期的に見せない）
   };
 }
 
@@ -1975,12 +1979,15 @@ function drawWaveFrame() {
   for (let i = 0; i < count; i++) {
     const b = gaugeBars[i];
     const t = count > 1 ? i / (count - 1) : 0.5;
-    // 中央ほど大きく振れる（両端は控えめ）
-    const env = 0.35 + 0.65 * Math.pow(Math.sin(Math.PI * t), 0.7);
-    // 速さの違う2つの揺れを重ね、周期的に見えないようにする（長さがばらばらに）
+    // 中央ほど大きく振れる（両端は控えめ）。山はゆるめにして、隣り合う本の
+    // 差が「きれいな弧」に見えないようにする。
+    const env = 0.5 + 0.5 * Math.pow(Math.sin(Math.PI * t), 0.5);
+    // 速さの違う3つの揺れを重ね、周期的に見えないようにする（長さがばらばらに）
     const s1 = Math.sin(now * b.speed + b.phase);
     const s2 = Math.sin(now * b.speed * 0.43 + b.phase * 1.7);
-    const wobble = 0.42 + 0.58 * (0.5 + 0.5 * (0.65 * s1 + 0.35 * s2));
+    const s3 = Math.sin(now * b.drift + b.phase * 0.6);   // ゆっくり形を変える
+    // 揺れ幅は本ごとに違う（lo が大きい本はあまり動かず、小さい本は大きく動く）
+    const wobble = b.lo + (1 - b.lo) * (0.5 + 0.5 * (0.55 * s1 + 0.3 * s2 + 0.15 * s3));
     const target = Math.min(1, waveLevel * b.gain * env * wobble);
     // 伸びるのは即座に、戻るのは少しだけ滑らかに（声にそのまま追従させる）
     b.v += (target - b.v) * (target > b.v ? 0.9 : 0.35);
