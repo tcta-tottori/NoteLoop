@@ -24,8 +24,14 @@
   --radius: 18px;
   --radius-sm: 12px;
   --nav-h: 66px;
+  /* 録音中に画面のふちへ出す赤枠の太さ・丸み。--rec-inset は、その枠に
+     隠れないよう画面の中身を内側へ寄せる量（録音中だけ 0 以外になる）。 */
+  --rec-frame-w: 10px;
+  --rec-frame-r: 34px;
+  --rec-inset: 0px;
   color-scheme: dark; /* 音声プレイヤー・入力欄など標準UIもダークにする */
 }
+body.is-recording { --rec-inset: 16px; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -532,29 +538,35 @@ body.is-recording .wave-timer { color: #fff; }
 .live-now-body .live-line.now { color: var(--text); font-weight: 700; }
 .live-now-body .live-wait { color: var(--faint); font-size: 13px; font-weight: 600; line-height: 1.7; }
 
-/* ---------- 録音中: 画面外枠の赤い枠（明るさを強弱させる） ---------- */
+/* ---------- 録音中: 画面外枠の赤い枠（点滅しない・角はスマホ画面のように丸く） ---------- */
 .rec-frame { position: fixed; inset: 0; z-index: 70; pointer-events: none; }
 .rec-frame-edge {
-  /* 角は丸めない。アプリ版はステータスバー・下部バーも赤くするので、
-     画面のいちばん外まで赤がつながって見える。 */
   position: absolute; inset: 0;
-  border: 10px solid rgba(225, 29, 40, .95);
-  box-shadow: 0 0 26px rgba(225, 29, 40, .6), inset 0 0 34px rgba(225, 29, 40, .3);
-  /* 録音ボタンの点滅と同じリズムで、枠の明るさを強弱させる */
-  animation: recEdgePulse 1.4s ease-in-out infinite;
+  border: var(--rec-frame-w) solid rgba(225, 29, 40, .96);
+  border-radius: var(--rec-frame-r);
+  /* 角の外側（丸みの外）も赤で埋めて、画面のふちまで途切れずに囲う。
+     アプリ版はステータスバー・下部バーも赤いので、そこまで赤がつながる。 */
+  box-shadow: 0 0 0 100vmax rgba(225, 29, 40, .96), inset 0 0 26px rgba(225, 29, 40, .22);
 }
-@keyframes recEdgePulse {
-  0%, 100% {
-    border-color: rgba(225, 29, 40, .95);
-    box-shadow: 0 0 26px rgba(225, 29, 40, .6), inset 0 0 34px rgba(225, 29, 40, .3);
-  }
-  50% {
-    border-color: rgba(225, 29, 40, .38);
-    box-shadow: 0 0 10px rgba(225, 29, 40, .2), inset 0 0 14px rgba(225, 29, 40, .1);
-  }
+
+/* 赤枠を出している間は、ロゴ・メニュー・ボタンが枠に隠れないよう内側へ寄せる */
+body.is-recording .app-header {
+  top: var(--rec-inset);
+  margin: var(--rec-inset) var(--rec-inset) 0;
+  border-radius: 16px 16px 0 0;
 }
-@media (prefers-reduced-motion: reduce) {
-  .rec-frame-edge { animation: none; }
+body.is-recording .header-glow { top: var(--rec-inset); left: var(--rec-inset); right: var(--rec-inset); }
+body.is-recording .wave-wrap { width: calc(100vw - var(--rec-inset) * 2); }
+body.is-recording .app-main { padding-left: calc(clamp(14px, 3vw, 22px) + var(--rec-inset) / 2); padding-right: calc(clamp(14px, 3vw, 22px) + var(--rec-inset) / 2); }
+body.is-recording .mic-dock {
+  bottom: calc(env(safe-area-inset-bottom) + 24px + var(--rec-inset));
+  padding-left: calc(16px + var(--rec-inset)); padding-right: calc(16px + var(--rec-inset));
+}
+body.is-recording .mic-tools-btn { right: calc(clamp(16px, 6vw, 40px) + var(--rec-inset)); }
+body.is-recording .rec-hint { bottom: calc(env(safe-area-inset-bottom) + 104px + var(--rec-inset)); }
+body.is-recording .drawer {
+  top: var(--rec-inset); bottom: var(--rec-inset); left: var(--rec-inset);
+  border-radius: 0 18px 18px 0;
 }
 
 /* ---------- 議事録の生成中（進捗率・完了目安時間） ---------- */
