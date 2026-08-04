@@ -91,13 +91,6 @@ const termModal = $('termModal'), termModalClose = $('termModalClose'), termModa
 const termWrong = $('termWrong'), termRight = $('termRight'), termApply = $('termApply'), termRegister = $('termRegister'), termApplyAll = $('termApplyAll');
 const termDictList = $('termDictList'), termFoundNote = $('termFoundNote');
 
-const claudeSend           = $('claudeSend');
-const claudeCopy           = $('claudeCopy');
-const claudeStatus         = $('claudeStatus');
-const claudeOpen           = $('claudeOpen');
-const claudePromptPreview  = $('claudePromptPreview');
-const claudeInstruction    = $('claudeInstruction');
-const claudeInstructionReset = $('claudeInstructionReset');
 const aiAudioSend          = $('aiAudioSend');
 const aiAudioCopy          = $('aiAudioCopy');
 const aiAudioStatus        = $('aiAudioStatus');
@@ -137,7 +130,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.4';
+const APP_VERSION = 'Ver.7.5';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -185,6 +178,7 @@ let audioShortfall = null;
 let capturedMs = 0;
 let recordRestarting = false;     // 復帰処理中（見張りの多重実行を防ぐ）
 let recordedDurationSec = 0;      // 保存された音声の実長（秒）
+let recStartedAt = 0;             // 録音を始めた時刻（epoch ms）。議事録に実時間を出すのに使う。
 let recordedBlob = null;
 let audioCtx = null;
 let sourceNode = null;
@@ -334,10 +328,11 @@ function refreshAudioPanel() { setAudioAvailable(!!recordedBlob); }
  *   ・状態はメモリのみ。ページ再読込では復元されず、録音待機画面に戻る。
  * =======================================================*/
 const audioFlowCard  = $('audioPanel');
+const aiTextCard     = $('aiTextCard');
 const minutesFlowCard= $('minutesFlowCard');
 const exportFlowCard = $('exportFlowCard');
 const mailFlowCard   = $('mailPanel');
-function flowCardList() { return [audioFlowCard, minutesFlowCard, exportFlowCard, mailFlowCard].filter(Boolean); }
+function flowCardList() { return [audioFlowCard, aiTextCard, minutesFlowCard, exportFlowCard, mailFlowCard].filter(Boolean); }
 
 /** すべてのフローカードを隠して初期状態へ戻す（新規録音・クリア・再読込時） */
 function resetFlowCards() {
@@ -404,8 +399,10 @@ function renderLiveNow() {
     liveNowText.innerHTML =
       liveMode === 'webspeech' ? '<span class="live-wait">音声を認識しています…　話し始めるとここに文字が表示されます。</span>'
     : liveMode === 'native'    ? (liveWhisperFailed
-        ? '<span class="live-wait">録音中の文字起こしを準備できませんでした（初回はモデルの読み込みにネット接続が必要です）。<strong>録音は続いています</strong>。停止後の「AIで議事録を作成」で全体を文字起こしできます。</span>'
-        : '<span class="live-wait">端末内で文字起こししています…　数秒ごとにまとめて表示されます（初回はモデルの読み込みに少し時間がかかります）。</span>')
+        ? '<span class="live-wait">録音中の文字起こしを準備できませんでした。<strong>録音は続いています</strong>。停止後の「AIで文字起こし」「AIで議事録を作成」で全体を処理できます。</span>'
+        : liveEngine === 'gemini'
+          ? `<span class="live-wait">AIが文字起こししています…　${LIVE_GEMINI_SEC}秒ごとにまとめて表示されます。</span>`
+          : '<span class="live-wait">端末内で文字起こししています…　数秒ごとにまとめて表示されます（初回はモデルの読み込みに少し時間がかかります）。</span>')
     :                            '<span class="live-wait">録音モードのため、録音中の文字起こしは行いません。停止後に「AIで議事録を作成」で文字起こし＋議事録を作成します（設定でライブ字幕モードに変更できます）。</span>';
     return;
   }
@@ -450,10 +447,13 @@ function handleWorkerMessage(e) {
   const msg = e.data || {};
   switch (msg.type) {
     case 'progress':
+      // 録音中のライブ用モデルの読み込みは画面に出さない（準備できたら勝手に始まる）
+      if (liveWhisperOn && !finalResolve) break;
       if (msg.data && typeof msg.data.progress === 'number') { lastDlProgress = performance.now(); setModelLoading(msg.data.progress); }
       break;
     case 'ready':
       if (msg.device) activeDevice = msg.device;
+      if (liveWhisperOn && !finalResolve) break;   // 同上（読み込み完了も出さない）
       setStatus('ready', 'モデル準備完了' + (msg.device === 'webgpu' ? '（WebGPU）' : ''));
       break;
     case 'fallback':
@@ -1091,12 +1091,13 @@ async function startRecording() {
     // （マイクは1つしか開かないので録音は止まらない）
     if (liveEnabled && liveEnabled.checked && await startNativeLiveTranscribe()) {
       liveMode = 'native';
-      setStatus('working', '録音中・文字起こし中（端末内）');
+      setStatus('working', liveEngine === 'gemini' ? '録音中・文字起こし中（AI）' : '録音中・文字起こし中（端末内）');
     } else {
       setStatus('working', '録音中（アプリが停止させません）');
     }
     updateHomeUI();
     startTime = Date.now();
+    recStartedAt = startTime;
     updateTimer();
     timerInterval = setInterval(updateTimer, 250);
     return;
@@ -1123,6 +1124,7 @@ async function startRecording() {
     setStatus('working', liveMode === 'webspeech' ? '認識中…（ライブ字幕）' : '録音中');
     updateHomeUI();
     startTime = Date.now();
+    recStartedAt = startTime;
     updateTimer();
     timerInterval = setInterval(updateTimer, 250);
     if (mediaRecorder) startRecordWatchdog(); // 画面オフ中に録音が止まったら録り直す
@@ -1167,6 +1169,7 @@ async function startRecording() {
   setStatus('working', '録音中');
   updateHomeUI();
   startTime = Date.now();
+  recStartedAt = startTime;
   updateTimer();
   timerInterval = setInterval(updateTimer, 250);
   if (mediaRecorder) startRecordWatchdog(); // 画面オフ中に録音が止まったら録り直す
@@ -1247,6 +1250,9 @@ async function stopRecording() {
   // 設定がONなら、そのまま Gemini に投げて議事録＋メール文面まで自動生成する。
   // 失敗しても録音・文字起こし・履歴は上で確定済みなので、ここでは待つだけでよい。
   if (willAutoAi) {
+    // 先に「文字起こしだけ」を作る（録音中の表示と読み比べられるように）。
+    setStatus('working', 'AIが文字起こし中…');
+    await runAiTranscribe({ auto: true });
     setStatus('working', 'AIが議事録を作成中…');
     const ok = await runAiAutoMinutes({ auto: true });
     setStatus(ok ? 'ready' : 'error', ok ? 'AI議事録の作成が完了しました' : 'AI議事録を作成できませんでした');
@@ -1684,13 +1690,19 @@ function drainPending() {
  *   端末内の Whisper（worker.js）で文字にする。マイクは1つしか開かないので
  *   録音が止まる心配がなく、外部送信も無い。
  * =======================================================*/
-const LIVE_MODEL = 'Xenova/whisper-tiny';   // ライブ用の軽いモデル（初回のみDL）
-const LIVE_CHUNK_SEC = 8;                   // これだけ溜まったら1回まわす
+const LIVE_MODEL = 'Xenova/whisper-base';   // 端末内で使うモデル（tiny より精度が高い）
+const LIVE_CHUNK_SEC = 8;                  // 端末内Whisperのまとめ単位
+const LIVE_GEMINI_SEC = 15;                // Gemini に送るまとめ単位（速さと精度の折り合い）
 let nativePcmSub = null;
-let liveWhisperOn = false;
-let liveWhisperFailed = false;  // モデル読み込み等に失敗したか（案内の切り替え用）
+let liveWhisperOn = false;      // ライブ文字起こし中か
+let liveWhisperFailed = false;  // 準備に失敗したか（案内の切り替え用）
+let liveEngine = 'whisper';     // 'gemini'（高精度・要ネット）か 'whisper'（端末内）
+let liveBusy = false;           // Gemini へ送っている最中か
 
-/** 録音サービスからの PCM 受け取りを開始する。使えなければ false。 */
+/**
+ * 録音サービスからの PCM 受け取りを開始する。使えなければ false。
+ * APIキーがあれば Gemini（速くて高精度）、無ければ端末内 Whisper を使う。
+ */
 async function startNativeLiveTranscribe() {
   const rec = nativeRecorder();
   if (!rec || typeof rec.startPcmUpdates !== 'function') return false; // 古い版のアプリ
@@ -1700,9 +1712,12 @@ async function startNativeLiveTranscribe() {
   } catch (_) { return false; }
   liveWhisperOn = true;
   liveWhisperFailed = false;
+  liveBusy = false;
   pendingChunks = [];
   workerBusy = false;
-  worker.postMessage({ type: 'load', model: LIVE_MODEL, device: 'wasm' });
+  liveEngine = loadGeminiKey() ? 'gemini' : 'whisper';
+  // 端末内で処理するときだけ、先にモデルを読み込んでおく（表示は出さない）
+  if (liveEngine === 'whisper') worker.postMessage({ type: 'load', model: LIVE_MODEL, device: 'wasm' });
   try { nativePcmSub = rec.addListener('pcm', onNativePcm); } catch (_) { nativePcmSub = null; }
   return true;
 }
@@ -1741,9 +1756,16 @@ function onNativePcm(ev) {
   maybeSendChunk();
 }
 
-/** 溜まった音声がまとまったら Whisper へ渡す（前の処理が終わるまでは待つ） */
+/** 溜まった音声がまとまったら文字起こしへ回す（前の処理が終わるまでは待つ） */
 function maybeSendChunk() {
-  if (!liveWhisperOn || workerBusy) return;
+  if (!liveWhisperOn) return;
+  if (liveEngine === 'gemini') {
+    if (liveBusy) return;
+    if (totalSamples(pendingChunks) < SAMPLE_RATE * LIVE_GEMINI_SEC) return;
+    sendLiveToGemini(drainPending());
+    return;
+  }
+  if (workerBusy) return;
   if (totalSamples(pendingChunks) < SAMPLE_RATE * LIVE_CHUNK_SEC) return;
   const audio = drainPending();
   workerBusy = true;
@@ -1751,6 +1773,41 @@ function maybeSendChunk() {
     { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: LIVE_MODEL, language: LANGUAGE, device: 'wasm' },
     [audio.buffer]
   );
+}
+
+/** Float32（16kHz モノラル）を WAV の Blob にする */
+function wavFromFloat32(f32) {
+  const i16 = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const v = Math.max(-1, Math.min(1, f32[i]));
+    i16[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+  }
+  return new Blob([wavHeader(i16.length, SAMPLE_RATE), i16], { type: 'audio/wav' });
+}
+
+/**
+ * 録音中のひとかたまりを Gemini で文字にする（速くて高精度）。
+ * 直前の文字起こしを手がかりとして渡し、切れ目が不自然にならないようにする。
+ */
+async function sendLiveToGemini(audio) {
+  liveBusy = true;
+  try {
+    const tail = liveTranscript.value.trim().slice(-160);
+    const prompt =
+      'この音声を日本語で文字起こししてください。会議の途中を切り出した音声です。\n'
+      + '・聞こえたことばだけを出力し、前置き・説明・記号・話者名は付けないでください。\n'
+      + '・聞き取れない部分は無理に補わず、飛ばしてください。\n'
+      + (tail ? `・直前までの文字起こし（重複して書かないでください）:「${tail}」\n` : '');
+    const text = await geminiAudioRequest(audio ? wavFromFloat32(audio) : null, prompt, { live: true });
+    if (text) appendTranscript(cleanupTranscript(text));
+  } catch (err) {
+    // ライブは失敗しても録音・停止後の文字起こしに影響しない。案内だけ切り替える。
+    liveWhisperFailed = true;
+    if (recording) renderLiveNow();
+  } finally {
+    liveBusy = false;
+    maybeSendChunk();   // 待っている分があれば続けて送る
+  }
 }
 /** 記号・句読点だけ（「！！！」等のハルシネーション）かどうか */
 function isJunkChunk(text) {
@@ -2080,8 +2137,8 @@ window.addEventListener('resize', () => { if (waveActive) resizeWave(); });
 
 /* =========================================================
  * 議事録の下書き欄（要点 / 決定事項 / ToDo）
- *   アプリ内のルールベース整形は廃止。議事録は Claude で生成し、
- *   この欄には手入力または Claude の出力を貼り付けて使う（メール・書き出しの入力元）。
+ *   アプリ内のルールベース整形は廃止。議事録は AI（Gemini）で生成し、
+ *   この欄には手入力または AI の出力を貼り付けて使う（メール・書き出しの入力元）。
  * =======================================================*/
 function toBullets(arr) { return arr.map((x) => '・' + x).join('\n'); }
 function fromBullets(str) { return (str || '').split('\n').map((l) => l.replace(/^[・\-*•]\s*/, '').trim()).filter(Boolean); }
@@ -2135,12 +2192,23 @@ function currentMinutes() {
   return {
     name: meetingName.value.trim() || autoTitleFromTranscript(liveTranscript.value) || '議事録',
     date: meetingDate.value || todayStr(),
+    time: recordingTimeText(),      // 録音した実時間（開始〜終了・長さ）
     participants: participants.slice(),
     summary: fromBullets(secSummary.value),
     decisions: fromBullets(secDecisions.value),
     todos: fromBullets(secTodos.value),
   };
 }
+/** 「14:23〜15:10（47分00秒）」の形で、録音した実時間を返す（無ければ空） */
+function recordingTimeText() {
+  const sec = Math.round(recordedDurationSec || 0);
+  if (!recStartedAt || !sec) return '';
+  const hm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const st = new Date(recStartedAt);
+  const en = new Date(recStartedAt + sec * 1000);
+  return `${hm(st)}〜${hm(en)}（${formatDurationJp(sec)}）`;
+}
+
 function participantLabel(p) { return p.dept ? (p.name ? `${p.dept} ${p.name}` : p.dept) : (p.name || ''); }
 function participantsText(list) { return (list || []).map(participantLabel).filter(Boolean).join('、'); }
 function todayStr() {
@@ -2153,6 +2221,7 @@ function buildPlainText(m) {
   const lines = [];
   lines.push(m.name);
   lines.push(`日付: ${formatDateJp(m.date)}`);
+  if (m.time) lines.push(`時間: ${m.time}`);
   if (m.participants && m.participants.length) lines.push(`参加者: ${participantsText(m.participants)}`);
   lines.push('', '■ 要点・見出し', m.summary.length ? toBullets(m.summary) : '（なし）');
   lines.push('', '■ 決定事項', m.decisions.length ? toBullets(m.decisions) : '（なし）');
@@ -2162,7 +2231,8 @@ function buildPlainText(m) {
 function buildMarkdown(m) {
   const sec = (t, arr) => `## ${t}\n\n` + (arr.length ? arr.map((x) => `- ${x}`).join('\n') : '（なし）') + '\n';
   const parts = (m.participants && m.participants.length) ? `**参加者:** ${participantsText(m.participants)}\n\n` : '';
-  return `# ${m.name}\n\n**日付:** ${formatDateJp(m.date)}\n\n${parts}` + sec('要点・見出し', m.summary) + '\n' + sec('決定事項', m.decisions) + '\n' + sec('ToDo', m.todos);
+  const time = m.time ? `**時間:** ${m.time}\n\n` : '';
+  return `# ${m.name}\n\n**日付:** ${formatDateJp(m.date)}\n\n${time}${parts}` + sec('要点・見出し', m.summary) + '\n' + sec('決定事項', m.decisions) + '\n' + sec('ToDo', m.todos);
 }
 function download(filename, content, mime) {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
@@ -2186,6 +2256,7 @@ exportDocx.addEventListener('click', async () => {
   const doc = new Document({ sections: [{ children: [
     new Paragraph({ text: m.name, heading: HeadingLevel.TITLE }),
     new Paragraph({ children: [new TextRun({ text: `日付: ${formatDateJp(m.date)}`, bold: true })] }),
+    ...(m.time ? [new Paragraph({ children: [new TextRun({ text: `時間: ${m.time}` })] })] : []),
     ...(m.participants && m.participants.length ? [new Paragraph({ children: [new TextRun({ text: `参加者: ${participantsText(m.participants)}` })] })] : []),
     new Paragraph({ text: '要点・見出し', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.summary),
     new Paragraph({ text: '決定事項', heading: HeadingLevel.HEADING_1 }), ...bulletParas(m.decisions),
@@ -2427,6 +2498,8 @@ function updateMeetingSummary() {
   if (!name && !pt && !date) { meetingSummary.innerHTML = ''; return; }
   let html = `<span class="ms-title">${escapeHtml(name || '（タイトル未設定）')}</span>`;
   if (date) html += ` ・ ${escapeHtml(formatDateJp(date))}`;
+  const time = recordingTimeText();
+  if (time) html += `<br>時間: ${escapeHtml(time)}`;
   if (pt) html += `<br>参加者: ${escapeHtml(pt)}`;
   meetingSummary.innerHTML = html;
 }
@@ -2707,6 +2780,7 @@ async function saveRecordingNow() {
     id, name: defaultRecordingTitle(), date: m.date, participants: m.participants,
     transcript: liveTranscript.value.trim(), summary: [], decisions: [], todos: [],
     audio, ts: Date.now(), auto: true,
+    startedAt: recStartedAt || null,   // 録音の実時間を後から出せるように残す
   };
   const list = loadStore();
   list.push(entry);
@@ -2837,6 +2911,11 @@ async function openMinutes(item) {
   updateMeetingSummary();
   fillMinutesUI({ summary: item.summary || [], decisions: item.decisions || [], todos: item.todos || [] });
   liveTranscript.value = item.transcript || '';
+  // 録音の実時間（開始時刻・長さ）も戻して、議事録に実時間を出せるようにする
+  recStartedAt = item.startedAt || 0;
+  recordedDurationSec = (item.audio && item.audio.sec) || 0;
+  // AI文字起こし（議事録とは別）も復元する
+  if (aiTextEl) aiTextEl.value = item.aiTranscript || '';
   // AIが作った議事録＋メール文面も復元する（自動生成分を含む）
   // 保存してあるのは生成された全文なので、議事録／メール件名／本文に分けて戻す。
   if (aiResult) {
@@ -2906,138 +2985,11 @@ saveMinutes.addEventListener('click', () => {
   hideError();
   const list = loadStore();
   const id = 'm-' + Date.now() + '-' + Math.floor(performance.now());
-  list.push({ id, name: m.name, date: m.date, participants: m.participants, transcript: liveTranscript.value.trim(), summary: m.summary, decisions: m.decisions, todos: m.todos });
+  list.push({ id, name: m.name, date: m.date, participants: m.participants, transcript: liveTranscript.value.trim(), summary: m.summary, decisions: m.decisions, todos: m.todos, startedAt: recStartedAt || null });
   while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
   saveStore(list);
   renderHistory();
   showScreen('screen-history', '過去の議事録');
-});
-
-/* =========================================================
- * Claude 連携（1クリックでプロンプトをコピー → Claudeを開く）
- * =======================================================*/
-const CLAUDE_URL = 'https://claude.ai/new';
-const CLAUDE_INSTR_KEY = 'noteloop_claude_instruction';
-const DEFAULT_CLAUDE_INSTRUCTION =
-`以下の会議の文字起こしから、正確で読みやすい議事録を作成してください。
-
-【出力形式】この見出しで、箇条書き中心にまとめてください。
-## 要点・見出し
-## 決定事項
-## ToDo（担当・期限がわかれば「― 担当/期限」の形で併記）
-
-【作成の指示】
-- 文字起こしの誤変換・言い間違いは、文脈から自然に補正してください。
-- 重要な数値・固有名詞・日付・金額は必ず保持してください。
-- 相槌や言い直し、雑談は省き、簡潔にまとめてください。
-- 決定事項とToDo（未確定の宿題）は明確に区別してください。
-- 判断できない箇所は「（要確認）」と明記してください。`;
-
-function loadInstruction() {
-  return localStorage.getItem(CLAUDE_INSTR_KEY) || DEFAULT_CLAUDE_INSTRUCTION;
-}
-
-/** Claude に渡すプロンプトを組み立てる（指示 ＋ 会議情報 ＋ 下書き ＋ 文字起こし） */
-function buildClaudePrompt() {
-  const m = currentMinutes();
-  const transcript = liveTranscript.value.trim();
-  const instr = (claudeInstruction.value || DEFAULT_CLAUDE_INSTRUCTION).trim();
-
-  let draft = '';
-  if (m.summary.length || m.decisions.length || m.todos.length) {
-    draft = `\n\n【アプリの下書き（参考・必要なら修正してください）】\n` +
-      `■ 要点・見出し\n${m.summary.length ? toBullets(m.summary) : '（なし）'}\n` +
-      `■ 決定事項\n${m.decisions.length ? toBullets(m.decisions) : '（なし）'}\n` +
-      `■ ToDo\n${m.todos.length ? toBullets(m.todos) : '（なし）'}`;
-  }
-
-  const partLine = (m.participants && m.participants.length) ? `\n参加者: ${participantsText(m.participants)}` : '';
-  return `${instr}
-
-【会議情報】
-会議名: ${m.name}
-日付: ${formatDateJp(m.date)}${partLine}${draft}
-
-【文字起こし】
-${transcript}`;
-}
-
-async function copyText(text) {
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch (_) { /* フォールバックへ */ }
-  // 旧方式フォールバック
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.focus(); ta.select();
-    const ok = document.execCommand('copy');
-    ta.remove();
-    return ok;
-  } catch (_) { return false; }
-}
-
-function setClaudeStatus(kind, html) {
-  claudeStatus.hidden = false;
-  claudeStatus.className = 'claude-status' + (kind ? ' ' + kind : '');
-  claudeStatus.innerHTML = html;
-}
-
-function ensureTranscript() {
-  const t = liveTranscript.value.trim();
-  if (!t) {
-    showError('文字起こしが空です。先に「録音」画面で録音するか、テキストを入力してください。');
-    showScreen('screen-home', '録音・文字起こし');
-    return false;
-  }
-  return true;
-}
-
-// コピーしてClaudeを開く
-claudeSend.addEventListener('click', async () => {
-  if (!ensureTranscript()) return;
-  hideError();
-  const prompt = buildClaudePrompt();
-  claudePromptPreview.value = prompt;
-  // 短いプロンプトは ?q= で事前入力を試みる（URL長の制限があるため長い場合は /new）。
-  // どちらでもクリップボードにコピーしておき、貼り付けでも送れるようにする。
-  const url = prompt.length <= 6000 ? `${CLAUDE_URL}?q=${encodeURIComponent(prompt)}` : CLAUDE_URL;
-  const win = window.open(url, '_blank');
-  if (win) { try { win.opener = null; } catch (_) {} }
-  claudeOpen.href = url;
-  claudeOpen.hidden = false; // 手動フォールバックのリンクは常に表示
-  const copied = await copyText(prompt);
-  if (!win) {
-    setClaudeStatus('warn', 'ポップアップがブロックされました。下の「→ Claudeを開く」を押してください（プロンプトはコピー済みです）。');
-  } else if (copied) {
-    setClaudeStatus('ok', '✓ Claudeを開きました。プロンプトが未入力の場合は入力欄で <strong>貼り付け（⌘/Ctrl+V）→ 送信</strong>（コピー済み）。');
-  } else {
-    setClaudeStatus('warn', 'Claudeを開きました。未入力なら下の「送信するプロンプトを確認」から手動でコピーしてください。');
-  }
-});
-
-// プロンプトをコピーのみ
-claudeCopy.addEventListener('click', async () => {
-  if (!ensureTranscript()) return;
-  hideError();
-  const prompt = buildClaudePrompt();
-  claudePromptPreview.value = prompt;
-  const copied = await copyText(prompt);
-  claudeOpen.hidden = false;
-  if (copied) setClaudeStatus('ok', '✓ プロンプトをコピーしました。「→ Claudeを開く」から貼り付けて送信してください。');
-  else setClaudeStatus('warn', '⚠ 自動コピーできませんでした。下の「送信するプロンプトを確認」から手動でコピーしてください。');
-});
-
-// 指示テンプレートの保存・リセット
-claudeInstruction.addEventListener('input', () => {
-  localStorage.setItem(CLAUDE_INSTR_KEY, claudeInstruction.value);
-});
-claudeInstructionReset.addEventListener('click', () => {
-  claudeInstruction.value = DEFAULT_CLAUDE_INSTRUCTION;
-  localStorage.setItem(CLAUDE_INSTR_KEY, DEFAULT_CLAUDE_INSTRUCTION);
 });
 
 /* =========================================================
@@ -3075,11 +3027,12 @@ function buildAudioPrompt() {
   const m = currentMinutes();
   const instr = (geminiInstruction.value || DEFAULT_GEMINI_INSTRUCTION).trim();
   const partLine = (m.participants && m.participants.length) ? `\n参加者: ${participantsText(m.participants)}` : '';
+  const timeLine = m.time ? `\n時間: ${m.time}（録音の実時間。■日時にはこの時間を書いてください）` : '';
   return `${instr}
 
 【会議情報】
 会議名: ${m.name}
-日付: ${formatDateJp(m.date)}${partLine}`;
+日付: ${formatDateJp(m.date)}${timeLine}${partLine}`;
 }
 
 function setAiAudioStatus(kind, html) {
@@ -3330,15 +3283,24 @@ function geminiHttpError(status, msg, model) {
 let lastGeminiFallbackModel = '';
 
 /** 録音音声を Gemini に送り、議事録＋メール文面テキストを返す */
-async function geminiGenerateMinutes(onStage) {
+/**
+ * 音声＋指示を Gemini に送り、返ってきた文章を返す共通処理。
+ * 議事録づくり・全体の文字起こし・録音中のライブ文字起こしで共通に使う。
+ * @param {Blob} blob 送る音声（WAV 以外は 16kHz モノラル WAV に変換する）
+ * @param {string} prompt 指示文
+ * @param {{onStage?:Function, stage?:string, live?:boolean}} [opts]
+ */
+async function geminiAudioRequest(blob, prompt, opts) {
+  const o = opts || {};
+  const onStage = o.onStage;
   const key = loadGeminiKey();
   if (!key) { const e = new Error('APIキー未設定'); e.noKey = true; throw e; }
-  if (!recordedBlob) throw new Error('録音音声がありません。「録音モード」（設定でライブ字幕をOFF）で録音してからお試しください。');
+  if (!blob) throw new Error('録音音声がありません。');
   const model = loadGeminiModel();
-  const prompt = buildAudioPrompt();
 
-  onStage && onStage('音声を準備中…');
-  const wav = await toWav16kMono(recordedBlob); // 形式問題を避けるため WAV 16kHz mono に統一
+  if (!o.live) onStage && onStage('音声を準備中…');
+  // 形式の問題を避けるため WAV 16kHz mono に統一（すでに WAV ならそのまま）
+  const wav = blob.type === 'audio/wav' ? blob : await toWav16kMono(blob);
 
   let audioPart;
   if (wav.size <= GEMINI_INLINE_LIMIT) {
@@ -3350,17 +3312,19 @@ async function geminiGenerateMinutes(onStage) {
     audioPart = { fileData: { mimeType: up.mime, fileUri: up.uri } };
   }
 
-  onStage && onStage('Geminiが議事録を作成中…');
+  if (o.stage) onStage && onStage(o.stage);
   const body = { contents: [{ parts: [{ text: prompt }, audioPart] }] };
 
   // 選択モデルが使えない（提供終了 / 無料枠なし）ときは代替モデルで自動的に再試行する。
+  // 録音中のライブは待たせたくないので、粘る回数を減らす。
+  const maxRetry = o.live ? 1 : GEMINI_MAX_RETRY;
   const tried = [];
   let data = null, lastErr = null, usedModel = model;
   outer:
   for (const m of [model, ...GEMINI_FALLBACK_MODELS]) {
     if (tried.includes(m)) continue;
     tried.push(m);
-    if (tried.length > 1) onStage && onStage(`${m} で作成し直しています…`);
+    if (tried.length > 1 && !o.live) onStage && onStage(`${m} で作成し直しています…`);
 
     // 一時的な混雑（503など）は待てば通ることが多いので、同じモデルで数回粘る。
     for (let attempt = 0; ; attempt++) {
@@ -3375,10 +3339,10 @@ async function geminiGenerateMinutes(onStage) {
       try { const e = await res.json(); msg = (e.error && e.error.message) || msg; } catch (_) {}
       lastErr = geminiHttpError(res.status, msg, m);
 
-      if (GEMINI_TRANSIENT_STATUS.includes(res.status) && attempt < GEMINI_MAX_RETRY) {
+      if (GEMINI_TRANSIENT_STATUS.includes(res.status) && attempt < maxRetry) {
         // 2秒 → 4秒 → 8秒 と間隔を空けて待つ
         const waitMs = 2000 * Math.pow(2, attempt);
-        onStage && onStage(`Geminiが混み合っています。${Math.round(waitMs / 1000)}秒待って再試行します…（${attempt + 1}/${GEMINI_MAX_RETRY}）`);
+        if (!o.live) onStage && onStage(`Geminiが混み合っています。${Math.round(waitMs / 1000)}秒待って再試行します…（${attempt + 1}/${maxRetry}）`);
         await new Promise((r) => setTimeout(r, waitMs));
         continue;
       }
@@ -3394,16 +3358,32 @@ async function geminiGenerateMinutes(onStage) {
     }
     throw lastErr || new Error('Gemini APIエラー');
   }
-  if (usedModel !== model) lastGeminiFallbackModel = usedModel;
-  else lastGeminiFallbackModel = '';
+  if (!o.live) lastGeminiFallbackModel = usedModel !== model ? usedModel : '';
   const cand = (data.candidates || [])[0] || {};
   const parts = (cand.content && cand.content.parts) || [];
   const text = parts.map((p) => p.text || '').join('').trim();
   // 使用状況（推定）を記録：応答の usageMetadata からトークン数を加算
-  const used = (data.usageMetadata && data.usageMetadata.totalTokenCount) || 0;
-  recordUsage(used);
-  if (!text) throw new Error('生成結果が空でした（安全性ブロックや指示文が原因の場合があります）。');
+  recordUsage((data.usageMetadata && data.usageMetadata.totalTokenCount) || 0);
+  if (!text && !o.live) throw new Error('生成結果が空でした（安全性ブロックや指示文が原因の場合があります）。');
   return text;
+}
+
+/** 録音音声から議事録＋メール文面を作る */
+async function geminiGenerateMinutes(onStage) {
+  if (!recordedBlob) throw new Error('録音音声がありません。設定で「録音中のライブ文字起こし」を切り替えても録音はできます。');
+  return geminiAudioRequest(recordedBlob, buildAudioPrompt(), { onStage, stage: 'Geminiが議事録を作成中…' });
+}
+
+/** 録音音声の全体を、議事録とは別に「文字起こしだけ」する（読み比べ用） */
+async function geminiTranscribeAll(onStage) {
+  if (!recordedBlob) throw new Error('録音音声がありません。');
+  const prompt =
+    '添付した会議の音声を、日本語で正確に文字起こししてください。\n'
+    + '・話したことばだけを出力し、要約・見出し・説明・記号は付けないでください。\n'
+    + '・聞き取りにくい箇所は文脈から自然に補正し、判断できない部分は（聞き取れず）と書いてください。\n'
+    + '・話者が変わったら改行してください。相槌だけの行は省いてかまいません。\n'
+    + '・数値・固有名詞・日付・金額・型番は必ず保持してください。';
+  return geminiAudioRequest(recordedBlob, prompt, { onStage, stage: 'Geminiが文字起こし中…' });
 }
 
 // 「AIで議事録を作成（自動）」
@@ -3441,6 +3421,124 @@ function saveAiTextToHistory(text) {
  * @param {{auto?: boolean}} [opts] auto=true なら録音停止直後の自動実行
  * @returns {Promise<boolean>} 生成できたら true
  */
+/* =========================================================
+ * AI文字起こし（Gemini・高精度）— 議事録とは別に、録音全体を文字にする
+ * =======================================================*/
+const aiTextCardEl   = $('aiTextCard');
+const aiTextEl       = $('aiText');
+const aiTextBtn      = $('aiTextBtn');
+const aiTextCopy     = $('aiTextCopy');
+const aiTextUse      = $('aiTextUse');
+const aiTextStatus   = $('aiTextStatus');
+const txtProgress      = $('txtProgress');
+const txtProgressBar   = $('txtProgressBar');
+const txtProgressPct   = $('txtProgressPct');
+const txtProgressLabel = $('txtProgressLabel');
+const txtProgressEta   = $('txtProgressEta');
+let txtTimer = null, txtStart = 0, txtEst = 0, txtStage = '', aiTextRunning = false;
+
+function setAiTextStatus(kind, html) {
+  if (!aiTextStatus) return;
+  aiTextStatus.hidden = false;
+  aiTextStatus.className = 'claude-status' + (kind ? ' ' + kind : '');
+  aiTextStatus.innerHTML = html;
+}
+
+function startTxtProgress() {
+  if (!txtProgress) return;
+  txtStart = Date.now();
+  // 文字起こしだけなので議事録より少し速い見積もり
+  txtEst = Math.min(600, Math.max(10, 10 + (recordedDurationSec || 0) * 0.10));
+  txtStage = 'AIが文字起こし中…';
+  txtProgress.hidden = false;
+  clearInterval(txtTimer);
+  tickTxtProgress();
+  txtTimer = setInterval(tickTxtProgress, 250);
+}
+function tickTxtProgress() {
+  if (!txtProgress || txtProgress.hidden) return;
+  const el = (Date.now() - txtStart) / 1000;
+  let p = el < txtEst ? (el / txtEst) * 0.95 : 0.95 + 0.04 * (1 - Math.exp(-(el - txtEst) / 60));
+  p = Math.min(0.99, p);
+  const pct = Math.round(p * 100);
+  txtProgressBar.style.width = pct + '%';
+  txtProgressPct.textContent = pct + '%';
+  txtProgressLabel.textContent = txtStage;
+  const remain = Math.ceil(txtEst - el);
+  txtProgressEta.textContent = remain > 0 ? `完了まで約 ${formatDurationJp(remain)}` : 'まもなく完了します…';
+}
+function endTxtProgress(ok) {
+  clearInterval(txtTimer); txtTimer = null;
+  if (!txtProgress) return;
+  if (!ok) { txtProgress.hidden = true; return; }
+  txtProgressBar.style.width = '100%';
+  txtProgressPct.textContent = '100%';
+  txtProgressLabel.textContent = '文字起こしが完了しました';
+  txtProgressEta.textContent = '完了';
+  setTimeout(() => { txtProgress.hidden = true; }, 1200);
+}
+
+/**
+ * 録音全体を Gemini で文字起こしして、専用の欄に出す（議事録とは別）。
+ * 録音中のリアルタイム表示と読み比べられるようにするための機能。
+ */
+async function runAiTranscribe(opts) {
+  const auto = !!(opts && opts.auto);
+  if (aiTextRunning) return false;
+  if (!loadGeminiKey()) {
+    if (!auto) setAiTextStatus('warn', '⚠ Gemini APIキーが未設定です。<strong>設定 → AI連携</strong> でキーを入力してください。');
+    return false;
+  }
+  if (!recordedBlob) {
+    if (!auto) setAiTextStatus('warn', '⚠ 録音音声がありません。');
+    return false;
+  }
+  aiTextRunning = true;
+  if (aiTextBtn) aiTextBtn.disabled = true;
+  startTxtProgress();
+  try {
+    const text = await geminiTranscribeAll((st) => { txtStage = st; tickTxtProgress(); });
+    if (aiTextEl) aiTextEl.value = text;
+    saveAiTranscriptToHistory(text);
+    endTxtProgress(true);
+    setAiTextStatus('ok', '✓ 文字起こしができました。上の「文字起こし」と読み比べられます。');
+    return true;
+  } catch (err) {
+    endTxtProgress(false);
+    const msg = (err && err.noKey) ? 'APIキーが未設定です。設定→AI連携で入力してください。'
+              : (err && err.message ? err.message : String(err));
+    setAiTextStatus('warn', '⚠ ' + msg);
+    return false;
+  } finally {
+    aiTextRunning = false;
+    if (aiTextBtn) aiTextBtn.disabled = false;
+  }
+}
+
+/** AI文字起こしを履歴にも残す */
+function saveAiTranscriptToHistory(text) {
+  try {
+    const list = loadStore();
+    if (!list.length) return;
+    let idx = activeRecordingId ? list.findIndex((e) => e.id === activeRecordingId) : -1;
+    if (idx < 0) idx = list.length - 1;
+    list[idx].aiTranscript = text;
+    saveStore(list);
+  } catch (_) { /* 保存に失敗しても画面の結果は使える */ }
+}
+
+if (aiTextBtn) aiTextBtn.addEventListener('click', () => { hideError(); runAiTranscribe(); });
+if (aiTextCopy) aiTextCopy.addEventListener('click', async () => {
+  const ok = await copyText(aiTextEl ? aiTextEl.value : '');
+  setAiTextStatus(ok ? 'ok' : 'warn', ok ? '✓ コピーしました。' : '⚠ コピーできませんでした。');
+});
+if (aiTextUse) aiTextUse.addEventListener('click', () => {
+  if (!aiTextEl || !aiTextEl.value.trim()) { setAiTextStatus('warn', '⚠ まだ文字起こしがありません。'); return; }
+  liveTranscript.value = aiTextEl.value;
+  updateHomeUI();
+  setAiTextStatus('ok', '✓ 上の「文字起こし」に反映しました。');
+});
+
 /* ===== 生成中の進捗表示（進捗率＋完了までの目安時間） ===== */
 const genProgress      = $('genProgress');
 const genProgressBar   = $('genProgressBar');
@@ -3755,10 +3853,11 @@ function applyLiveUI() {
     // 文字にする。マイクは1つしか開かないので、録音は止まらない。
     liveEnabled.disabled = false;
     liveHint.innerHTML = liveEnabled.checked
-      ? '<strong>ON = 録音しながら文字起こし。</strong>録音中の音声を<strong>端末内で</strong>文字にします（外部送信なし・オフライン可）。'
-        + '数秒ごとにまとめて表示され、初回だけモデル（約40MB）を読み込みます。端末が熱くなる・電池を使う点はご了承ください。'
+      ? '<strong>ON = 録音しながら文字起こし。</strong>録音サービスの音声をそのまま使うので、<strong>録音は止まりません</strong>。'
+        + `APIキーがあれば <strong>Gemini（高精度・速い）</strong>で ${LIVE_GEMINI_SEC}秒ごとに、無ければ<strong>端末内のWhisper</strong>（外部送信なし・初回のみモデル約80MB）で文字にします。`
+        + '<br>※Gemini を使うと無料枠の回数を消費します（1時間の会議でおよそ 240 回）。'
         + '<br>※画面を消している間は表示が止まることがありますが、<strong>録音は最後まで続きます</strong>（停止後にAIが全体を文字起こしします）。'
-      : '<strong>OFF = 録音のみ。</strong>録音中は文字を出さず、<strong>音声の保存を最優先</strong>します。停止後に<strong>「AIで議事録を作成」</strong>で高精度な文字起こし＋議事録を作成（推奨）。';
+      : '<strong>OFF = 録音のみ。</strong>録音中は文字を出さず、<strong>音声の保存を最優先</strong>します。停止後に<strong>「AIで文字起こし」「AIで議事録を作成」</strong>で高精度に処理します（推奨）。';
     return;
   }
   if (!getSR()) {
@@ -3767,7 +3866,7 @@ function applyLiveUI() {
     liveHint.innerHTML = 'この端末／ブラウザはリアルタイム字幕（Web Speech）に非対応です。<strong>録音モード</strong>で動作します（停止後に「音声をAIに送る」で議事録化）。';
   } else if (liveEnabled.checked) {
     liveHint.innerHTML = '<strong>ON = ライブ字幕モード。</strong>録音中にリアルタイムで文字が出ます（音声はGoogleへ送信）。' +
-      '対応端末では<strong>音声も同時に保存</strong>します。停止後は「音声をAIに送る（Gemini）」または「Claudeに送る」で議事録化。' +
+      '対応端末では<strong>音声も同時に保存</strong>します。停止後は「AIで議事録を作成」で議事録化。' +
       '<br>※もし字幕が出ない端末では、このモードをOFF（録音のみ）にしてください。';
   } else {
     liveHint.innerHTML = '<strong>OFF = 録音モード。</strong>字幕は出ませんが<strong>音声を確実に保存</strong>します。停止後に<strong>「音声をAIに送る（Gemini）」</strong>で高精度な議事録＋メールを作成（推奨）。';
@@ -3896,7 +3995,6 @@ downloadAudio.disabled = true;
 downloadWav.disabled = true;
 setAudioAvailable(false);
 if (keepAwake) { const kw = localStorage.getItem(WAKE_KEY); if (kw === '0') keepAwake.checked = false; }
-claudeInstruction.value = loadInstruction();
 geminiInstruction.value = loadGeminiInstruction();
 // 「停止後の文字起こし」の復元（gemini=しない / whisper）
 const savedEngine = localStorage.getItem(ENGINE_KEY);

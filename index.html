@@ -75,10 +75,7 @@
 
       <!-- 録音中のリアルタイム文字起こし（読み取り専用・自動スクロール） -->
       <div class="live-now" id="liveNowPanel" hidden>
-        <div class="live-now-head">
-          <span class="live-now-dot" aria-hidden="true"></span>
-          <span>リアルタイム文字起こし</span>
-        </div>
+        <div class="live-rule"><span>文字起こし</span></div>
         <div class="live-now-body" id="liveNowText" role="status" aria-live="polite"></div>
       </div>
 
@@ -131,6 +128,29 @@
         <p class="field-hint" id="audioEmptyNote">まだ録音した音声はありません。録音すると、ここで再生・保存できます。</p>
       </div>
 
+      <!-- AIによる高精度な文字起こし（議事録とは別に出力・比較用） -->
+      <div class="panel flow-card" id="aiTextCard" hidden>
+        <div class="section-head">
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> AI文字起こし（Gemini・高精度）</span>
+        </div>
+        <p class="field-hint">録音した音声の全体を、議事録とは別に文字起こしします。録音中のリアルタイム表示と読み比べられます。</p>
+        <div class="claude-actions" style="margin-top:10px;">
+          <button class="primary-btn" id="aiTextBtn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/></svg> AIで文字起こし</button>
+          <button class="secondary-btn" id="aiTextCopy" type="button">コピー</button>
+          <button class="secondary-btn" id="aiTextUse" type="button">上の文字起こしに反映</button>
+        </div>
+        <div class="gen-progress" id="txtProgress" hidden>
+          <div class="gen-progress-head">
+            <span class="gen-progress-label" id="txtProgressLabel">AIが文字起こし中…</span>
+            <span class="gen-progress-pct" id="txtProgressPct">0%</span>
+          </div>
+          <div class="progress"><div class="progress-bar" id="txtProgressBar"></div></div>
+          <p class="gen-progress-eta" id="txtProgressEta">完了まで約 —</p>
+        </div>
+        <div class="claude-status" id="aiTextStatus" hidden></div>
+        <textarea id="aiText" class="minutes-area" rows="10" placeholder="「AIで文字起こし」を押すと、ここに高精度な文字起こしが表示されます（録音後は自動でも実行します）。"></textarea>
+      </div>
+
       <!-- 議事録づくり（AIに投げる / 貼り付け） -->
       <div class="panel flow-card" id="minutesFlowCard" hidden>
         <button id="openMeetingInfo" class="meeting-info-btn" type="button">
@@ -171,21 +191,6 @@
             <div class="claude-status" id="aiAudioStatus" hidden></div>
             <a class="claude-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
             <textarea id="aiAudioPreview" class="minutes-area" rows="4" readonly placeholder="「指示をコピー」で共有する指示文がここに表示されます。"></textarea>
-          </details>
-        </div>
-
-        <!-- B. 文字起こしをClaudeに送る（テキスト経路） -->
-        <div class="claude-inline">
-          <p class="route-title">文字起こしをClaudeに送る</p>
-          <div class="claude-actions">
-            <button class="primary-btn" id="claudeSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピーしてClaudeを開く</button>
-            <button class="secondary-btn" id="claudeCopy" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー</button>
-          </div>
-          <div class="claude-status" id="claudeStatus" hidden></div>
-          <a class="claude-open-link" id="claudeOpen" href="https://claude.ai/new" target="_blank" rel="noopener" hidden>→ Claudeを開く</a>
-          <details class="claude-preview">
-            <summary>プロンプトを確認</summary>
-            <textarea id="claudePromptPreview" class="minutes-area" rows="6" readonly placeholder="「コピーしてClaudeを開く」を押すと、ここに内容が表示されます。"></textarea>
           </details>
         </div>
 
@@ -440,16 +445,10 @@
           </details>
         </div>
         <div class="field settings-field">
-          <label for="geminiInstruction">A. 音声をAIに送る指示（Gemini等・編集可）</label>
+          <label for="geminiInstruction">音声をAIに送る指示（Gemini・編集可）</label>
           <textarea id="geminiInstruction" class="minutes-area" rows="8"></textarea>
           <p class="field-hint">録音音声と一緒に共有される指示文です。音声から議事録＋メール文面（件名/本文）まで作らせます。このあとに会議名・日付・参加者が自動で付きます。</p>
           <button class="chip-btn" id="geminiInstructionReset" type="button" style="margin-top:8px;">既定に戻す</button>
-        </div>
-        <div class="field settings-field">
-          <label for="claudeInstruction">B. 文字起こしをClaudeに送る指示（編集可）</label>
-          <textarea id="claudeInstruction" class="minutes-area" rows="8"></textarea>
-          <p class="field-hint">この指示文のあとに「会議名・日付・文字起こし」が自動で付きます。用途に合わせて自由に調整できます。</p>
-          <button class="chip-btn" id="claudeInstructionReset" type="button" style="margin-top:8px;">既定に戻す</button>
         </div>
       </div>
 
@@ -492,7 +491,6 @@
           <button type="button" data-goto="man-start">はじめの4ステップ</button>
           <button type="button" data-goto="man-screens">画面の説明</button>
           <button type="button" data-goto="man-engine">文字起こしエンジン</button>
-          <button type="button" data-goto="man-claude">Claude連携</button>
           <button type="button" data-goto="man-export">書き出し・メール</button>
           <button type="button" data-goto="man-tips">便利な機能</button>
           <button type="button" data-goto="man-privacy">データとプライバシー</button>
@@ -507,7 +505,7 @@
           <li><span class="man-n">1</span><div><b>録音する</b><p>「録音」画面の中央下にある丸いマイクボタンをタップ。マイクの使用を許可すると録音が始まり、話しながら文字起こしが画面に表示されます。</p></div></li>
           <li><span class="man-n">2</span><div><b>停止する</b><p>もう一度ボタンをタップで停止。文字起こしが整い、下部に「録音した音声」の再生・保存が表示されます。誤変換のループは自動で除去されます。</p></div></li>
           <li><span class="man-n">3</span><div><b>議事録ができるのを待つ</b><p>停止すると、<b>そのまま録音音声が Gemini に送られ、議事録＋メール文面が自動で作られます</b>（数十秒）。できあがると画面が結果までスクロールします。文面はその場で編集でき、メール本文にも反映済みです。<br>自動で作らせたくないときは <b>設定 → AI連携 →「録音停止後に自動でAI議事録を作成」</b> をOFFにしてください。OFFのときは「AIで議事録を作成（自動）」ボタンで作れます。</p></div></li>
-          <li><span class="man-n">4</span><div><b>Claudeでさらに整える（任意）</b><p><b>「コピーしてClaudeを開く」</b>で会議情報＋文字起こしをコピーし、開いた Claude に貼り付け（⌘/Ctrl+V）→送信すると、別の切り口の議事録も作れます。タイトルは内容から自動で付きます。</p></div></li>
+          <li><span class="man-n">4</span><div><b>文字起こしを見比べる（任意）</b><p>「<b>AI文字起こし（Gemini・高精度）</b>」に、録音全体をAIが起こした文章が出ます。録音中のリアルタイム表示と読み比べ、必要なら「上の文字起こしに反映」で差し替えられます。</p></div></li>
           <li><span class="man-n">5</span><div><b>出力・共有する</b><p>txt / Word / メールで書き出し。<b>一覧に保存</b>で履歴に残せます。</p></div></li>
         </ol>
       </div>
@@ -517,7 +515,7 @@
         <ul class="man-def">
           <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と白いゲージ、リアルタイム文字起こし（ライブ字幕モード時）を表示し、画面のふちが赤く光ります。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
           <li><b>履歴</b><span>保存した議事録をカードで一覧。カードをタップすると<b>この画面のまま</b>、音声の再生・保存、AI議事録、書き出し、メール作成まで確認・編集できます（「一覧へ戻る」で一覧に戻ります）。右下のアイコンで削除・音声保存。最大10件を保存します。</span></li>
-          <li><b>設定</b><span>文字起こしエンジンの切替、<b>実行バックエンド（WebGPU / WASM）</b>、高精度モデル（tiny〜large-v3-turbo）、録音中の画面常時オン、Claude の指示テンプレートを設定できます。</span></li>
+          <li><b>設定</b><span>録音中のライブ文字起こしの切替、<b>実行バックエンド（WebGPU / WASM）</b>、高精度モデル（tiny〜large-v3-turbo）、録音中の画面常時オン、AI（Gemini）のキー・モデル・指示テンプレートを設定できます。</span></li>
           <li><b>メニュー</b><span>左上の三本線（PC では常時左側）から各画面へ移動。上部に現在のバージョンを表示します。</span></li>
         </ul>
       </div>
@@ -537,16 +535,6 @@
           </table>
         </div>
         <div class="man-note"><b>おすすめ（スマホ）：</b>録音中は「ライブ表示（Web Speech）」で文字を確認し、止めたら <b>「音声をAIに送る」</b> で議事録化。<b>完全オフライン</b>が必要なときだけ、ライブ表示OFF＋「停止後にWhisper」を使ってください。</div>
-      </div>
-
-      <div class="panel" id="man-claude">
-        <h3 class="settings-group-title">Claude 連携で高精度な議事録に</h3>
-        <ol class="man-steps">
-          <li><span class="man-n">1</span><div><p>録音後のカード内「<b>コピーしてClaudeを開く</b>」をタップ。会議情報＋文字起こしが自動コピーされ、Claude が開きます。</p></div></li>
-          <li><span class="man-n">2</span><div><p>開いた Claude の入力欄に <b>貼り付け（<kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>V</kbd>）→ 送信</b> するだけ。</p></div></li>
-          <li><span class="man-n">3</span><div><p>Claude が要点・決定事項・ToDo を整理した議事録を作成します。</p></div></li>
-        </ol>
-        <div class="man-note">渡す指示文は <b>設定 → Claude連携</b> で編集できます。Claude はチャット上で音声を直接処理できないため、渡すのは<b>文字起こしテキスト</b>です（音声は「録音した音声」から別途保存）。</div>
       </div>
 
       <div class="panel" id="man-export">

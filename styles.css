@@ -509,14 +509,14 @@ body.is-recording .wave-timer { color: #fff; }
   background: none; border: none; box-shadow: none;
   animation: fade .25s ease;
 }
-.live-now-head {
-  display: flex; align-items: center; gap: 7px;
-  font-size: 12px; font-weight: 700; color: var(--faint); letter-spacing: .02em;
-  margin-bottom: 6px;
+/* ゲージの下の区切り線。中央に「文字起こし」、その両側に線を引く。 */
+.live-rule {
+  display: flex; align-items: center; gap: 12px;
+  margin: 2px 0 10px;
+  font-size: 12px; font-weight: 700; color: var(--faint); letter-spacing: .08em;
 }
-.live-now-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex: none;
-  background: #ff4d4f; box-shadow: 0 0 8px #ff4d4f; animation: blink 1s infinite;
+.live-rule::before, .live-rule::after {
+  content: ""; flex: 1; height: 1px; background: var(--border-strong);
 }
 .live-now-body {
   max-height: 46vh; overflow-y: auto;
@@ -528,6 +528,13 @@ body.is-recording .wave-timer { color: #fff; }
 .live-now-body .live-line { color: var(--muted); }
 .live-now-body .live-line.now { color: var(--text); font-weight: 700; }
 .live-now-body .live-wait { color: var(--faint); font-size: 13px; font-weight: 600; line-height: 1.8; }
+
+/* AI文字起こしカード（議事録とは別に出す高精度な文字起こし） */
+#aiTextCard .claude-actions { flex-wrap: wrap; }
+#aiTextCard .claude-actions button {
+  flex: 1 1 auto; min-width: 130px; justify-content: center; white-space: nowrap;
+}
+#aiTextCard textarea { margin-top: 10px; }
 
 /* ---------- 議事録の生成中（進捗率・完了目安時間） ---------- */
 .gen-progress {
