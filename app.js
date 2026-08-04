@@ -130,7 +130,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.5';
+const APP_VERSION = 'Ver.7.6';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1087,14 +1087,10 @@ async function startRecording() {
     pendingChunks = [];
     setAudioAvailable(false);
     sttActivity = 0.2;
-    // ライブ字幕がONなら、録音サービスの音声を端末内Whisperで文字にする
+    // ライブ文字起こしがONなら、録音サービスの音声をそのまま文字にする
     // （マイクは1つしか開かないので録音は止まらない）
-    if (liveEnabled && liveEnabled.checked && await startNativeLiveTranscribe()) {
-      liveMode = 'native';
-      setStatus('working', liveEngine === 'gemini' ? '録音中・文字起こし中（AI）' : '録音中・文字起こし中（端末内）');
-    } else {
-      setStatus('working', '録音中（アプリが停止させません）');
-    }
+    if (liveEnabled && liveEnabled.checked && await startNativeLiveTranscribe()) liveMode = 'native';
+    setStatus('', '');   // 録音中はバッジを出さない
     updateHomeUI();
     startTime = Date.now();
     recStartedAt = startTime;
@@ -1121,7 +1117,7 @@ async function startRecording() {
     pendingChunks = [];
     setAudioAvailable(false);
     sttActivity = 0.4;
-    setStatus('working', liveMode === 'webspeech' ? '認識中…（ライブ字幕）' : '録音中');
+    setStatus('', '');   // 録音中はバッジを出さない
     updateHomeUI();
     startTime = Date.now();
     recStartedAt = startTime;
@@ -1166,7 +1162,7 @@ async function startRecording() {
   pendingChunks = [];
   setAudioAvailable(false);
   sttActivity = 0.2;
-  setStatus('working', '録音中');
+  setStatus('', '');   // 録音中はバッジを出さない
   updateHomeUI();
   startTime = Date.now();
   recStartedAt = startTime;
