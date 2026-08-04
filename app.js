@@ -44,6 +44,15 @@ const clearTranscript= $('clearTranscript');
 // 録音中のリアルタイム表示
 const liveNowPanel   = $('liveNowPanel');
 const liveNowText    = $('liveNowText');
+// 録音停止後のAI議事録作成（画面上部の進捗バー＋完了までの目安時間）
+const aiFlowProgress = $('aiFlowProgress');
+const aiFlowBar      = $('aiFlowBar');
+const aiFlowPct      = $('aiFlowPct');
+const aiFlowLabel    = $('aiFlowLabel');
+const aiFlowEta      = $('aiFlowEta');
+// 引き下げてリセット
+const ptrEl          = $('ptr');
+const ptrCircle      = $('ptrCircle');
 
 const LANGUAGE       = 'japanese';   // 日本語固定
 const engineSelect   = $('engineSelect');
@@ -130,7 +139,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.6';
+const APP_VERSION = 'Ver.7.7';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -180,6 +189,9 @@ let recordRestarting = false;     // 復帰処理中（見張りの多重実行�
 let recordedDurationSec = 0;      // 保存された音声の実長（秒）
 let recStartedAt = 0;             // 録音を始めた時刻（epoch ms）。議事録に実時間を出すのに使う。
 let recordedBlob = null;
+let aiFlowRunning = false;        // 録音停止後のAI処理（文字起こし＋議事録）が動いているか
+let aiAutoRunning = false;        // AI議事録の作成中（手動実行を含む）
+let aiTextRunning = false;        // AI文字起こしの実行中（手動実行を含む）
 let audioCtx = null;
 let sourceNode = null;
 let processorNode = null;
@@ -414,26 +426,65 @@ function renderLiveNow() {
   liveNowText.scrollTop = liveNowText.scrollHeight;
 }
 
-/** 録音ボタンの段階変化: 録音 → 文字起こし中 → 議事録作成 → メール */
+/**
+ * 録音ボタンの段階変化: 録音 → 文字起こし中 → AI議事録の作成中（読込アニメーション）
+ *   ・「議事録を作成」「メールを作成」ボタンは廃止（AIが自動で作るため押す必要がない）。
+ *   ・AI議事録の作成中は白背景に3つの点の読込アニメーションを出す。
+ *   ・作成が終わったらボタンは消し、画面最下部までスクロールしたときだけ出す。
+ */
 function updateFabState() {
   let state;
   if (recording) state = 'recording';
   else if (homeProcessing) state = 'processing';
-  else {
-    const hasText = liveTranscript.value.trim().length > 0;
-    const hasMinutes = !!(secSummary.value.trim() || secDecisions.value.trim() || secTodos.value.trim());
-    if (hasMinutes) state = 'mail';
-    else if (hasText) state = 'minutes';
-    else state = 'idle';
-  }
+  else if (aiFlowRunning || aiAutoRunning || aiTextRunning) state = 'loading';
+  else state = 'idle';
+
   recordBtn.dataset.state = state;
-  recordBtn.disabled = (state === 'processing');
-  const labels = { idle: '', recording: '録音中… タップで停止', processing: '文字起こし中…', minutes: 'タップで議事録を作成', mail: 'タップでメールを作成' };
-  const arias = { idle: '録音開始', recording: '録音停止', processing: '文字起こし中', minutes: '議事録を作成', mail: 'メールを作成' };
-  recHint.textContent = labels[state] || '';
-  recHint.hidden = (state === 'idle');
+  recordBtn.disabled = (state === 'processing' || state === 'loading');
+  const arias = { idle: '録音開始', recording: '録音停止', processing: '文字起こし中', loading: 'AI議事録を作成中' };
   recordBtn.setAttribute('aria-label', arias[state]);
+
+  // 録音後（結果が出ている待機中）は、最下部までスクロールしたときだけ録音ボタンを出す
+  const done = (state === 'idle') && hasSessionResult();
+  const away = done && !atPageBottom();
+  recordBtn.classList.toggle('fab-away', away);
+
+  // ボタンの下の案内文。録音後はボタンが消えるので、戻し方をここで伝える。
+  let hint = '';
+  if (state === 'recording') hint = '録音中… タップで停止';
+  else if (state === 'processing') hint = '文字起こし中…';
+  else if (done) hint = away ? '引き下げてリセット\n下までスクロールで録音ボタン' : 'タップで新しい録音（今の内容は履歴に残ります）';
+  const hintText = document.getElementById('recHintText') || recHint;
+  if (hintText.textContent !== hint) hintText.textContent = hint;
+  recHint.hidden = !hint;
+  recHint.classList.toggle('steady', done);
+  recHint.classList.toggle('low', away);   // ボタンが無いぶん下げる
 }
+
+/** 録音・文字起こし・議事録のいずれかの結果が画面にあるか */
+function hasSessionResult() {
+  return !!recordedBlob
+    || liveTranscript.value.trim().length > 0
+    || !!(aiResultEl() && aiResultEl().value.trim());
+}
+/** #aiResult は後方で宣言されるため、参照は関数越しに行う */
+function aiResultEl() { return document.getElementById('aiResult'); }
+
+/** 画面の最下部まで来ているか（数pxの余裕を持たせる） */
+function atPageBottom() {
+  const doc = document.documentElement;
+  const max = Math.max(doc.scrollHeight, document.body.scrollHeight);
+  return (window.innerHeight + window.scrollY) >= (max - 28);
+}
+// 最下部までスクロールで録音ボタンが出現、上へ戻すと消える。
+// スクロール中に毎回レイアウトを測ると重いので、1フレームに1回へまとめる。
+let fabScrollRaf = 0;
+function scheduleFabUpdate() {
+  if (fabScrollRaf) return;
+  fabScrollRaf = requestAnimationFrame(() => { fabScrollRaf = 0; updateFabState(); });
+}
+window.addEventListener('scroll', scheduleFabUpdate, { passive: true });
+window.addEventListener('resize', scheduleFabUpdate);
 
 /* =========================================================
  * Web Worker（Whisper）
@@ -962,9 +1013,9 @@ function showAudioShortfallWarning(wallSec, audioSec) {
 recordBtn.addEventListener('click', async () => {
   const st = recordBtn.dataset.state;
   if (st === 'recording') return stopRecording();
-  if (st === 'processing') return;
-  if (st === 'minutes') { revealFlowCards(); scrollToEl('minutesFlowCard'); return; }
-  if (st === 'mail') { revealFlowCards(); prepareMailFromMinutes(); scrollToEl('mailPanel'); return; }
+  if (st === 'processing' || st === 'loading') return;
+  // 前回の結果が残っているときは、そのまま新しい録音を始める（結果は履歴に残る）
+  if (hasSessionResult()) resetSession({ silent: true });
   return startRecording();
 });
 
@@ -1051,6 +1102,7 @@ async function startRecording() {
   hideError();
   closeHistoryDetail(); // 履歴を見ていた場合はカード群を録音画面へ戻す
   resetFlowCards(); // 新しい録音: 前回の段階カードを一旦すべて隠す
+  resetAiFlowProgress(); // 前回のAI議事録の進捗表示が残っていたら消す
   // 入力レベルメーターがマイクを掴んでいたら解放してから録音を開始
   if (typeof homeMicMeter !== 'undefined') homeMicMeter.stop();
   if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
@@ -1230,7 +1282,8 @@ async function stopRecording() {
     await runFinalPass(recordedBlob);
   } else {
     // Web Speech のライブ文字をそのまま確定として使う（高精度化は「音声をAIに送る」で）
-    setStatus('ready', '文字起こし完了');
+    // 完了バッジは出さない（このあとの進捗バーだけで状況が分かる）
+    setStatus('', '');
     updateHomeUI();
   }
   checkTerms(); // 登録用語（会社名など）が含まれていれば確認ポップアップ
@@ -1239,21 +1292,101 @@ async function stopRecording() {
   // 録音後のフロー: 録音音声・議事録・AI・書き出し・メールのカードを段階的に出現
   if (recordedBlob || liveTranscript.value.trim()) {
     revealFlowCards(true);
-    scrollToEl('transcriptPanel');
+    // AIに自動で投げる場合は、画面上部の進捗バー（完了までの目安時間）が見えるように先頭へ。
+    // そうでなければ、これまでどおり文字起こしまで送る。
+    if (willAutoAi) window.scrollTo({ top: 0, behavior: 'smooth' });
+    else scrollToEl('transcriptPanel');
   }
   updateHomeUI();
 
   // 設定がONなら、そのまま Gemini に投げて議事録＋メール文面まで自動生成する。
   // 失敗しても録音・文字起こし・履歴は上で確定済みなので、ここでは待つだけでよい。
   if (willAutoAi) {
-    // 先に「文字起こしだけ」を作る（録音中の表示と読み比べられるように）。
-    setStatus('working', 'AIが文字起こし中…');
-    await runAiTranscribe({ auto: true });
-    setStatus('working', 'AIが議事録を作成中…');
-    const ok = await runAiAutoMinutes({ auto: true });
-    setStatus(ok ? 'ready' : 'error', ok ? 'AI議事録の作成が完了しました' : 'AI議事録を作成できませんでした');
+    // 完了バッジは出さず、画面上部の進捗バー（＋完了までの目安時間）と
+    // 録音ボタン位置の読込アニメーションだけで進み具合を伝える。
+    startAiFlowProgress();
+    try {
+      // 先に「文字起こしだけ」を作る（録音中の表示と読み比べられるように）。
+      setAiFlowStage('AIが文字起こし中…');
+      await runAiTranscribe({ auto: true });
+      setAiFlowStage('AIが議事録を作成中…');
+      const ok = await runAiAutoMinutes({ auto: true });
+      endAiFlowProgress(ok);
+    } catch (_) {
+      endAiFlowProgress(false);
+    }
     updateHomeUI();
   }
+}
+
+/* =========================================================
+ * 録音停止後のAI処理（文字起こし → 議事録）の進捗
+ *   ・画面上部に進捗バーと「完了まで約○分」を出す（完了バッジの代わり）。
+ *   ・同時に録音ボタンを白い読込アニメーションへ切り替え、完了で消す。
+ * =======================================================*/
+let aiFlowTimer = null, aiFlowStart = 0, aiFlowEst = 0, aiFlowStage = '';
+
+/** 録音の長さから、文字起こし＋議事録の完了までの目安（秒）を見積もる */
+function estimateAiFlowSeconds() {
+  const d = recordedDurationSec || 0;
+  return Math.min(1200, Math.max(25, 25 + d * 0.22));
+}
+
+function startAiFlowProgress() {
+  aiFlowRunning = true;
+  aiFlowStart = Date.now();
+  aiFlowEst = estimateAiFlowSeconds();
+  aiFlowStage = 'AIが議事録を作成中…';
+  if (aiFlowProgress) aiFlowProgress.hidden = false;
+  clearInterval(aiFlowTimer);
+  tickAiFlowProgress();
+  aiFlowTimer = setInterval(tickAiFlowProgress, 250);
+  updateFabState();
+}
+
+function setAiFlowStage(text) {
+  aiFlowStage = text || aiFlowStage;
+  tickAiFlowProgress();
+}
+
+function tickAiFlowProgress() {
+  if (!aiFlowProgress || aiFlowProgress.hidden) return;
+  const el = (Date.now() - aiFlowStart) / 1000;
+  // 見積もりを超えても止まって見えないよう、95%へゆっくり漸近させる
+  let p = el < aiFlowEst ? (el / aiFlowEst) * 0.95 : 0.95 + 0.04 * (1 - Math.exp(-(el - aiFlowEst) / 60));
+  p = Math.min(0.99, p);
+  const pct = Math.round(p * 100);
+  aiFlowBar.style.width = pct + '%';
+  aiFlowPct.textContent = pct + '%';
+  aiFlowLabel.textContent = aiFlowStage;
+  const remain = Math.ceil(aiFlowEst - el);
+  aiFlowEta.textContent = remain > 0 ? `完了まで約 ${formatDurationJp(remain)}` : 'まもなく完了します…';
+}
+
+/** AI処理の終了。読込アニメーションを消し、録音ボタンも消す（最下部で再表示） */
+function endAiFlowProgress(ok) {
+  clearInterval(aiFlowTimer); aiFlowTimer = null;
+  aiFlowRunning = false;
+  if (aiFlowProgress) {
+    if (ok) {
+      aiFlowBar.style.width = '100%';
+      aiFlowPct.textContent = '100%';
+      aiFlowLabel.textContent = '議事録の作成が完了しました';
+      aiFlowEta.textContent = '完了';
+      setTimeout(() => { aiFlowProgress.hidden = true; }, 1200);
+    } else {
+      aiFlowProgress.hidden = true;
+    }
+  }
+  updateFabState();
+}
+
+/** 進捗表示を初期状態へ戻す（リセット・新規録音時） */
+function resetAiFlowProgress() {
+  clearInterval(aiFlowTimer); aiFlowTimer = null;
+  aiFlowRunning = false;
+  if (aiFlowProgress) aiFlowProgress.hidden = true;
+  if (aiFlowBar) aiFlowBar.style.width = '0%';
 }
 
 /* =========================================================
@@ -1826,6 +1959,164 @@ clearTranscript.addEventListener('click', () => {
   resetFlowCards();
   updateHomeUI();
 });
+
+/* =========================================================
+ * セッションのリセット（履歴はそのまま残す）
+ *   画面だけを録音待機の状態へ戻し、すぐ次の録音を始められるようにする。
+ *   保存済みの議事録・録音音声は履歴に残っているので、あとから開き直せる。
+ * =======================================================*/
+function resetSession(opts) {
+  const silent = !!(opts && opts.silent);
+  if (recording || aiFlowRunning || aiAutoRunning || aiTextRunning) return false;
+
+  closeHistoryDetail();          // 履歴の詳細を見ていたらカード群を録音画面へ戻す
+  resetAiFlowProgress();
+  hideError();
+  setStatus('', '');
+
+  // 文字起こし・議事録・AIの結果
+  liveTranscript.value = '';
+  secSummary.value = ''; secDecisions.value = ''; secTodos.value = '';
+  const aiTextArea = document.getElementById('aiText');
+  if (aiTextArea) aiTextArea.value = '';
+  const aiTextStatusEl = document.getElementById('aiTextStatus');
+  if (aiTextStatusEl) { aiTextStatusEl.hidden = true; aiTextStatusEl.innerHTML = ''; }
+  if (aiResult) aiResult.value = '';
+  if (aiResultWrap) aiResultWrap.hidden = true;
+  if (aiAutoStatus) { aiAutoStatus.hidden = true; aiAutoStatus.innerHTML = ''; }
+
+  // メール（自動で入れた件名・本文も戻す）
+  if (mailSubject) mailSubject.value = '';
+  if (mailBody) mailBody.value = '';
+  mailAuto = { subject: '', body: '' };
+
+  // 録音音声
+  recordedBlob = null;
+  recordedDurationSec = 0;
+  recStartedAt = 0;
+  audioShortfall = null;
+  activeRecordingId = null;
+  if (player) { try { player.pause(); } catch (_) {} player.removeAttribute('src'); player.load(); }
+  if (audioSize) audioSize.textContent = '';
+  if (downloadAudio) downloadAudio.disabled = true;
+  if (downloadWav) downloadWav.disabled = true;
+  setAudioAvailable(false);
+  clearAudioWarning();
+
+  // 自動で付いたタイトルだけ消す（手入力のタイトル・参加者はそのまま次の会議に使える）
+  if (autoTitleApplied && meetingName.value.trim() === autoTitleApplied) {
+    meetingName.value = '';
+    updateMeetingSummary();
+  }
+  autoTitleApplied = '';
+
+  resetFlowCards();
+  updateHomeUI();
+  window.scrollTo({ top: 0, behavior: silent ? 'auto' : 'smooth' });
+  return true;
+}
+
+/* =========================================================
+ * 引き下げてリセット（Chrome の「引き下げて更新」と同じ操作）
+ *   画面の一番上で下へスワイプ → 指を止めるとリングが固定され、
+ *   離すとリセットして録音待機に戻る（内容は履歴に残る）。
+ * =======================================================*/
+const PTR_TRIGGER = 78;   // これ以上引くとリセット
+const PTR_MAX     = 116;  // 引ける上限（これ以上は付いてこない）
+let ptrStartY = 0, ptrDy = 0, ptrTracking = false, ptrArmed = false;
+
+function ptrCanStart(target) {
+  // 録音中・AI処理中・録音画面以外・結果が無いときは何もしない
+  if (recording || aiFlowRunning || aiAutoRunning || aiTextRunning || homeProcessing) return false;
+  const home = document.getElementById('screen-home');
+  if (!home || home.hidden) return false;
+  if (!hasSessionResult()) return false;
+  // ポップアップ／メニューが開いている間は無効
+  if (document.querySelector('.modal-overlay:not([hidden])')) return false;
+  const drawer = document.getElementById('drawer');
+  if (drawer && drawer.classList.contains('open')) return false;
+  // 自分でスクロールできる部品（途中までスクロール済み）の上から始まったスワイプは横取りしない。
+  // 文字起こし欄などは先頭に居るときだけ引き下げを受け付ける（Chromeと同じ感覚）。
+  if (target && target.closest && target.closest('select, audio, input[type="range"]')) return false;
+  if (scrolledInsideAncestor(target)) return false;
+  return window.scrollY <= 0;
+}
+
+/** 触れた位置の親をたどり、内部スクロールが先頭より下にある部品があれば true */
+function scrolledInsideAncestor(node) {
+  let el = node;
+  while (el && el.nodeType === 1 && el !== document.body) {
+    if (el.scrollHeight > el.clientHeight + 1 && el.scrollTop > 0) return true;
+    el = el.parentElement;
+  }
+  return false;
+}
+
+function ptrRender(dy) {
+  if (!ptrEl || !ptrCircle) return;
+  const y = Math.min(PTR_MAX, dy);
+  const ratio = Math.min(1, y / PTR_TRIGGER);
+  ptrEl.classList.add('pulling');
+  ptrEl.classList.toggle('ready', ratio >= 1);
+  ptrEl.style.opacity = String(Math.min(1, ratio * 1.2));
+  ptrCircle.style.transform =
+    `translateY(${Math.round(y * 0.62)}px) scale(${(0.7 + ratio * 0.3).toFixed(3)}) rotate(${Math.round(ratio * 300)}deg)`;
+}
+
+function ptrRelease(fire) {
+  if (!ptrEl || !ptrCircle) return;
+  ptrEl.classList.remove('pulling');
+  ptrEl.classList.add('releasing');
+  if (fire) {
+    // 固定位置で一度回してからリセットする（押した手応えを残す）
+    ptrEl.classList.add('spinning');
+    ptrCircle.style.transform = `translateY(${Math.round(PTR_TRIGGER * 0.62)}px) scale(1)`;
+    setTimeout(() => {
+      resetSession();
+      ptrEl.style.opacity = '0';
+      ptrCircle.style.transform = 'translateY(0) scale(.7)';
+      ptrEl.classList.remove('ready', 'spinning');
+      setTimeout(() => ptrEl.classList.remove('releasing'), 300);
+    }, 420);
+  } else {
+    ptrEl.style.opacity = '0';
+    ptrCircle.style.transform = 'translateY(0) scale(.7)';
+    ptrEl.classList.remove('ready');
+    setTimeout(() => ptrEl.classList.remove('releasing'), 300);
+  }
+}
+
+document.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1 || !ptrCanStart(e.target)) { ptrTracking = false; return; }
+  ptrTracking = true; ptrArmed = false;
+  ptrStartY = e.touches[0].clientY;
+  ptrDy = 0;
+}, { passive: true });
+
+document.addEventListener('touchmove', (e) => {
+  if (!ptrTracking) return;
+  const dy = e.touches[0].clientY - ptrStartY;
+  if (dy <= 0 || window.scrollY > 0) {
+    if (ptrArmed) { ptrArmed = false; ptrRelease(false); }
+    ptrTracking = false;
+    return;
+  }
+  ptrDy = dy;
+  if (!ptrArmed && dy > 8) ptrArmed = true;
+  if (ptrArmed) {
+    if (e.cancelable) e.preventDefault();   // 画面が一緒に動かないようにする
+    ptrRender(dy);
+  }
+}, { passive: false });
+
+function ptrEnd() {
+  if (!ptrTracking) return;
+  const fire = ptrArmed && ptrDy >= PTR_TRIGGER;
+  if (ptrArmed) ptrRelease(fire);
+  ptrTracking = false; ptrArmed = false; ptrDy = 0;
+}
+document.addEventListener('touchend', ptrEnd, { passive: true });
+document.addEventListener('touchcancel', ptrEnd, { passive: true });
 liveTranscript.addEventListener('input', updateHomeUI);
 
 /* ===== タイマー ===== */
@@ -2173,12 +2464,13 @@ function autoTitleFromAiText(text) {
   return '';
 }
 /** タイトルが未入力なら、文字起こし（無ければAI議事録）から自動生成してフィールドへ反映 */
+let autoTitleApplied = '';   // 自動で付けたタイトル（リセット時にこれだけ消す）
 function ensureAutoTitle() {
   if (meetingName.value.trim()) return;
   // 音声をそのままAIに送る運用では文字起こしが空になるため、AIの結果からも拾う
   const t = autoTitleFromTranscript(liveTranscript.value)
          || autoTitleFromAiText(aiResult ? aiResult.value : '');
-  if (t) { meetingName.value = t; updateMeetingSummary(); }
+  if (t) { meetingName.value = t; autoTitleApplied = t; updateMeetingSummary(); }
 }
 
 /* =========================================================
@@ -3431,7 +3723,7 @@ const txtProgressBar   = $('txtProgressBar');
 const txtProgressPct   = $('txtProgressPct');
 const txtProgressLabel = $('txtProgressLabel');
 const txtProgressEta   = $('txtProgressEta');
-let txtTimer = null, txtStart = 0, txtEst = 0, txtStage = '', aiTextRunning = false;
+let txtTimer = null, txtStart = 0, txtEst = 0, txtStage = '';
 
 function setAiTextStatus(kind, html) {
   if (!aiTextStatus) return;
@@ -3490,6 +3782,7 @@ async function runAiTranscribe(opts) {
     return false;
   }
   aiTextRunning = true;
+  updateFabState();
   if (aiTextBtn) aiTextBtn.disabled = true;
   startTxtProgress();
   try {
@@ -3507,6 +3800,7 @@ async function runAiTranscribe(opts) {
     return false;
   } finally {
     aiTextRunning = false;
+    updateFabState();
     if (aiTextBtn) aiTextBtn.disabled = false;
   }
 }
@@ -3660,7 +3954,6 @@ function applyAiOutput(text) {
   return parts;
 }
 
-let aiAutoRunning = false;
 async function runAiAutoMinutes(opts) {
   const auto = !!(opts && opts.auto);
   if (aiAutoRunning) return false; // 二重起動（自動＋手動の同時実行）を防ぐ
@@ -3673,6 +3966,7 @@ async function runAiAutoMinutes(opts) {
     return false;
   }
   aiAutoRunning = true;
+  updateFabState();
   const orig = aiAutoBtn ? aiAutoBtn.innerHTML : '';
   if (aiAutoBtn) { aiAutoBtn.disabled = true; aiAutoBtn.textContent = 'AIが作成中…'; }
   startGenProgress(); // 進捗率と完了までの目安時間を表示
@@ -3711,6 +4005,7 @@ async function runAiAutoMinutes(opts) {
     return false;
   } finally {
     aiAutoRunning = false;
+    updateFabState();
     if (aiAutoBtn) { aiAutoBtn.disabled = false; aiAutoBtn.innerHTML = orig; }
   }
 }
