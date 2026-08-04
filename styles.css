@@ -960,6 +960,7 @@ body.is-recording.is-paused .rec-hint { color: var(--muted); animation: none; }
   /* 固定配置の要素（マイクドック・案内）もコンテンツ領域の中央へ */
   .mic-dock { left: var(--sidebar-w, 288px); right: 0; }
   .idle-prompt, .rec-hint { left: var(--sidebar-w, 288px); right: 0; }
+  .toast { left: calc(50% + var(--sidebar-w, 288px) / 2); }
 
   /* 録音〜メールの段階フローは読みやすい幅で中央寄せ */
   .home-flow { max-width: 820px; margin-left: auto; margin-right: auto; width: 100%; }
@@ -1019,3 +1020,111 @@ body.is-recording.is-paused .rec-hint { color: var(--muted); animation: none; }
 .man-ver{display:flex;align-items:center;justify-content:space-between;margin-top:18px;padding-top:14px;
   border-top:1px solid var(--border);font-weight:800;letter-spacing:.04em}
 .man-ver .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:600;color:var(--muted);letter-spacing:0}
+
+/* =========================================================
+ * 出力テキスト枠の展開ツールバー
+ *   枠の右下に「＜」を固定表示。押すと機能ボタンが左へ時間差で展開し、
+ *   ボタンは「＞」に変わる（もう一度押すと逆順で閉じる）。
+ * =======================================================*/
+.out-box { position: relative; padding-bottom: 46px; }
+
+/* 枠の下端いっぱいに広げつつ、自身は素通し（pointer-events: none）。
+   押せるのは展開ボタンと、展開中の機能ボタンだけ。 */
+.out-tools {
+  position: absolute; left: 4px; right: 4px; bottom: 4px; z-index: 6;
+  display: flex; align-items: flex-end; justify-content: flex-end; gap: 8px;
+  pointer-events: none;
+}
+/* 数が多いときは上へ折り返す（row-reverse + wrap-reverse で右下から左・上へ） */
+.out-actions {
+  display: flex; flex-direction: row-reverse; flex-wrap: wrap-reverse;
+  justify-content: flex-start; align-items: center; gap: 8px; min-width: 0;
+}
+.out-act {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(8px) saturate(140%); -webkit-backdrop-filter: blur(8px) saturate(140%);
+  border: 1px solid var(--border-strong); color: var(--text);
+  border-radius: 999px; padding: 8px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  /* 閉じている間は展開ボタンへ吸い込まれた状態 */
+  opacity: 0; transform: translateX(16px) scale(.82); pointer-events: none;
+  transition: opacity .3s ease, transform .46s cubic-bezier(.22, 1, .36, 1), border-color .16s, color .16s;
+}
+.out-act:hover { border-color: var(--brand1); color: var(--brand1); }
+.out-act:disabled { opacity: .45 !important; cursor: default; }
+.out-act .btn-ico { width: 14px; height: 14px; color: var(--brand1); }
+.out-tools.open .out-act { opacity: 1; transform: none; pointer-events: auto; }
+/* 開く: 展開ボタンに近い方から順に。閉じる: 遠い方から順に消える */
+.out-tools.open .out-act:nth-child(1) { transition-delay: .02s; }
+.out-tools.open .out-act:nth-child(2) { transition-delay: .09s; }
+.out-tools.open .out-act:nth-child(3) { transition-delay: .16s; }
+.out-tools.open .out-act:nth-child(4) { transition-delay: .23s; }
+.out-tools.open .out-act:nth-child(5) { transition-delay: .30s; }
+.out-tools:not(.open) .out-act:nth-child(1) { transition-delay: .24s; }
+.out-tools:not(.open) .out-act:nth-child(2) { transition-delay: .18s; }
+.out-tools:not(.open) .out-act:nth-child(3) { transition-delay: .12s; }
+.out-tools:not(.open) .out-act:nth-child(4) { transition-delay: .06s; }
+.out-tools:not(.open) .out-act:nth-child(5) { transition-delay: 0s; }
+
+.out-toggle {
+  pointer-events: auto;
+  display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0;
+  border: none; border-radius: 50%; cursor: pointer; color: #fff;
+  background: linear-gradient(135deg, var(--brand1), var(--brand2));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--brand1) 34%, transparent);
+  transition: transform .18s ease, box-shadow .2s ease;
+}
+.out-toggle:hover { transform: translateY(-1px); box-shadow: 0 9px 20px color-mix(in srgb, var(--brand1) 44%, transparent); }
+.out-toggle svg { width: 18px; height: 18px; transition: transform .4s cubic-bezier(.22, 1, .36, 1); }
+.out-tools.open .out-toggle svg { transform: rotate(180deg); }
+
+/* ダウンロード形式のミニメニュー（折り返した機能ボタンの真上に出す） */
+.out-menu {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 2;
+  display: flex; flex-direction: column; gap: 6px; padding: 8px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 14px; box-shadow: var(--shadow-lg);
+  opacity: 0; transform: translateY(10px) scale(.95); pointer-events: none;
+  transition: opacity .2s ease, transform .28s cubic-bezier(.22, 1, .36, 1);
+}
+.out-menu.show { opacity: 1; transform: none; pointer-events: auto; }
+.out-menu button {
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+  background: none; border: none; color: var(--text); cursor: pointer;
+  border-radius: 9px; padding: 8px 12px; font-size: 13px; font-weight: 700; text-align: left;
+}
+.out-menu button:hover { background: color-mix(in srgb, var(--brand1) 10%, transparent); color: var(--brand1); }
+.out-menu .btn-ico { width: 15px; height: 15px; color: var(--brand1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .out-act, .out-menu, .out-toggle svg { transition-duration: .12s !important; transition-delay: 0s !important; }
+  .out-act { transform: none; }
+}
+
+/* ---------- 録音中「リアルタイム文字起こしの準備中」表示 ---------- */
+.live-prep { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.live-prep .prep-text {
+  color: var(--brand1); font-size: 13.5px; font-weight: 700; line-height: 1.8;
+  animation: blinkText 1.5s ease-in-out infinite;
+}
+/* 録音後の読み込み表示（.fab-dots）と同じ動きの3点アニメーション */
+.prep-dots { display: inline-flex; align-items: flex-end; gap: 6px; height: 14px; }
+.prep-dots i {
+  display: block; width: 7px; height: 7px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand1), var(--brand2));
+  animation: fabDotHop 1.9s cubic-bezier(.34, .1, .3, 1) infinite;
+}
+.prep-dots i:nth-child(2) { animation-delay: .13s; }
+.prep-dots i:nth-child(3) { animation-delay: .26s; }
+
+/* ---------- トースト（コピー完了など） ---------- */
+.toast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 112px); z-index: 70;
+  transform: translateX(-50%) translateY(12px);
+  background: rgba(20, 24, 40, .93); color: #fff;
+  padding: 10px 20px; border-radius: 999px; font-size: 13px; font-weight: 700;
+  box-shadow: var(--shadow-lg); max-width: 86vw; text-align: center;
+  opacity: 0; pointer-events: none; transition: opacity .22s ease, transform .28s cubic-bezier(.22, 1, .36, 1);
+}
+.toast.show { opacity: 1; transform: translateX(-50%); }

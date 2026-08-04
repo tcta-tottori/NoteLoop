@@ -67,6 +67,9 @@
     </div>
   </nav>
 
+  <!-- 短いお知らせ（コピー完了など） -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
   <main class="app-main">
 
     <!-- ========== ホーム: 録音・文字起こし ========== -->
@@ -121,11 +124,13 @@
         <div class="mini-label-row">
           <label class="mini-label" for="liveTranscript">文字起こし</label>
           <span class="mini-actions">
-            <button id="openTermFix" class="link-btn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> 用語修正</button>
             <button id="clearTranscript" class="link-btn" type="button">クリア</button>
           </span>
         </div>
-        <textarea id="liveTranscript" class="transcript" placeholder="録音中の文字起こしがここに表示されます。停止後に編集できます。"></textarea>
+        <div class="out-box">
+          <textarea id="liveTranscript" class="transcript" placeholder="録音中の文字起こしがここに表示されます。停止後に編集できます。"></textarea>
+          <div class="out-tools" data-out="transcript" data-acts="copy,term"></div>
+        </div>
       </div>
 
       <!-- 録音した音声（再生・音声出力） -->
@@ -151,11 +156,6 @@
           <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> AI文字起こし（Gemini・高精度）</span>
         </div>
         <p class="field-hint">録音した音声の全体を、議事録とは別に文字起こしします。録音中のリアルタイム表示と読み比べられます。</p>
-        <div class="claude-actions" style="margin-top:10px;">
-          <button class="primary-btn" id="aiTextBtn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/></svg> AIで文字起こし</button>
-          <button class="secondary-btn" id="aiTextCopy" type="button">コピー</button>
-          <button class="secondary-btn" id="aiTextUse" type="button">上の文字起こしに反映</button>
-        </div>
         <div class="gen-progress" id="txtProgress" hidden>
           <div class="gen-progress-head">
             <span class="gen-progress-label" id="txtProgressLabel">AIが文字起こし中…</span>
@@ -165,21 +165,20 @@
           <p class="gen-progress-eta" id="txtProgressEta">完了まで約 —</p>
         </div>
         <div class="claude-status" id="aiTextStatus" hidden></div>
-        <textarea id="aiText" class="minutes-area" rows="10" placeholder="「AIで文字起こし」を押すと、ここに高精度な文字起こしが表示されます（録音後は自動でも実行します）。"></textarea>
+        <div class="out-box">
+          <textarea id="aiText" class="minutes-area" rows="10" placeholder="録音を止めると、ここに高精度な文字起こしが自動で表示されます。"></textarea>
+          <div class="out-tools" data-out="aitext" data-acts="copy,term,use,redo"></div>
+        </div>
       </div>
 
       <!-- 議事録づくり（AIに投げる / 貼り付け） -->
       <div class="panel flow-card" id="minutesFlowCard" hidden>
-        <button id="openMeetingInfo" class="meeting-info-btn" type="button">
-          <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg> 情報編集（タイトル・参加者）
-        </button>
         <div id="meetingSummary" class="meeting-summary"></div>
 
         <!-- A. 音声をAIに送る（Gemini）— 文字起こし不要・高精度 -->
         <div class="ai-inline ai-audio">
           <p class="route-title">録音音声から議事録を作成 <span class="route-badge">Gemini・おすすめ</span></p>
           <p class="field-hint" id="aiAutoModeHint"></p>
-          <button class="primary-btn ai-auto-btn" id="aiAutoBtn" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.6L19.5 11l-5.6 1.9L12 18l-1.9-5.1L4.5 11l5.6-2.4z"/><path d="M19 3v4M21 5h-4"/></svg> AIで議事録を作成（自動）</button>
           <!-- 生成中の進捗率と完了までの目安時間 -->
           <div class="gen-progress" id="genProgress" hidden>
             <div class="gen-progress-head">
@@ -192,10 +191,9 @@
           <div class="claude-status" id="aiAutoStatus" hidden></div>
           <div class="ai-result-wrap" id="aiResultWrap" hidden>
             <label class="mini-label" for="aiResult"><span class="tag tag-sum">AI議事録（編集可）</span></label>
-            <textarea id="aiResult" class="minutes-area" rows="12" placeholder="生成された議事録がここに表示されます。メールの件名・本文は下の「メールを作成」に入ります。"></textarea>
-            <div class="claude-actions" style="margin-top:8px;">
-              <button class="secondary-btn" id="aiResultCopy" type="button">コピー</button>
-              <button class="secondary-btn" id="aiResultToMail" type="button">議事録を本文に使う</button>
+            <div class="out-box">
+              <textarea id="aiResult" class="minutes-area" rows="12" placeholder="生成された議事録がここに表示されます。メールの件名・本文は下の「メールを作成」に入ります。"></textarea>
+              <div class="out-tools" data-out="minutes" data-acts="copy,term,info,download,redo"></div>
             </div>
           </div>
           <details class="claude-preview" style="margin-top:12px;">
@@ -211,21 +209,6 @@
           </details>
         </div>
 
-        <details class="minutes-fields">
-          <summary>議事録を貼り付け／編集（任意・メール/書き出し用）</summary>
-        <div class="minutes-section">
-          <label class="mini-label" for="secSummary"><span class="tag tag-sum">要点・見出し</span></label>
-          <textarea id="secSummary" class="minutes-area" rows="4" placeholder="AIの議事録を貼り付け、または手入力。"></textarea>
-        </div>
-        <div class="minutes-section">
-          <label class="mini-label" for="secDecisions"><span class="tag tag-dec">決定事項</span></label>
-          <textarea id="secDecisions" class="minutes-area" rows="4" placeholder="決まったことを貼り付け／手入力。"></textarea>
-        </div>
-        <div class="minutes-section">
-          <label class="mini-label" for="secTodos"><span class="tag tag-todo">ToDo</span></label>
-          <textarea id="secTodos" class="minutes-area" rows="4" placeholder="やること・宿題を貼り付け／手入力。"></textarea>
-        </div>
-        </details>
       </div>
 
       <!-- 書き出し -->
@@ -262,8 +245,10 @@
         </div>
         <div class="field settings-field">
           <label for="mailBody">本文（メールに貼り付ける内容）</label>
-          <textarea id="mailBody" class="minutes-area" rows="12" placeholder="AIで議事録を作成すると、ここに貼り付け用の本文が入ります。手入力や貼り付けもできます。"></textarea>
-          <button id="mailFromMinutes" class="chip-btn" type="button" style="margin-top:8px;">アプリの議事録から本文を作成</button>
+          <div class="out-box">
+            <textarea id="mailBody" class="minutes-area" rows="12" placeholder="録音を止めると、AIが作った貼り付け用の本文がここに入ります。手入力や貼り付けもできます。"></textarea>
+            <div class="out-tools" data-out="mail" data-acts="copy,term,info"></div>
+          </div>
         </div>
         <span class="export-heading">送信・書き出し</span>
         <div class="export-row">
@@ -357,6 +342,15 @@
           <p class="field-hint" id="liveHint"></p>
         </div>
         <div class="field settings-field">
+          <label class="switch-row" for="speakerLabels">
+            <span>
+              話者を自動で判別して表示（A / B …）
+              <span class="field-hint inline">録音中は<strong>声の高さ</strong>の違いから話し手の交代を推定して行頭に A・B などを付けます。停止後の「AI文字起こし」では AI が音声を聞いて話者を分けます。文字起こしの本文には手を加えないため、精度には影響しません（簡易判定のため誤ることがあります）。</span>
+            </span>
+            <input type="checkbox" id="speakerLabels" checked />
+          </label>
+        </div>
+        <div class="field settings-field">
           <label class="switch-row" for="keepAwake">
             <span>
               録音中は画面を常時オン
@@ -420,7 +414,7 @@
           <label class="switch-row" for="aiAutoAfterStop">
             <span>
               録音停止後に自動でAI議事録を作成
-              <span class="field-hint inline">録音を止めると、そのまま録音音声を Gemini に送り、議事録＋メール文面まで自動で作ります。OFFにすると「AIで議事録を作成（自動）」を押したときだけ実行します。</span>
+              <span class="field-hint inline">録音を止めると、そのまま録音音声を Gemini に送り、議事録＋メール文面まで自動で作ります。OFFにすると自動では作りません。AI議事録の枠の右下「＜」→「作り直す」でいつでも作成できます。</span>
             </span>
             <input type="checkbox" id="aiAutoAfterStop" checked />
           </label>
@@ -433,7 +427,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
-          <p class="field-hint">これを設定すると、録音画面の <strong>「AIで議事録を作成（自動）」</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
+          <p class="field-hint">これを設定すると、録音を止めたときの <strong>AI議事録の自動作成</strong> が使えます。録音音声をこのキーで直接 Gemini に送り、議事録＋メールを自動生成します。キーは<strong>この端末内（localStorage）にのみ保存</strong>され、他人には共有されません。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">→ 無料のAPIキーを取得（Google AI Studio）</a></p>
           <div class="settings-field" style="margin-top:8px;">
             <label for="geminiModel" style="font-size:12px;color:var(--muted);">モデル</label>
             <select id="geminiModel">
@@ -527,8 +521,8 @@
         <ol class="man-steps">
           <li><span class="man-n">1</span><div><b>録音する</b><p>「録音」画面の中央下にある丸いマイクボタンをタップ。マイクの使用を許可すると録音が始まり、話しながら文字起こしが画面に表示されます。</p></div></li>
           <li><span class="man-n">2</span><div><b>停止する</b><p>もう一度ボタンをタップで停止。文字起こしが整い、下部に「録音した音声」の再生・保存が表示されます。誤変換のループは自動で除去されます。中断したいときは <b>右下の一時停止ボタン</b>（録音中だけ出ます）で止めて、同じボタンで続きから再開できます。止めていた間は音声にも録音時間にも入りません。</p></div></li>
-          <li><span class="man-n">3</span><div><b>議事録ができるのを待つ</b><p>停止すると、<b>そのまま録音音声が Gemini に送られ、議事録＋メール文面が自動で作られます</b>（数十秒）。画面上部に<b>進捗バーと「完了まで約○分」</b>が出て、録音ボタンの位置は<b>白い丸の読み込み表示（点が3つ）</b>に変わります。できあがると読み込み表示は消え、画面が結果までスクロールします。文面はその場で編集でき、メール本文にも反映済みです。<br>自動で作らせたくないときは <b>設定 → AI連携 →「録音停止後に自動でAI議事録を作成」</b> をOFFにしてください。OFFのときは「AIで議事録を作成（自動）」ボタンで作れます。</p></div></li>
-          <li><span class="man-n">4</span><div><b>文字起こしを見比べる（任意）</b><p>「<b>AI文字起こし（Gemini・高精度）</b>」に、録音全体をAIが起こした文章が出ます。録音中のリアルタイム表示と読み比べ、必要なら「上の文字起こしに反映」で差し替えられます。</p></div></li>
+          <li><span class="man-n">3</span><div><b>議事録ができるのを待つ</b><p>停止すると、<b>そのまま録音音声が Gemini に送られ、議事録＋メール文面が自動で作られます</b>（数十秒）。画面上部に<b>進捗バーと「完了まで約○分」</b>が出て、録音ボタンの位置は<b>白い丸の読み込み表示（点が3つ）</b>に変わります。できあがると読み込み表示は消え、画面が結果までスクロールします。文面はその場で編集でき、メール本文にも反映済みです。<br>自動で作らせたくないときは <b>設定 → AI連携 →「録音停止後に自動でAI議事録を作成」</b> をOFFにしてください。OFFのときは、AI議事録の枠の右下「＜」を押して出てくる「作り直す」で作れます。</p></div></li>
+          <li><span class="man-n">4</span><div><b>文字起こしを見比べる（任意）</b><p>「<b>AI文字起こし（Gemini・高精度）</b>」に、録音全体をAIが起こした文章が出ます。録音中のリアルタイム表示と読み比べ、必要なら枠の右下「＜」→「上に反映」で差し替えられます。</p></div></li>
           <li><span class="man-n">5</span><div><b>出力・共有する</b><p>txt / Word / メールで書き出し。<b>一覧に保存</b>で履歴に残せます。</p></div></li>
           <li><span class="man-n">6</span><div><b>次の会議を録る</b><p>議事録ができると録音ボタンは消えます。<b>画面の一番下までスクロール</b>すると録音ボタンが出てくるのでタップ。または<b>画面のいちばん上で下へ引き下げて離す</b>（Chromeの「引き下げて更新」と同じ操作）と、画面が録音待機に戻ります。<b>どちらの場合も、今の議事録・録音音声は履歴に残ります。</b></p></div></li>
         </ol>
@@ -551,7 +545,7 @@
           <table class="man-table">
             <thead><tr><th>役割</th><th>使う技術</th><th>特徴</th></tr></thead>
             <tbody>
-              <tr><td>録音中のライブ表示</td><td>アプリ版=端末内Whisper／ブラウザ版=Web Speech</td><td>アプリ版は録音中の音声をそのまま端末内で文字起こし（外部送信なし・数秒ごとに表示・初回のみモデル約40MBを読み込み）。ブラウザ版は Web Speech でリアルタイム表示（音声はGoogleへ送信・要ネット）。</td></tr>
+              <tr><td>録音中のライブ表示</td><td>アプリ版=端末内Whisper／ブラウザ版=Web Speech</td><td>アプリ版は録音中の音声をそのまま文字起こし（<b>7秒ごとに更新</b>／APIキーがあればGemini、無ければ端末内Whisperで外部送信なし）。ブラウザ版は Web Speech でリアルタイム表示（音声はGoogleへ送信・要ネット）。</td></tr>
               <tr><td>記録</td><td>MediaRecorder</td><td>音声を m4a で保存。ライブと並行。</td></tr>
               <tr><td>確定・議事録（推奨）</td><td>音声 → Gemini</td><td>停止後に「音声をAIに送る」。音声から直接、高精度な議事録＋メールを作成。</td></tr>
               <tr><td>確定（任意）</td><td>Whisper（端末内）</td><td>設定で「停止後にWhisperで文字起こし」を選ぶと、オフラインでも確定文字起こし。長い録音・スマホでは時間がかかる。</td></tr>
@@ -574,7 +568,9 @@
       <div class="panel" id="man-tips">
         <h3 class="settings-group-title">便利な機能</h3>
         <ul class="man-def">
-          <li><b>用語の修正・辞書</b><span>文字起こし上部の「用語修正」で、会社名など誤変換されやすい語を一括置換。辞書に登録すると録音後に自動でチェックします。</span></li>
+          <li><b>枠内の展開ボタン</b><span>文字起こし・AI文字起こし・AI議事録・メール本文の各枠の<b>右下にある「＜」</b>を押すと、機能ボタンが左へ順に開きます（もう一度「＞」で閉じます）。<b>コピー</b>（枠内の全文）／<b>用語修正</b>／<b>情報編集</b>（議事録・メール）／<b>ダウンロード</b>（議事録: .txt・Word・.md）／<b>作り直す</b>がここにまとまっています。作成ボタンは廃止し、録音を止めるとAIが自動で作ります。</span></li>
+          <li><b>話者の自動判別（A / B …）</b><span>設定でオンにすると、録音中は<b>声の高さ</b>から話し手の交代を推定して行頭に A・B などを付けます。停止後の「AI文字起こし」ではAIが音声を聞いて話者を分けます。文字起こしの本文には手を加えないので、精度には影響しません。</span></li>
+          <li><b>用語の修正・辞書</b><span>枠の展開ボタン内の「用語修正」で、会社名など誤変換されやすい語を<b>文字起こし・AI文字起こし・AI議事録・メール本文まとめて</b>一括置換。辞書に登録すると録音後に自動でチェックします。</span></li>
           <li><b>会議情報</b><span>タイトル・日付・参加者（部署＋氏名）を録音の前・最中・後いつでも入力でき、出力にも反映されます。</span></li>
           <li><b>引き下げてリセット</b><span>画面のいちばん上で下へスワイプすると丸い矢印が出ます。そのまま引いて離すと、画面が録音待機に戻ります（Chromeの「引き下げて更新」と同じ操作）。<b>今の議事録・録音音声は履歴に残る</b>ので、そのまま次の会議を録れます。</span></li>
           <li><b>録音ボタンの出し入れ</b><span>議事録ができたあとは、読みやすいように録音ボタンを隠します。<b>画面の一番下までスクロール</b>すると出てきて、上に戻すとまた消えます。</span></li>
