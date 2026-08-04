@@ -47,6 +47,29 @@ public class RecorderPlugin extends Plugin {
         call.resolve(r);
     }
 
+    /**
+     * 録音中だけ、ステータスバーと下部（ナビゲーションバー）を赤くする。
+     * Web 側の赤い枠は WebView の内側にしか描けないため、画面のいちばん外まで
+     * 赤くするにはここでウィンドウの色を変える必要がある。
+     */
+    @PluginMethod
+    public void setRecordingBars(PluginCall call) {
+        final boolean on = Boolean.TRUE.equals(call.getBoolean("recording", false));
+        final android.app.Activity act = getActivity();
+        if (act == null) { call.resolve(); return; }
+        act.runOnUiThread(() -> {
+            try {
+                android.view.Window win = act.getWindow();
+                int color = on
+                        ? android.graphics.Color.parseColor("#E11D28")
+                        : androidx.core.content.ContextCompat.getColor(act, R.color.statusBar);
+                win.setStatusBarColor(color);
+                win.setNavigationBarColor(color);
+            } catch (Throwable ignored) { /* 色を変えられなくても録音には影響しない */ }
+        });
+        call.resolve();
+    }
+
     @PluginMethod
     public void start(PluginCall call) {
         boolean needMic = getPermissionState("microphone") != com.getcapacitor.PermissionState.GRANTED;

@@ -532,29 +532,29 @@ body.is-recording .wave-timer { color: #fff; }
 .live-now-body .live-line.now { color: var(--text); font-weight: 700; }
 .live-now-body .live-wait { color: var(--faint); font-size: 13px; font-weight: 600; line-height: 1.7; }
 
-/* ---------- 録音中: 画面外枠の赤い枠＋内側へ広がる波 ---------- */
+/* ---------- 録音中: 画面外枠の赤い枠（明るさを強弱させる） ---------- */
 .rec-frame { position: fixed; inset: 0; z-index: 70; pointer-events: none; }
-.rec-frame > span { position: absolute; inset: 0; border-radius: 26px; }
 .rec-frame-edge {
-  border: 4px solid rgba(239, 68, 68, .95);
-  box-shadow: 0 0 22px rgba(239, 68, 68, .55), inset 0 0 30px rgba(239, 68, 68, .28);
-  animation: recEdgeBlink 1.1s ease-in-out infinite;   /* 録音ボタンの点滅と同じリズム */
+  /* 角は丸めない。アプリ版はステータスバー・下部バーも赤くするので、
+     画面のいちばん外まで赤がつながって見える。 */
+  position: absolute; inset: 0;
+  border: 10px solid rgba(225, 29, 40, .95);
+  box-shadow: 0 0 26px rgba(225, 29, 40, .6), inset 0 0 34px rgba(225, 29, 40, .3);
+  /* 録音ボタンの点滅と同じリズムで、枠の明るさを強弱させる */
+  animation: recEdgePulse 1.4s ease-in-out infinite;
 }
-.rec-frame-wave {
-  border: 3px solid rgba(239, 68, 68, .7);
-  opacity: 0; transform: scale(1);
-  animation: recWaveIn 1.5s ease-out infinite;         /* 枠から内側へ波が広がる */
-}
-.rec-frame-wave:nth-of-type(3) { animation-delay: .5s; }
-.rec-frame-wave:nth-of-type(4) { animation-delay: 1s; }
-@keyframes recEdgeBlink { 0%, 100% { opacity: 1; } 50% { opacity: .48; } }
-@keyframes recWaveIn {
-  0%   { opacity: .7; transform: scale(1); }
-  100% { opacity: 0;  transform: scale(.78); }
+@keyframes recEdgePulse {
+  0%, 100% {
+    border-color: rgba(225, 29, 40, .95);
+    box-shadow: 0 0 26px rgba(225, 29, 40, .6), inset 0 0 34px rgba(225, 29, 40, .3);
+  }
+  50% {
+    border-color: rgba(225, 29, 40, .38);
+    box-shadow: 0 0 10px rgba(225, 29, 40, .2), inset 0 0 14px rgba(225, 29, 40, .1);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .rec-frame-edge { animation: none; }
-  .rec-frame-wave { display: none; }
 }
 
 /* ---------- 議事録の生成中（進捗率・完了目安時間） ---------- */

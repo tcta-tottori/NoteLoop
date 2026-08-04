@@ -137,8 +137,12 @@ const meetingModalDone  = $('meetingModalDone');
 const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
+// 画面いちばん外のバー（ステータスバー／下部）の色。録音中だけ赤にする。
+const BASE_BAR_COLOR = '#17181b';
+const REC_BAR_COLOR  = '#e11d28';
+
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.1';
+const APP_VERSION = 'Ver.7.2';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -388,10 +392,28 @@ function updateHomeUI() {
   if (showWave) startWave(); else stopWave();
 }
 
-/** 録音中だけ画面の外枠に赤い枠＋内側へ広がる波を表示する */
+/** 録音中だけ画面の外枠を赤くする（ステータスバー・下部のバーも含めて） */
+let recBarsOn = null;
 function updateRecFrame() {
   document.body.classList.toggle('is-recording', recording);
   if (recFrame) recFrame.hidden = !recording;
+  setSystemBarsRecording(recording);
+}
+
+/**
+ * 画面いちばん外のステータスバー／下部バーの色を切り替える。
+ * アプリ版はネイティブ側（Recorder.setRecordingBars）で、ブラウザ版は
+ * theme-color を差し替えて赤くする。
+ */
+function setSystemBarsRecording(on) {
+  if (recBarsOn === on) return;
+  recBarsOn = on;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', on ? REC_BAR_COLOR : BASE_BAR_COLOR);
+  const rec = nativeRecorder();
+  if (rec && typeof rec.setRecordingBars === 'function') {
+    try { rec.setRecordingBars({ recording: on }); } catch (_) { /* 古い版のアプリでは何もしない */ }
+  }
 }
 
 /**
@@ -1926,8 +1948,11 @@ function drawWaveFrame() {
   ctx.clearRect(0, 0, w, h);
 
   // 等間隔・同じ太さで並べる（見た目は白一色のシンプルなゲージ）。
-  const count = Math.max(13, Math.min(25, Math.round(w / 40)));
-  const pitch = w / (count + 1);                   // 左右に同じ余白を残して等間隔に
+  // 幅から決めた本数から、左右の端を2本ずつ減らして余白を作る。
+  const full = Math.max(13, Math.min(25, Math.round(w / 40)));
+  const pitch = w / (full + 1);                    // 間隔は端まで並べたときのまま
+  const count = Math.max(5, full - 4);             // 端の2本ずつを描かない
+  const left = (w - (count - 1) * pitch) / 2;      // 残りを中央に寄せる
   // バーの太さ（無音時の「点」の大きさでもある）。高さに対して太くなりすぎ
   // ないよう抑える（横長の画面でバーが潰れて高さの差が出なくなるのを防ぐ）。
   const barW = Math.max(4, Math.min(Math.round(pitch * 0.32), Math.round(h * 0.1)));
@@ -1962,7 +1987,7 @@ function drawWaveFrame() {
 
     b.w = barW;                                    // 太さも揃える
     b.h = Math.max(b.w, minH + (maxH - minH) * b.v);
-    b.x = (i + 1) * pitch - b.w / 2;               // 位置は等間隔（ずらさない）
+    b.x = left + i * pitch - b.w / 2;              // 位置は等間隔（ずらさない）
     rrectPath(ctx, b.x, mid - b.h / 2, b.w, b.h, b.w / 2);
   }
   ctx.fill();
