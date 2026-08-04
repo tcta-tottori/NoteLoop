@@ -195,6 +195,37 @@ public class RecorderPlugin extends Plugin {
         }).start();
     }
 
+    /* ===== 一時停止 / 再開 =====
+     * 音声の書き出しと経過時間を同時に止める。マイクは掴んだままなので、
+     * 再開時に他のアプリへ持っていかれる心配がない。 */
+
+    @PluginMethod
+    public void pause(PluginCall call) { applyPaused(call, true); }
+
+    @PluginMethod
+    public void resume(PluginCall call) { applyPaused(call, false); }
+
+    private void applyPaused(PluginCall call, boolean wantPause) {
+        if (!RecordingService.isRecording()) {
+            call.reject("録音していません");
+            return;
+        }
+        RecordingService.setPaused(getContext(), wantPause);
+        // サービスへの伝達は非同期。反映を少しだけ待って結果を返す。
+        new Thread(() -> {
+            for (int i = 0; i < 40 && RecordingService.isPaused() != wantPause; i++) {
+                try { Thread.sleep(25); } catch (InterruptedException ignored) { break; }
+            }
+            final boolean now = RecordingService.isPaused();
+            runOnMain(() -> {
+                JSObject r = new JSObject();
+                r.put("paused", now);
+                r.put("elapsedMs", RecordingService.getElapsedMs());
+                call.resolve(r);
+            });
+        }).start();
+    }
+
     /** 録音中の音量（0.0〜1.0）。画面上のゲージ表示に使う。 */
     @PluginMethod
     public void getLevel(PluginCall call) {
@@ -282,6 +313,7 @@ public class RecorderPlugin extends Plugin {
     public void getStatus(PluginCall call) {
         JSObject r = new JSObject();
         r.put("recording", RecordingService.isRecording());
+        r.put("paused", RecordingService.isPaused());
         r.put("elapsedMs", RecordingService.getElapsedMs());
         // 診断用: 定期読み取りが生きているか（getLevel より先に読む）と、
         // いまの音量（0..1）、マイクから読めた生の振幅（0..32767 / -1 は未取得）

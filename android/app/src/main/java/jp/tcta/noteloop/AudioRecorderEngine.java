@@ -36,6 +36,8 @@ public class AudioRecorderEngine {
     private Thread thread;
 
     private volatile boolean running = false;
+    /** 一時停止中。マイクは開いたまま読み捨てるので、音声にも時間にも入らない。 */
+    private volatile boolean paused = false;
     private volatile String error = null;
     /** 前回 takePeak() を呼んでからの最大振幅（0..32767）。MediaRecorder と同じ意味。 */
     private volatile int peak = 0;
@@ -53,6 +55,19 @@ public class AudioRecorderEngine {
 
     public String getError() { return error; }
     public boolean isRunning() { return running; }
+    public boolean isPaused() { return paused; }
+
+    /**
+     * 一時停止／再開。
+     * 止めている間もマイクからは読み続けて捨てる（バッファに古い音が溜まって
+     * 再開直後に流れ込むのを防ぐ）。エンコードしないので、出来上がる音声は
+     * 止めていた分だけ詰まった状態になる。
+     */
+    public void setPaused(boolean p) {
+        paused = p;
+        if (p) peak = 0;                                   // ゲージを点に戻す
+        if (p) synchronized (pcmBuf) { pcmBuf.reset(); }   // 途中まで溜めた分は捨てる
+    }
 
     /** 前回呼んでからの最大振幅（0..32767）を返し、内部の記録をリセットする */
     public int takePeak() {
@@ -102,6 +117,7 @@ public class AudioRecorderEngine {
             }
 
             running = true;
+            paused = false;
             peak = 0;
             wroteAny = false;
             totalSamples = 0;
@@ -139,6 +155,7 @@ public class AudioRecorderEngine {
     /** 録音を止め、ファイルを閉じる。書き出しが終わるまで待つ。 */
     public void stop() {
         running = false;
+        paused = false;
         Thread t = thread;
         if (t != null) {
             try { t.join(4000); } catch (InterruptedException ignored) {}
@@ -159,6 +176,7 @@ public class AudioRecorderEngine {
             while (running) {
                 int n = record.read(buf, 0, buf.length);
                 if (n > 0) {
+                    if (paused) continue;   // 一時停止中は読み捨てる（音声にも時間にも含めない）
                     updatePeak(buf, n);
                     if (pcmTap) tapPcm(buf, n);
                     encode(buf, n);
