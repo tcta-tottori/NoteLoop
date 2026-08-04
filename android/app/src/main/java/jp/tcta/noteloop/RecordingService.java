@@ -165,6 +165,25 @@ public class RecordingService extends Service {
     /** 診断用: 直近に読めた生の振幅（0..32767）。-1 は一度も読めていない。 */
     public static int getLastAmp() { return lastAmp; }
 
+    /* ===== ライブ文字起こし用の PCM 取り出し =====
+       録音しているのと同じ読み取りを横取りして渡すだけなので、マイクを
+       二重に開かずに済む（＝録音中でも文字起こしができる）。 */
+
+    /** PCM を取り出せる録音エンジンか（自前エンジンのときだけ取れる） */
+    public static boolean canTapPcm() { return engine != null; }
+
+    /** PCM の取り出しを開始／終了する */
+    public static void setPcmTap(boolean on) {
+        AudioRecorderEngine eng = engine;
+        if (eng != null) eng.setPcmTap(on);
+    }
+
+    /** 溜まった PCM（16kHz / 16bit / モノラル）。無ければ null。 */
+    public static byte[] takePcm() {
+        AudioRecorderEngine eng = engine;
+        return eng != null ? eng.takePcm() : null;
+    }
+
     /** 診断用: いま使っている録音エンジン */
     public static String getEngineName() {
         if (engine != null) return "AudioRecord";

@@ -47,29 +47,6 @@ public class RecorderPlugin extends Plugin {
         call.resolve(r);
     }
 
-    /**
-     * 録音中だけ、ステータスバーと下部（ナビゲーションバー）を赤くする。
-     * Web 側の赤い枠は WebView の内側にしか描けないため、画面のいちばん外まで
-     * 赤くするにはここでウィンドウの色を変える必要がある。
-     */
-    @PluginMethod
-    public void setRecordingBars(PluginCall call) {
-        final boolean on = Boolean.TRUE.equals(call.getBoolean("recording", false));
-        final android.app.Activity act = getActivity();
-        if (act == null) { call.resolve(); return; }
-        act.runOnUiThread(() -> {
-            try {
-                android.view.Window win = act.getWindow();
-                int color = on
-                        ? android.graphics.Color.parseColor("#E11D28")
-                        : androidx.core.content.ContextCompat.getColor(act, R.color.statusBar);
-                win.setStatusBarColor(color);
-                win.setNavigationBarColor(color);
-            } catch (Throwable ignored) { /* 色を変えられなくても録音には影響しない */ }
-        });
-        call.resolve();
-    }
-
     @PluginMethod
     public void start(PluginCall call) {
         boolean needMic = getPermissionState("microphone") != com.getcapacitor.PermissionState.GRANTED;
@@ -254,6 +231,50 @@ public class RecorderPlugin extends Plugin {
     @PluginMethod
     public void stopLevelUpdates(PluginCall call) {
         if (levelHandler != null) levelHandler.removeCallbacks(levelPush);
+        call.resolve();
+    }
+
+    /* ===== ライブ文字起こし用の PCM 送信 =====
+     * 録音サービスがマイクから読んでいる PCM をそのまま Web 側へ渡す。
+     * マイクを二重に開かないので、録音中でも文字起こしができる。 */
+    private static final long PCM_PUSH_MS = 1000L;
+    private Handler pcmHandler;
+    private final Runnable pcmPush = new Runnable() {
+        @Override
+        public void run() {
+            if (!RecordingService.isRecording()) return; // 録音が終われば自然に止まる
+            byte[] pcm = RecordingService.takePcm();
+            if (pcm != null && pcm.length > 0) {
+                JSObject ev = new JSObject();
+                ev.put("data", android.util.Base64.encodeToString(pcm, android.util.Base64.NO_WRAP));
+                ev.put("sampleRate", 16000);
+                notifyListeners("pcm", ev);
+            }
+            if (pcmHandler != null) pcmHandler.postDelayed(this, PCM_PUSH_MS);
+        }
+    };
+
+    /** PCM の送信を始める。取り出せない録音エンジンのときは available:false を返す。 */
+    @PluginMethod
+    public void startPcmUpdates(PluginCall call) {
+        JSObject r = new JSObject();
+        if (!RecordingService.canTapPcm()) {
+            r.put("available", false);
+            call.resolve(r);
+            return;
+        }
+        RecordingService.setPcmTap(true);
+        if (pcmHandler == null) pcmHandler = new Handler(Looper.getMainLooper());
+        pcmHandler.removeCallbacks(pcmPush);
+        pcmHandler.postDelayed(pcmPush, PCM_PUSH_MS);
+        r.put("available", true);
+        call.resolve(r);
+    }
+
+    @PluginMethod
+    public void stopPcmUpdates(PluginCall call) {
+        if (pcmHandler != null) pcmHandler.removeCallbacks(pcmPush);
+        RecordingService.setPcmTap(false);
         call.resolve();
     }
 
