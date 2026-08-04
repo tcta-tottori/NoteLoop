@@ -40,6 +40,8 @@ public class RecordingService extends Service {
 
     public static final String ACTION_START = "jp.tcta.noteloop.START";
     public static final String ACTION_STOP = "jp.tcta.noteloop.STOP";
+    public static final String ACTION_PAUSE = "jp.tcta.noteloop.PAUSE";
+    public static final String ACTION_RESUME = "jp.tcta.noteloop.RESUME";
     public static final String EXTRA_OUTPUT_PATH = "outputPath";
 
     private static final String TAG = "NoteLoopRec";
@@ -54,31 +56,36 @@ public class RecordingService extends Service {
     /** 通知のゲージを描き替える間隔（音量の読み取り何回ぶんか）。 */
     private static final int NOTIF_EVERY_AWAKE = 5;   // 画面が点いている: 0.25秒ごと
     private static final int NOTIF_EVERY_ASLEEP = 20; // 画面が消えている: 1秒ごと（誰も見ていないので粗く）
+    private static final int NOTIF_EVERY_PAUSED = 40; // 一時停止中: 2秒ごと（何も動かないので更に粗く）
 
-    /** 通知に描くゲージ画像の大きさ（px）。表示側で横幅いっぱいに引き伸ばす。
+    /** 通知に描くゲージ画像の大きさ（px）。通知の左側に置き、表示側で引き伸ばす。
      *  通知の更新ごとに画像を送るため、大きくしすぎない。 */
-    private static final int GAUGE_W = 420;
-    private static final int GAUGE_H = 48;
+    private static final int GAUGE_W = 200;
+    private static final int GAUGE_H = 80;
     /** ゲージのバーの本数（位置は固定で、音量に応じて上下に伸びる） */
-    private static final int BARS = 16;
+    private static final int BARS = 5;
     /** これ以下の音は「無音」として扱う（振幅の全体に対する割合＝約 650/32767） */
     private static final float LEVEL_GATE = 0.02f;
     /** ここで振り切れる（＝約 11500/32767。会議の声で上まで届く高さ） */
     private static final float LEVEL_FULL = 0.35f;
-    /** バーの色（左が濃い青 → 右へ明るい水色。アプリ画面のゲージと同じ配色） */
-    private static final int[] GAUGE_COLORS = { 0xFF2F4FC8, 0xFF3B6FE0, 0xFF4F9BF2, 0xFF7FD2FB };
-    private static final float[] GAUGE_STOPS = { 0f, 0.35f, 0.62f, 1f };
+    /** バーの色（アプリのブランド色。明るい通知でも暗い通知でも見える中間の明度） */
+    private static final int[] GAUGE_COLORS = { 0xFF6E86FF, 0xFF8B8CFF, 0xFFA68CFF };
+    private static final float[] GAUGE_STOPS = { 0f, 0.55f, 1f };
 
     /** 録音状態。プラグインから参照するのでプロセス内で共有する。 */
     private static volatile boolean recording = false;
     private static volatile String currentPath = null;
     private static volatile long startedAtElapsed = 0L;
     private static volatile String lastError = null;
+    /** 一時停止中か。止めている間は音声も経過時間も進まない。 */
+    private static volatile boolean paused = false;
+    private static volatile long pausedAtElapsed = 0L;   // 一時停止を始めた時刻
+    private static volatile long pausedTotalMs = 0L;     // 止めていた合計時間
 
     private MediaRecorder recorder;
 
-    /** 通知のゲージ更新用。通知を作り直さず、同じ Builder を使い回す。 */
-    private NotificationCompat.Builder notifBuilder;
+    /** 通知を開いたときの遷移先（アプリを前面に出す） */
+    private PendingIntent contentPi;
     /* 音量の読み取りと通知の描き替えは専用スレッドで回す。
      * 画像の生成と通知の送信はそれなりに重く、UI スレッドでやると
      * WebView とのやり取り（＝画面のゲージ）まで巻き込んで遅くなる。 */
@@ -101,19 +108,16 @@ public class RecordingService extends Service {
     /** 自前の録音エンジン（こちらが使えるときは常にこちら） */
     private static volatile AudioRecorderEngine engine = null;
 
-    /**
-     * ステータスバーに出す小さいアイコンのコマ。
-     * 通知を出し直すたびに差し替えることで、録音中はイコライザーが動いて見える
-     * （YouTube などの再生中表示と同じ位置に出る）。音が無いときは平らなコマ。
-     */
-    private static final int[] EQ_FRAMES = {
-            R.drawable.ic_rec_eq_0, R.drawable.ic_rec_eq_1, R.drawable.ic_rec_eq_2,
-            R.drawable.ic_rec_eq_3, R.drawable.ic_rec_eq_4, R.drawable.ic_rec_eq_5,
-    };
-    private int eqFrame = 0;
-    /** 広げたときのゲージ（作り直しは間引く） */
+    /* ステータスバーのアイコンは動かさず、マイクの形のまま出す（ic_stat_mic）。
+     * 以前はイコライザーのコマを送って動かしていたが、何のアプリの表示か
+     * ひと目で分からないため、静止したマイクにそろえた。 */
+
+    /** 通知のビュー（作り直しは間引く） */
+    private RemoteViews contentView;
     private RemoteViews bigView;
-    private long bigViewAt = 0L;
+    private long viewsAt = 0L;
+    /** 通知のボタン（一時停止 / 再開 / 録音完了）の送り先 */
+    private PendingIntent stopPi, pausePi, resumePi;
 
     /** 各バーの現在の高さ（0..1）。位置は固定なので、ここだけが動く。 */
     private final float[] barV = new float[BARS];
@@ -123,9 +127,10 @@ public class RecordingService extends Service {
         @Override
         public void run() {
             if (!recording) return;
-            sampleLevel();
+            if (!paused) sampleLevel();
             if (--notifCountdown <= 0) {
-                notifCountdown = isScreenOn() ? NOTIF_EVERY_AWAKE : NOTIF_EVERY_ASLEEP;
+                notifCountdown = paused ? NOTIF_EVERY_PAUSED
+                        : (isScreenOn() ? NOTIF_EVERY_AWAKE : NOTIF_EVERY_ASLEEP);
                 updateGauge();
             }
             if (gaugeHandler != null) gaugeHandler.postDelayed(this, LEVEL_TICK_MS);
@@ -148,6 +153,7 @@ public class RecordingService extends Service {
     }
 
     public static boolean isRecording() { return recording; }
+    public static boolean isPaused() { return paused; }
 
     /**
      * 録音中の音量（0.0〜1.0）。画面上のゲージ表示に使う。
@@ -157,7 +163,7 @@ public class RecordingService extends Service {
      * 値が古いときはこの場で読み直す（保険）。
      */
     public static float getLevel() {
-        if (!recording) return 0f;
+        if (!recording || paused) return 0f;   // 一時停止中はゲージを止める
         if (SystemClock.elapsedRealtime() - lastSampleAt > 500L) sampleLevelNow();
         return level;
     }
@@ -202,9 +208,19 @@ public class RecordingService extends Service {
     public static String getCurrentPath() { return currentPath; }
     public static String getLastError() { return lastError; }
 
-    /** 録音開始からの経過ミリ秒（端末のスリープ中も進む時計を使う） */
+    /** 録音開始からの経過ミリ秒（端末のスリープ中も進む時計を使う。一時停止した分は含まない） */
     public static long getElapsedMs() {
-        return recording && startedAtElapsed > 0 ? SystemClock.elapsedRealtime() - startedAtElapsed : 0L;
+        if (!recording || startedAtElapsed <= 0) return 0L;
+        long base = (paused && pausedAtElapsed > 0) ? pausedAtElapsed : SystemClock.elapsedRealtime();
+        return Math.max(0L, base - startedAtElapsed - pausedTotalMs);
+    }
+
+    /** 経過時間を "01:23"（1時間を超えたら "1:01:23"）の形にする */
+    private static String formatElapsed() {
+        long sec = getElapsedMs() / 1000L;
+        long h = sec / 3600, m = (sec % 3600) / 60, s = sec % 60;
+        return h > 0 ? String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, s)
+                     : String.format(java.util.Locale.US, "%02d:%02d", m, s);
     }
 
     @Override
@@ -217,6 +233,11 @@ public class RecordingService extends Service {
             stopRecording();
             stopSelf();
             return START_NOT_STICKY;
+        }
+        // 通知のボタン／アプリ画面からの一時停止・再開。サービスは止めない。
+        if (ACTION_PAUSE.equals(action) || ACTION_RESUME.equals(action)) {
+            setPaused(ACTION_PAUSE.equals(action));
+            return START_STICKY;
         }
         if (ACTION_START.equals(action)) {
             String path = intent.getStringExtra(EXTRA_OUTPUT_PATH);
@@ -237,43 +258,55 @@ public class RecordingService extends Service {
         open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT
                 | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
-        PendingIntent contentPi = PendingIntent.getActivity(this, 0, open, piFlags);
+        contentPi = PendingIntent.getActivity(this, 0, open, piFlags);
+        stopPi = PendingIntent.getService(this, 1,
+                new Intent(this, RecordingService.class).setAction(ACTION_STOP), piFlags);
+        pausePi = PendingIntent.getService(this, 2,
+                new Intent(this, RecordingService.class).setAction(ACTION_PAUSE), piFlags);
+        resumePi = PendingIntent.getService(this, 3,
+                new Intent(this, RecordingService.class).setAction(ACTION_RESUME), piFlags);
 
-        Intent stop = new Intent(this, RecordingService.class).setAction(ACTION_STOP);
-        PendingIntent stopPi = PendingIntent.getService(this, 1, stop, piFlags);
-
-        // たたんだ状態（ロック画面で見えるもの）は OS 標準の体裁のままにする。
-        // カスタムビューは端末のUIによっては描画されないことがあり、
-        // 「通知そのものが見えない」事故につながるため、まず確実に出す方を優先する。
-        //   ・経過時間 … setUsesChronometer（OS が数えるのでズレない）
-        //   ・音量    … setProgress のバー（0.4秒ごとに更新）
-        // 広げた状態では、アプリ画面と同じ縦バーのゲージ（自前で描いた画像）を出す。
-        notifBuilder = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("● 録音中")
-                .setContentText("画面を消しても録音は続いています")
-                .setSmallIcon(R.drawable.ic_rec_eq_flat)
-                .setContentIntent(contentPi)
-                .addAction(0, "停止", stopPi)
-                .setOngoing(true)
-                .setSilent(true)
-                .setOnlyAlertOnce(true)
-                .setShowWhen(true)
-                .setWhen(System.currentTimeMillis())
-                .setUsesChronometer(true)
-                // ロック画面でも内容（経過時間・ゲージ）が見えるようにする
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setCategory(NotificationCompat.CATEGORY_SERVICE)
-                .setProgress(100, 2, false)
-                .setStyle(new NotificationCompat.DecoratedCustomViewStyle());
-        applyGaugeViews();
-
-        Notification n = notifBuilder.build();
+        Notification n = buildNotification();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
         } else {
             startForeground(NOTIF_ID, n);
         }
+    }
+
+    /**
+     * 録音中の通知を組み立てる。
+     *
+     * 中身は録音アプリでよくある並びにそろえてある（自前のレイアウト）。
+     *   左＝音量のゲージ（バー5本） / 中央＝録音時間 / 右＝一時停止・録音完了
+     * DecoratedCustomViewStyle なので、アプリ名と小アイコンの行は OS が描く。
+     * 端末によってはカスタムビューが描かれないことがあるため、同じ操作を
+     * 標準のアクションボタンとしても付けておく（広げたときに出る）。
+     */
+    private Notification buildNotification() {
+        applyGaugeViews();
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle((paused ? "❚❚ 一時停止中　" : "● 録音中　") + formatElapsed())
+                .setContentText(paused
+                        ? "再開すると続きから録音します"
+                        : "画面を消しても録音は続いています")
+                .setSmallIcon(R.drawable.ic_stat_mic)   // 動かないマイクのアイコン
+                .setContentIntent(contentPi)
+                .addAction(0, getString(paused ? R.string.notif_rec_resume : R.string.notif_rec_pause),
+                        paused ? resumePi : pausePi)
+                .addAction(0, getString(R.string.notif_rec_stop), stopPi)
+                .setOngoing(true)
+                .setSilent(true)
+                .setOnlyAlertOnce(true)
+                .setShowWhen(false)
+                // ロック画面でも内容（経過時間・ゲージ）が見えるようにする
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .setStyle(new NotificationCompat.DecoratedCustomViewStyle());
+        if (contentView != null) b.setCustomContentView(contentView);
+        if (bigView != null) b.setCustomBigContentView(bigView);
+        return b.build();
     }
 
     /**
@@ -349,7 +382,7 @@ public class RecordingService extends Service {
                     0, 0, GAUGE_W, 0, GAUGE_COLORS, GAUGE_STOPS, Shader.TileMode.CLAMP));
         }
         final float pitch = (float) GAUGE_W / BARS;
-        final float barW = pitch * 0.3f;                  // 細めのバー＋広めの間隔
+        final float barW = pitch * 0.34f;                 // 本数が少ないぶん少し太く
         final float maxH = GAUGE_H * 0.92f;               // いちばん大きい声のときの高さ
         final float minH = barW;                          // 無音は「点」になる
         final float mid = GAUGE_H / 2f;
@@ -358,17 +391,18 @@ public class RecordingService extends Service {
 
         for (int i = 0; i < BARS; i++) {
             float t = BARS > 1 ? (float) i / (BARS - 1) : 0.5f;
-            // 中央ほど大きく振れる（両端は控えめ）
-            float env = (float) (0.35 + 0.65 * Math.pow(Math.sin(Math.PI * t), 0.7));
-            // 1本ごとに高さ・太さ・位置・揺れ方を変え、不揃いに見せる（画面のゲージと同じ）
-            float gain = 0.45f + gaugeNoise(i * 3.9) * 0.95f;
+            // 中央ほど大きく振れる（両端は控えめ）。本数が少ないので端も動くようにする。
+            float env = (float) (0.6 + 0.4 * Math.pow(Math.sin(Math.PI * t), 0.7));
+            // 1本ごとに高さ・太さ・位置・揺れ方を変え、不揃いに見せる（画面のゲージと同じ）。
+            // 本数が5本と少ないので、大きい声ではしっかり振り切るように底上げしてある。
+            float gain = 0.75f + gaugeNoise(i * 3.9) * 0.9f;
             float speed = 0.8f + gaugeNoise(i * 1.3) * 3.0f;
             float phase = gaugeNoise(i * 2.7) * (float) Math.PI * 2f;
             float jitter = (gaugeNoise(i * 5.1) - 0.5f) * 0.44f;
             float wide = 0.85f + gaugeNoise(i * 7.3) * 0.35f;
             double s1 = Math.sin(now * speed + phase);
             double s2 = Math.sin(now * speed * 0.43 + phase * 1.7);
-            float wobble = (float) (0.42 + 0.58 * (0.5 + 0.5 * (0.65 * s1 + 0.35 * s2)));
+            float wobble = (float) (0.55 + 0.45 * (0.5 + 0.5 * (0.65 * s1 + 0.35 * s2)));
             float target = Math.min(1f, lv * gain * env * wobble);
             // 伸びるのは速く、戻るのはゆっくり
             barV[i] += (target - barV[i]) * (target > barV[i] ? 0.5f : 0.25f);
@@ -382,21 +416,12 @@ public class RecordingService extends Service {
         return bmp;
     }
 
-    /** 通知のゲージを現在の音量に合わせて描き替える（ロック画面でも動いて見える）。 */
+    /** 通知のゲージ・経過時間を現在の状態に合わせて描き替える（ロック画面でも動いて見える）。 */
     private void updateGauge() {
-        if (notifBuilder == null || !recording) return;
+        if (!recording || stopPi == null) return;
         try {
-            // たたんだ状態は標準の体裁のまま、バーの伸び具合だけ更新する。
-            // 小さな音でもバーが動くよう、平方根で持ち上げる。
-            int shown = (int) Math.round(Math.sqrt(level) * 100);
-            notifBuilder.setProgress(100, Math.max(2, shown), false);
-            // ステータスバーのアイコンはコマを送って動かす（音が無いときは平ら）
-            notifBuilder.setSmallIcon(level <= 0f
-                    ? R.drawable.ic_rec_eq_flat
-                    : EQ_FRAMES[Math.abs(eqFrame++) % EQ_FRAMES.length]);
-            applyGaugeViews();
             NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) nm.notify(NOTIF_ID, notifBuilder.build());
+            if (nm != null) nm.notify(NOTIF_ID, buildNotification());
         } catch (Exception e) {
             // 通知が出せない（権限を切られた等）だけなら録音は続ける
             Log.w(TAG, "通知を更新できませんでした", e);
@@ -404,29 +429,79 @@ public class RecordingService extends Service {
     }
 
     /**
-     * 広げた状態の通知に、アプリ画面と同じ縦バーのゲージを載せる。
+     * 通知の中身（ゲージ・経過時間・操作ボタン）を作る。
      * RemoteViews は setXxx のたびに命令が積まれるため、毎回作り直す。
      * 端末によってはカスタムビューが描かれないことがあるが、その場合でも
-     * たたんだ状態（標準の体裁）は出るので、通知が消えることはない。
+     * OS が描くタイトル行と標準のアクションボタンは出るので、操作はできる。
      */
     private void applyGaugeViews() {
-        if (notifBuilder == null) return;
         try {
             long now = SystemClock.elapsedRealtime();
-            // 画像の作り直しは 0.4 秒に1回まで（通知自体はもっと細かく出し直すが、
-            // 広げたときのゲージのためだけに毎回描くと送信量が無駄に増える）
-            if (bigView == null || now - bigViewAt >= 400L) {
-                RemoteViews rv = new RemoteViews(getPackageName(), R.layout.notif_recording_big);
-                rv.setTextViewText(R.id.notif_title, "● 録音中");
-                rv.setTextViewText(R.id.notif_text, "画面を消しても録音は続いています");
-                rv.setImageViewBitmap(R.id.notif_gauge, renderGauge());
-                bigView = rv;
-                bigViewAt = now;
+            // 作り直しは 0.2 秒に1回まで（画像を毎回送ると通信量が無駄に増える）
+            if (contentView == null || now - viewsAt >= 200L) {
+                Bitmap gauge = renderGauge();
+                contentView = buildNotifView(R.layout.notif_recording, gauge, false);
+                bigView = buildNotifView(R.layout.notif_recording_big, gauge, true);
+                viewsAt = now;
             }
-            notifBuilder.setCustomBigContentView(bigView);
         } catch (Exception e) {
             Log.w(TAG, "ゲージ付きの通知ビューを作れませんでした", e);
         }
+    }
+
+    /** 通知1枚ぶんのビューを組み立てる（たたんだ状態・広げた状態で同じ並び） */
+    private RemoteViews buildNotifView(int layoutId, Bitmap gauge, boolean big) {
+        RemoteViews rv = new RemoteViews(getPackageName(), layoutId);
+        rv.setImageViewBitmap(R.id.notif_gauge, gauge);
+        rv.setTextViewText(R.id.notif_time, formatElapsed());
+        if (big) {
+            rv.setTextViewText(R.id.notif_text, paused
+                    ? "一時停止中 — 再開すると続きから録音します"
+                    : "録音中 — 画面を消しても録音は続いています");
+        }
+        rv.setImageViewResource(R.id.notif_pause,
+                paused ? R.drawable.ic_notif_resume : R.drawable.ic_notif_pause);
+        rv.setContentDescription(R.id.notif_pause,
+                getString(paused ? R.string.notif_rec_resume : R.string.notif_rec_pause));
+        rv.setOnClickPendingIntent(R.id.notif_pause, paused ? resumePi : pausePi);
+        rv.setOnClickPendingIntent(R.id.notif_stop, stopPi);
+        return rv;
+    }
+
+    /**
+     * 録音の一時停止／再開。
+     * 音声の書き出しと経過時間を同時に止め、通知の表示も切り替える。
+     */
+    private void setPaused(boolean p) {
+        if (!recording || paused == p) return;
+        paused = p;
+        if (p) {
+            pausedAtElapsed = SystemClock.elapsedRealtime();
+            AudioRecorderEngine eng = engine;
+            if (eng != null) {
+                eng.setPaused(true);
+            } else if (recorder != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try { recorder.pause(); } catch (Exception e) { Log.w(TAG, "一時停止できませんでした", e); }
+            }
+            level = 0f;
+            java.util.Arrays.fill(barV, 0f);
+        } else {
+            if (pausedAtElapsed > 0) pausedTotalMs += SystemClock.elapsedRealtime() - pausedAtElapsed;
+            pausedAtElapsed = 0L;
+            AudioRecorderEngine eng = engine;
+            if (eng != null) {
+                eng.setPaused(false);
+            } else if (recorder != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try { recorder.resume(); } catch (Exception e) { Log.w(TAG, "再開できませんでした", e); }
+            }
+            lastSampleAt = SystemClock.elapsedRealtime();
+        }
+        contentView = null;   // ボタンの向きが変わるので作り直す
+        bigView = null;
+        notifCountdown = 1;
+        // ゲージ画像を描くのは専用スレッドの担当。切り替えた瞬間の描き替えもそちらへ回す。
+        if (gaugeHandler != null) gaugeHandler.post(this::updateGauge);
+        else updateGauge();
     }
 
     private void createChannel() {
@@ -504,6 +579,9 @@ public class RecordingService extends Service {
         currentPath = path;
         startedAtElapsed = SystemClock.elapsedRealtime();
         recording = true;
+        paused = false;
+        pausedAtElapsed = 0L;
+        pausedTotalMs = 0L;
         lastError = null;
         // 音量の読み取りと通知のゲージを動かし始める
         // （フォアグラウンドサービスなので画面オフでも止まらない）
@@ -518,6 +596,8 @@ public class RecordingService extends Service {
     private void stopRecording() {
         if (!recording) return;
         recording = false;
+        paused = false;
+        pausedAtElapsed = 0L;
         stopGaugeLoop();
         level = 0f;
         activeRecorder = null; // 解放後の getMaxAmplitude を防ぐ
@@ -569,5 +649,11 @@ public class RecordingService extends Service {
 
     public static void stop(Context ctx) {
         ctx.startService(new Intent(ctx, RecordingService.class).setAction(ACTION_STOP));
+    }
+
+    /** 外部（プラグイン）から一時停止・再開するための入口 */
+    public static void setPaused(Context ctx, boolean p) {
+        ctx.startService(new Intent(ctx, RecordingService.class)
+                .setAction(p ? ACTION_PAUSE : ACTION_RESUME));
     }
 }

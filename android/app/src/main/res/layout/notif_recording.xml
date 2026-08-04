@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  録音中の通知（たたんだ状態）。
+  録音アプリでよくある並びにそろえてある:
+    左 = 音量のゲージ（バー5本） / 中央 = 録音時間 / 右 = 一時停止・録音完了
+  DecoratedCustomViewStyle と併用するので、アプリ名や小アイコンの行は OS が描く。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:minHeight="48dp"
+    android:paddingTop="2dp"
+    android:paddingBottom="2dp">
+
+    <ImageView
+        android:id="@+id/notif_gauge"
+        android:layout_width="64dp"
+        android:layout_height="26dp"
+        android:layout_marginEnd="10dp"
+        android:scaleType="fitXY"
+        android:contentDescription="@string/notif_rec_gauge" />
+
+    <TextView
+        android:id="@+id/notif_time"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:maxLines="1"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:textAppearance="@style/TextAppearance.Compat.Notification.Title" />
+
+    <ImageView
+        android:id="@+id/notif_pause"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="6dp"
+        android:padding="10dp"
+        android:background="@drawable/bg_notif_btn"
+        android:src="@drawable/ic_notif_pause"
+        android:contentDescription="@string/notif_rec_pause" />
+
+    <ImageView
+        android:id="@+id/notif_stop"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="8dp"
+        android:padding="9dp"
+        android:background="@drawable/bg_notif_btn_stop"
+        android:src="@drawable/ic_notif_stop"
+        android:contentDescription="@string/notif_rec_stop" />
+</LinearLayout>

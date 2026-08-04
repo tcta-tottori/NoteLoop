@@ -502,6 +502,9 @@ select:focus, input:focus, textarea:focus {
 .home-status { justify-content: center; margin-bottom: 14px; }
 /* 録音中は経過時間も白で（ゲージの白いバーと合わせる） */
 body.is-recording .wave-timer { color: #fff; }
+/* 一時停止中は録音インジケーターの点滅を止めてグレーに */
+.wave-wrap[data-paused="1"] .wave-timer { color: var(--muted); }
+.wave-wrap[data-paused="1"] .wave-timer::before { background: var(--faint); box-shadow: none; animation: none; }
 
 /* ---------- Home: 録音中のリアルタイム文字起こし（枠なし・地の上に直接） ---------- */
 .live-now {
@@ -686,8 +689,34 @@ body.is-recording .wave-timer { color: #fff; }
 .mic-tools-item svg { width: 18px; height: 18px; color: var(--muted); flex: none; }
 .mic-tools-item:hover { background: var(--surface-3); }
 
+/* 録音中の一時停止／再開ボタン（右下・ツールボタンと同じ位置） */
+.mic-pause-btn {
+  position: absolute; right: clamp(16px, 6vw, 40px); top: 50%; transform: translateY(-50%);
+  width: 50px; height: 50px; border-radius: 50%; padding: 0; cursor: pointer;
+  display: grid; place-items: center;
+  background: var(--surface); color: var(--brand1);
+  border: 1px solid color-mix(in srgb, var(--brand1) 34%, var(--border-strong));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--brand1) 22%, transparent);
+  transition: transform .12s ease, background .2s ease, color .2s ease, box-shadow .2s ease;
+}
+.pause-ico { width: 21px; height: 21px; }
+.mic-pause-btn .ico-resume { display: none; }
+.mic-pause-btn:hover { box-shadow: 0 9px 20px color-mix(in srgb, var(--brand1) 30%, transparent); }
+.mic-pause-btn:active { transform: translateY(-50%) scale(.95); }
+/* 一時停止中は再開アイコン＋ブランドカラーで塗る */
+.mic-pause-btn[data-paused="1"] {
+  background: linear-gradient(135deg, var(--brand1), var(--brand2));
+  border-color: transparent; color: #fff;
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--brand1) 40%, transparent);
+}
+.mic-pause-btn[data-paused="1"] .ico-pause { display: none; }
+.mic-pause-btn[data-paused="1"] .ico-resume { display: block; }
+/* 録音中は右下が一時停止ボタンになるので、ツールボタンは左下へ寄せる */
+body.is-recording .mic-tools-btn { right: auto; left: clamp(16px, 6vw, 40px); }
+
 @media (max-width: 380px) {
   .mic-tools-btn { width: 46px; height: 46px; }
+  .mic-pause-btn { width: 46px; height: 46px; }
 }
 /* 会議情報モーダル内に統合したマイク設定セクション（区切り線で分離） */
 .modal-mic-section { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border-strong); }
@@ -696,9 +725,9 @@ body.is-recording .wave-timer { color: #fff; }
 .mic-fab {
   position: relative; flex: none; z-index: 1;
   width: 64px; height: 64px; border-radius: 50%; border: none; cursor: pointer; padding: 0;
-  /* 赤ベースのグラデーション＋差し色（オレンジ / ピンク） */
-  background: linear-gradient(135deg, #ff2d6b 0%, #ff5a5f 45%, #ff9d4d 100%);
-  box-shadow: 0 10px 26px rgba(255, 61, 113, .45);
+  /* 録音前はアプリ内バッジと同じブランドの紫グラデーション（録音中だけ赤系に変わる） */
+  background: linear-gradient(135deg, var(--brand1), var(--brand2));
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--brand1) 42%, transparent);
   display: grid; place-items: center;
   transition: transform .12s ease, box-shadow .2s ease, background .3s ease;
 }
@@ -727,6 +756,8 @@ body.is-recording .wave-timer { color: #fff; }
 }
 /* 「録音中」だけ赤で注意喚起。それ以外の案内はグレー */
 body.is-recording .rec-hint { color: var(--danger); }
+/* 一時停止中は赤をやめ、点滅も止める（録っていないことを見た目でも伝える） */
+body.is-recording.is-paused .rec-hint { color: var(--muted); animation: none; }
 /* 録音後の案内（リセット方法・再録音）は点滅させず、静かに出す。
    本文の上に重なるので、読めるように背景のあるピルにする。 */
 .rec-hint.steady { animation: none; color: var(--muted); font-weight: 600; }
@@ -861,9 +892,16 @@ body.is-recording .rec-hint { color: var(--danger); }
 .ptr.spinning .ptr-circle svg { animation: fabspin .8s linear infinite; }
 .mic-fab[data-state="recording"] {
   background: linear-gradient(135deg, #e11d48 0%, #ff3d6b 50%, #ff8a3d 100%);
+  box-shadow: 0 10px 26px rgba(255, 61, 113, .45);
   animation: fabBlink 1.1s ease-in-out infinite;
 }
 .mic-fab[data-state="recording"] .rec-ring { animation: ring 1.5s ease-out infinite; }
+/* 一時停止中は点滅とリングを止めて「止まっている」ことを見せる */
+.mic-fab[data-state="recording"][data-paused="1"] {
+  animation: none;
+  box-shadow: 0 6px 16px rgba(255, 45, 107, .22);
+}
+.mic-fab[data-state="recording"][data-paused="1"] .rec-ring { animation: none; opacity: 0; }
 
 /* ---------- Claude card (Claude風) ---------- */
 .claude-card { border-color: #4a3a30; background: linear-gradient(180deg, #26211e, #221e1b); }

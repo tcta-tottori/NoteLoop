@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知のボタンの丸い下地。明るい通知でも暗い通知でも見えるよう半透明のグレー。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#40808A99" />
+</shape>

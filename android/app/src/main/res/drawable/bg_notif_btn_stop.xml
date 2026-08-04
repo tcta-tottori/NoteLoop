@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 「録音完了」ボタンの下地。録音ボタンと同じく、細い輪で囲んで強調する。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#40808A99" />
+    <stroke android:width="1.5dp" android:color="#66FF6070" />
+</shape>

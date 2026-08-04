@@ -4,4 +4,10 @@
     <string name="title_activity_main">NOTELOOP</string>
     <string name="package_name">jp.tcta.noteloop</string>
     <string name="custom_url_scheme">jp.tcta.noteloop</string>
+
+    <!-- 録音中の通知 -->
+    <string name="notif_rec_pause">一時停止</string>
+    <string name="notif_rec_resume">再開</string>
+    <string name="notif_rec_stop">録音完了</string>
+    <string name="notif_rec_gauge">音量</string>
 </resources>

@@ -16,6 +16,7 @@ const ICO_TRASH      = `<svg class="btn-ico" ${SVG_ATTR}><polyline points="3 6 5
 
 /* ===== 要素 ===== */
 const recordBtn      = $('recordBtn');
+const pauseBtn       = $('pauseBtn');
 const recHint        = $('recHint');
 const capturedHint   = $('capturedHint');
 const timerEl        = $('timer');
@@ -139,7 +140,7 @@ const openMeetingInfo     = $('openMeetingInfo');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.7';
+const APP_VERSION = 'Ver.7.8';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -171,6 +172,9 @@ const REC_WATCH_MS = 4000;        // 録音が生きているかを確認する�
 const REC_STALL_MS = 12000;       // この時間データが来なければ「止まった」と判断して録り直す
 
 let recording = false;
+let paused = false;               // 録音の一時停止中
+let pausedAt = 0;                 // 一時停止を始めた時刻（epoch ms）
+let pausedTotalMs = 0;            // 一時停止していた合計時間（経過時間から差し引く）
 let mediaStream = null;
 let mediaRecorder = null;
 let recordedBlobs = [];           // 現在のセグメントのチャンク
@@ -451,7 +455,7 @@ function updateFabState() {
 
   // ボタンの下の案内文。録音後はボタンが消えるので、戻し方をここで伝える。
   let hint = '';
-  if (state === 'recording') hint = '録音中… タップで停止';
+  if (state === 'recording') hint = paused ? '一時停止中… タップで録音完了' : '録音中… タップで停止';
   else if (state === 'processing') hint = '文字起こし中…';
   else if (done) hint = away ? '引き下げてリセット\n下までスクロールで録音ボタン' : 'タップで新しい録音（今の内容は履歴に残ります）';
   const hintText = document.getElementById('recHintText') || recHint;
@@ -459,6 +463,18 @@ function updateFabState() {
   recHint.hidden = !hint;
   recHint.classList.toggle('steady', done);
   recHint.classList.toggle('low', away);   // ボタンが無いぶん下げる
+  updatePauseUI();
+}
+
+/** 一時停止ボタン（録音中だけ右下に出す）と、一時停止中の見た目を更新 */
+function updatePauseUI() {
+  if (!pauseBtn) return;
+  pauseBtn.hidden = !recording;
+  pauseBtn.dataset.paused = paused ? '1' : '0';
+  pauseBtn.setAttribute('aria-label', paused ? '録音を再開' : '録音を一時停止');
+  recordBtn.dataset.paused = (recording && paused) ? '1' : '0';
+  if (waveWrap) waveWrap.dataset.paused = (recording && paused) ? '1' : '0';
+  document.body.classList.toggle('is-paused', recording && paused);
 }
 
 /** 録音・文字起こし・議事録のいずれかの結果が画面にあるか */
@@ -592,20 +608,60 @@ async function ensureNotifyPermission() {
   try { return (await Notification.requestPermission()) === 'granted'; } catch (_) { return false; }
 }
 
-/** 録音中の常駐通知を表示／更新（elapsed は "00:12" 形式） */
+/** 通知のゲージに使う、いまのマイク入力レベル（0〜1） */
+function notifInputLevel() {
+  if (analyser) {
+    try {
+      analyser.getByteTimeDomainData(waveBuf);
+      let s = 0;
+      for (let i = 0; i < waveBuf.length; i++) { const x = (waveBuf[i] - 128) / 128; s += x * x; }
+      return Math.min(1, Math.max(0, Math.sqrt(s / waveBuf.length) - 0.012) * 7);
+    } catch (_) {}
+  }
+  if (activeEngine === 'webspeech') return Math.min(1, sttActivity);
+  return 0.25;
+}
+
+/**
+ * 通知の左に置くゲージ（バー5本）。
+ * アプリ内のゲージと同じく、声が大きいほど高く伸び、1本ずつばらばらに揺れる。
+ */
+let notifPhase = 0;
+function notifGauge() {
+  const GLYPH = '▁▂▃▄▅▆▇█';
+  if (paused) return '▁▁▁▁▁';
+  const amp = 0.30 + notifInputLevel() * 0.70;
+  let out = '';
+  for (let i = 0; i < 5; i++) {
+    const wob = 0.5 + 0.5 * Math.sin(notifPhase * 1.1 + i * 1.25);
+    out += GLYPH[Math.floor(Math.min(0.999, 0.06 + amp * wob) * GLYPH.length)];
+  }
+  return out;
+}
+
+/**
+ * 録音中の常駐通知を表示／更新（elapsed は "00:12" 形式）。
+ * 「左にゲージ・続けて録音時間・操作は一時停止と録音完了」の並びにそろえてある
+ * （アプリ版はネイティブ側の通知が同じ体裁で出る）。
+ */
 async function showRecordingNotification(elapsed, stalled) {
   if (!('serviceWorker' in navigator)) return;
   if (!(await ensureNotifyPermission())) return;
+  const time = elapsed || '00:00';
   try {
     const reg = await navigator.serviceWorker.ready;
-    await reg.showNotification((stalled ? '⚠ 録音を再開中' : '● 録音中') + (elapsed ? '　' + elapsed : ''), {
+    await reg.showNotification(
+      stalled ? `⚠ 録音を再開中　${time}` : `${notifGauge()}　${time}`, {
       body: stalled
         ? '音声が取り込めていません。画面を点けてアプリを前面に戻してください。'
-        : '画面を消しても録音は続きます。ここから停止できます。',
+        : paused ? 'NOTELOOP — 一時停止中。再開すると続きから録音します。'
+                 : 'NOTELOOP — 録音中。画面を消しても録音は続きます。',
       tag: NOTIF_TAG, renotify: false, silent: true, requireInteraction: true,
-      icon: './icons/icon-192.png', badge: './icons/favicon-48.png',
-      actions: [{ action: 'stop', title: '■ 停止' }],
-      data: { type: 'recording' },
+      icon: './icons/icon-192.png', badge: './icons/badge-mic.png',
+      actions: paused
+        ? [{ action: 'resume', title: '▶ 再開' }, { action: 'stop', title: '■ 録音完了' }]
+        : [{ action: 'pause', title: '❚❚ 一時停止' }, { action: 'stop', title: '■ 録音完了' }],
+      data: { type: 'recording', paused },
     });
   } catch (_) { /* 通知非対応でも録音は継続 */ }
 }
@@ -621,10 +677,14 @@ async function clearRecordingNotification() {
   } catch (_) {}
 }
 
-// 通知の「停止」から送られてくるメッセージで録音を止める
+// 通知のアクションから送られてくるメッセージで録音を操作する
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (e) => {
-    if (e.data && e.data.type === 'stop-recording' && recording) stopRecording();
+    const t = e.data && e.data.type;
+    if (!recording) return;
+    if (t === 'stop-recording') stopRecording();
+    else if (t === 'pause-recording') setPaused(true);
+    else if (t === 'resume-recording') setPaused(false);
   });
 }
 
@@ -808,7 +868,7 @@ function stopRecordWatchdog() {
 }
 
 async function recordWatchdogTick() {
-  if (!recording || recordRestarting) return;
+  if (!recording || paused || recordRestarting) return;   // 一時停止中は「止まっている」のが正常
   // 画面オフ中に止められがちなものを、まず起こし直す
   try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch (_) {}
   resumeBackgroundKeepAlive();
@@ -1020,6 +1080,68 @@ recordBtn.addEventListener('click', async () => {
 });
 
 /* =========================================================
+ * 一時停止 / 再開
+ *   録音・ライブ文字起こし・経過時間をまとめて止め、再開時は続きから録る。
+ *   アプリ版はサービス側（RecordingService）が音声の一時停止を担当する。
+ * =======================================================*/
+if (pauseBtn) pauseBtn.addEventListener('click', () => setPaused(!paused));
+
+/** 録音開始からの経過ミリ秒（一時停止していた分は差し引く） */
+function elapsedMs() {
+  if (!startTime) return 0;
+  const base = paused ? pausedAt : Date.now();
+  return Math.max(0, base - startTime - pausedTotalMs);
+}
+
+async function setPaused(next) {
+  next = !!next;
+  if (!recording || paused === next) return;
+  paused = next;
+
+  if (paused) {
+    pausedAt = Date.now();
+    if (NATIVE) await nativePauseResume(true);
+    else {
+      try { if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.pause(); } catch (_) {}
+    }
+    if (liveMode === 'webspeech') stopWebSpeech();   // 確定分をコミットして認識を終える
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  } else {
+    pausedTotalMs += Date.now() - pausedAt;
+    pausedAt = 0;
+    if (NATIVE) await nativePauseResume(false);
+    else {
+      try { if (mediaRecorder && mediaRecorder.state === 'paused') mediaRecorder.resume(); } catch (_) {}
+      recordChunkAt = Date.now();   // 見張りに「止まっていた」と誤解させない
+    }
+    if (liveMode === 'webspeech') beginRecognition();
+  }
+
+  updateFabState();     // 案内文と一時停止ボタンの見た目
+  updateTimer();
+  // 一時停止中は経過秒が進まないので、切り替えた瞬間に通知を出し直しておく
+  const el = Math.floor(elapsedMs() / 1000);
+  notifLastSec = el;
+  showRecordingNotification(`${String(Math.floor(el / 60)).padStart(2, '0')}:${String(el % 60).padStart(2, '0')}`, false);
+}
+
+/** アプリ版: 録音サービスへ一時停止／再開を伝える */
+async function nativePauseResume(wantPause) {
+  const rec = nativeRecorder();
+  const fn = rec && (wantPause ? rec.pause : rec.resume);
+  if (typeof fn !== 'function') {
+    // 一時停止に対応していない版のアプリ（更新前）でも、操作だけは元へ戻す
+    showError('この版のアプリは録音の一時停止に対応していません。アプリを更新してください。');
+    paused = !wantPause;
+    return;
+  }
+  try { await fn.call(rec); } catch (err) {
+    showError('録音の一時停止に失敗しました: ' + ((err && err.message) || err));
+    paused = !wantPause;
+  }
+}
+
+/* =========================================================
  * ネイティブ録音（Androidアプリ版）
  *   フォアグラウンドサービスで録るため、画面を消しても
  *   他のアプリに切り替えても OS に録音を止められない。
@@ -1102,6 +1224,7 @@ async function startRecording() {
   hideError();
   closeHistoryDetail(); // 履歴を見ていた場合はカード群を録音画面へ戻す
   resetFlowCards(); // 新しい録音: 前回の段階カードを一旦すべて隠す
+  paused = false; pausedAt = 0; pausedTotalMs = 0; notifLastSec = -1;
   resetAiFlowProgress(); // 前回のAI議事録の進捗表示が残っていたら消す
   // 入力レベルメーターがマイクを掴んでいたら解放してから録音を開始
   if (typeof homeMicMeter !== 'undefined') homeMicMeter.stop();
@@ -1224,7 +1347,11 @@ async function startRecording() {
 }
 
 async function stopRecording() {
+  // 経過時間は一時停止を解く前に確定させる（一時停止していた分は含めない）
+  const recordedElapsedMs = elapsedMs();
   recording = false;
+  paused = false; pausedAt = 0;
+  updatePauseUI();
   recHint.hidden = true;
   timerEl.hidden = true;
   updateRecFrame();
@@ -1239,8 +1366,8 @@ async function stopRecording() {
   if (liveMode === 'webspeech') stopWebSpeech();
   if (liveWhisperOn) stopNativeLiveTranscribe();   // アプリ版のライブ文字起こしを終える
 
-  // 経過時間（実際に録っていたはずの長さ）を先に確定させる
-  const wallSec = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
+  // 経過時間（実際に録っていたはずの長さ）
+  const wallSec = Math.round(recordedElapsedMs / 1000);
 
   // 録音した音声を確定（復帰で分割された場合は1本へ結合）
   // アプリ版はサービスが1本のファイルに録り続けているので、そのまま受け取る。
@@ -1507,9 +1634,10 @@ function commitSttSegment() {
 
 function onSpeechEnd() {
   // 録音継続中に認識が切れたら、確定分をコミットして新インスタンスで再開
-  if (recording && liveMode === 'webspeech') {
+  // （一時停止中は再開しない）
+  if (recording && !paused && liveMode === 'webspeech') {
     commitSttSegment();
-    setTimeout(() => { if (recording && liveMode === 'webspeech') beginRecognition(); }, 200);
+    setTimeout(() => { if (recording && !paused && liveMode === 'webspeech') beginRecognition(); }, 200);
   }
 }
 
@@ -2139,18 +2267,19 @@ function updateCapturedNotice(elapsedSec) {
 }
 
 function updateTimer() {
-  const elapsed = Math.floor((Date.now() - startTime) / 1000);
+  const elapsed = Math.floor(elapsedMs() / 1000);
   const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const s = String(elapsed % 60).padStart(2, '0');
   timerEl.textContent = `${m}:${s}`;
   updateCapturedNotice(elapsed);
-  // 通知の経過時間は 5 秒以上あいたら更新する。
-  // （バックグラウンドではタイマーが間引かれて秒が飛ぶため、剰余ではなく差で判定）
-  if (recording && (notifLastSec < 0 || elapsed - notifLastSec >= 5)) {
+  // 通知は 1 秒ごとに出し直す（経過時間＋ゲージのアニメーション）。
+  // 一時停止中は秒が進まないので、そのまま止まった表示が残る。
+  if (recording && !paused && elapsed !== notifLastSec) {
     notifLastSec = elapsed;
+    notifPhase += 1;
     showRecordingNotification(`${m}:${s}`, recordStalled);
   }
-  watchRecognition(); // リアルタイム文字起こしが止まっていないか見張る
+  if (!paused) watchRecognition(); // リアルタイム文字起こしが止まっていないか見張る
 }
 
 /* =========================================================
@@ -2288,7 +2417,9 @@ function waveLoop() {
   if (homeProcessing && !recording) { drawProcessingFrame(); return; }
   sttActivity *= 0.9;
   let target;
-  if (recording && NATIVE) {
+  if (recording && paused) {
+    target = 0;   // 一時停止中はバーを点に戻して止める
+  } else if (recording && NATIVE) {
     // アプリ版はサービス側の MediaRecorder が音を握っているので、
     // マイクを二重に開かず、録音中の振幅をネイティブから受け取って使う。
     target = nativeLevel;
