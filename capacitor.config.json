@@ -1,0 +1,14 @@
+{
+  "appId": "jp.tcta.noteloop",
+  "appName": "NOTELOOP",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "CapacitorHttp": { "enabled": false }
+  }
+}

@@ -1,0 +1,21 @@
+# 依存関係
+node_modules/
+
+# Capacitor が生成する配信用コピー（scripts/build-www.mjs で作り直せる）
+www/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+
+# Android のビルド成果物
+android/build/
+android/app/build/
+android/.gradle/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+*.apk
+*.aab
+*.keystore
+# 署名鍵だけは例外。ビルドのたびに署名が変わるとアプリを上書き更新できないため、
+# 検証用アプリの鍵をリポジトリで共有している（android/app/build.gradle 参照）。
+!android/app/noteloop.keystore

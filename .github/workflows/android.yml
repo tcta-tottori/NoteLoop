@@ -1,0 +1,113 @@
+name: Android APK
+
+# Android SDK の取得元（dl.google.com）は開発環境から到達できないため、
+# APK のビルドは CI で行い、成果物としてダウンロードできるようにする。
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+# Release に APK を貼り付けるため書き込み権限が要る
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Android SDK を用意
+        uses: android-actions/setup-android@v3
+
+      - name: 依存関係をインストール
+        run: npm ci
+
+      - name: Web アセットを www/ へ集めて Android へ同期
+        run: |
+          npm run build
+          npx cap sync android
+
+      - name: APK をビルド
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: APK に分かりやすい名前を付ける
+        run: |
+          mkdir -p dist
+          # Release では常に同じ名前にする（ダウンロードURLを固定するため）
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/NOTELOOP.apk
+          # Chrome は .apk を「危険なファイル」として保存前に破棄することがある。
+          # zip なら止められないので、同じものを zip でも置いておく。
+          (cd dist && zip -q NOTELOOP-apk.zip NOTELOOP.apk)
+          # アプリ内更新の判定に使う。同じビルドの成果物として一緒に配る。
+          cp version.json dist/version.json
+          ls -lh dist
+          sha256sum dist/NOTELOOP.apk
+
+      # 署名が変わると端末が上書き更新を拒否する（＝アンインストールが必要になる）。
+      # 固定の鍵で署名できているかを毎回ログに残し、変わったときに気づけるようにする。
+      - name: 署名を確認
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs dist/NOTELOOP.apk | grep -i "SHA-256 digest\|Signer #1 certificate DN" || true
+
+      - name: APK をアップロード（Actions の成果物・PC向け）
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOTELOOP-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      # スマホからは Actions の成果物（zip・要ログイン）を落とせないため、
+      # Release に APK そのものを置いて1タップで入れられるようにする。
+      - name: Release「latest」を更新
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(grep -oP "APP_VERSION = 'Ver\.\K[0-9.]+" app.js || echo "?")
+          SUM=$(sha256sum dist/NOTELOOP.apk | cut -d' ' -f1)
+          SIZE=$(stat -c%s dist/NOTELOOP.apk)
+          NOTES="NOTELOOP $VER（Androidアプリ版）
+
+          録音はネイティブのフォアグラウンドサービスで行うため、画面を消しても
+          他のアプリに切り替えても録音が止まりません。
+
+          ## インストール
+
+          1. NOTELOOP.apk をタップしてダウンロード
+          2. 落ちてきたファイルをタップ →「提供元不明のアプリ」を許可してインストール
+
+          Chrome が APK を「危険なファイル」として消してしまう場合は、
+          NOTELOOP-apk.zip のほうを落として展開してください（中身は同じです）。
+
+          - サイズ: ${SIZE} バイト
+          - SHA-256: ${SUM}
+          - コミット: ${GITHUB_SHA}
+
+          初回起動時にマイクと通知の許可を求めます。通知を許可しないと
+          録音を継続できないので、必ず許可してください。"
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest --title "NOTELOOP $VER" --notes "$NOTES"
+            gh release upload latest dist/NOTELOOP.apk dist/NOTELOOP-apk.zip dist/version.json --clobber
+          else
+            gh release create latest dist/NOTELOOP.apk dist/NOTELOOP-apk.zip dist/version.json \
+              --title "NOTELOOP $VER" --notes "$NOTES" --latest
+          fi
+          echo "APK: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/NOTELOOP.apk"
+          echo "ZIP: https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/NOTELOOP-apk.zip"

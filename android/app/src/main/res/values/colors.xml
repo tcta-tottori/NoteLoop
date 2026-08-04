@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- アプリのダークテーマ（#17181b 基調）に合わせる -->
+    <color name="colorPrimary">#17181B</color>
+    <color name="colorPrimaryDark">#101114</color>
+    <color name="colorAccent">#7B93FF</color>
+    <!-- 画面上端のヘッダー（styles.css の .app-header 上端）と同じ色。
+         ステータスバーをこの色にして、ヘッダーとの境目が見えないようにする。 -->
+    <color name="statusBar">#17181B</color>
+</resources>
