@@ -110,6 +110,9 @@ const mailThunderbird = $('mailThunderbird'), mailGmail = $('mailGmail'), mailOu
 const termModal = $('termModal'), termModalClose = $('termModalClose'), termModalDone = $('termModalDone');
 const termWrong = $('termWrong'), termRight = $('termRight'), termApply = $('termApply'), termRegister = $('termRegister'), termApplyAll = $('termApplyAll');
 const termDictList = $('termDictList'), termFoundNote = $('termFoundNote');
+// 設定: 変換辞書（読み → 漢字）
+const dictAuto = $('dictAuto'), dictFrom = $('dictFrom'), dictTo = $('dictTo'), dictAdd = $('dictAdd');
+const dictList = $('dictList'), dictNote = $('dictNote'), dictApplyNow = $('dictApplyNow');
 
 const aiAudioSend          = $('aiAudioSend');
 const aiAudioCopy          = $('aiAudioCopy');
@@ -146,7 +149,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.7.9';
+const APP_VERSION = 'Ver.8.0';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1853,10 +1856,10 @@ function rms(arr) {
   return Math.sqrt(sum / Math.max(1, n));
 }
 
-/** 句点（。．！？）で改行して読みやすく整形 */
+/** 句点（。．！？）で改行して読みやすく整形（登録した変換辞書もここで適用） */
 function formatTranscript(text) {
   if (!text) return '';
-  return text
+  return autoConvert(text)
     .replace(/[ \t　]+/g, ' ')
     .replace(/\s*([。．！？])\s*/g, '$1\n')
     .replace(/\n{2,}/g, '\n')
@@ -2076,6 +2079,7 @@ async function sendLiveToGemini(audio) {
       'この音声を日本語で文字起こししてください。会議の途中を切り出した音声です。\n'
       + '・聞こえたことばだけを出力し、前置き・説明・記号・話者名は付けないでください。\n'
       + '・聞き取れない部分は無理に補わず、飛ばしてください。\n'
+      + dictPromptLine()   // 登録した用語は指定の表記で書いてもらう
       + (tail ? `・直前までの文字起こし（重複して書かないでください）:「${tail}」\n` : '');
     const text = await geminiAudioRequest(audio ? wavFromFloat32(audio) : null, prompt, { live: true });
     if (text) appendTranscript(cleanupTranscript(text));
@@ -2914,12 +2918,108 @@ mailCopy.addEventListener('click', async () => {
 });
 
 /* =========================================================
- * 用語の確認・修正（会社名など）＋辞書
+ * 変換辞書（読み → 漢字）＋ 用語の確認・修正
+ *   「しんけんこう」→「新建高」のように、読み（ひらがな）や誤変換と
+ *   正しい表記をセットで登録する辞書。文字起こし・AI文字起こし・AI議事録・
+ *   メール文面で自動的に参照され、AIへ渡す指示にも用語集として付く。
+ *   設定画面と「用語の確認・修正」の両方から追加・変更できる。
  * =======================================================*/
 const TERM_KEY = 'noteloop_terms';
-let termDict = [];
-function loadTermDict() { try { termDict = JSON.parse(localStorage.getItem(TERM_KEY)) || []; } catch (_) { termDict = []; } }
+const DICT_AUTO_KEY = 'noteloop_dict_auto';
+let termDict = [];         // [{ from: '読み・誤変換', to: '正しい表記' }]
+let dictAutoApply = true;  // 自動変換のオン / オフ
+
+function loadTermDict() {
+  let raw = [];
+  try { raw = JSON.parse(localStorage.getItem(TERM_KEY)) || []; } catch (_) { raw = []; }
+  // 旧形式 { wrong, right } で保存された辞書もそのまま引き継ぐ
+  termDict = (Array.isArray(raw) ? raw : [])
+    .map((t) => ({
+      from: String((t && (t.from != null ? t.from : t.wrong)) || '').trim(),
+      to: String((t && (t.to != null ? t.to : t.right)) || '').trim(),
+    }))
+    .filter((t) => t.from);
+  dictAutoApply = localStorage.getItem(DICT_AUTO_KEY) !== '0';
+  if (dictAuto) dictAuto.checked = dictAutoApply;
+}
 function saveTermDict() { localStorage.setItem(TERM_KEY, JSON.stringify(termDict)); }
+
+/* ---- 変換の実処理 ---- */
+const toKatakana = (s) => s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
+const toHiragana = (s) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
+
+/** 登録語の表記ゆれ（ひらがな / カタカナ）をまとめて返す */
+function dictVariants(from) {
+  const set = new Set([from, toKatakana(from), toHiragana(from)]);
+  set.delete('');
+  return [...set];
+}
+function countIn(text, s) { return s ? text.split(s).length - 1 : 0; }
+/** 長い語から先に置換する（「新建高校」が「新建高」に食われないように） */
+function sortedDict() { return termDict.slice().sort((a, b) => b.from.length - a.from.length); }
+
+/**
+ * 辞書1件をテキストへ適用し、{ text, n（置換件数）} を返す。
+ * 「田中 → 田中商事」のように変換後が変換前を含む場合、
+ *   - safe=true（自動変換）: 何度でも呼ばれるため適用しない（伸び続けるのを防ぐ）
+ *   - safe=false（手動適用）: 変換済みの箇所を一時退避してから置換（二重変換なし）
+ */
+function applyDictEntry(text, t, safe) {
+  let out = text, n = 0;
+  if (!t.from || !t.to || t.from === t.to) return { text: out, n };
+  for (const v of dictVariants(t.from)) {
+    if (!v || v === t.to) continue;
+    if (t.to.includes(v)) {
+      if (safe) continue;
+      const MARK = '\u0000';
+      const held = out.split(t.to).join(MARK);   // すでに正しい表記の箇所を退避
+      n += countIn(held, v);
+      out = held.split(v).join(t.to).split(MARK).join(t.to);
+    } else {
+      n += countIn(out, v);
+      out = out.split(v).join(t.to);
+    }
+  }
+  return { text: out, n };
+}
+
+/** 辞書を本文に適用する（表記ゆれのカタカナも拾う） */
+function convertWithDict(text, safe = true) {
+  if (!text || !termDict.length) return text;
+  let out = text;
+  for (const t of sortedDict()) out = applyDictEntry(out, t, safe).text;
+  return out;
+}
+/** 自動変換が有効なときだけ辞書を適用（文字起こし・AI結果の経路から呼ばれる） */
+function autoConvert(text) { return dictAutoApply ? convertWithDict(text) : text; }
+
+/** 文字起こし・AI文字起こし・AI議事録・メール本文へ辞書を適用し、置換件数を返す */
+function applyDictToAll(safe = false) {
+  let total = 0;
+  for (const el of [liveTranscript, aiTextEl, aiResult, mailBody]) {
+    if (!el || !el.value) continue;
+    let out = el.value, n = 0;
+    for (const t of sortedDict()) { const r = applyDictEntry(out, t, safe); out = r.text; n += r.n; }
+    if (out !== el.value) el.value = out;
+    total += n;
+  }
+  if (total > 0) updateHomeUI();
+  return total;
+}
+
+/** AIへ渡す指示に付ける用語集 */
+function dictPromptBlock() {
+  const lines = termDict.filter((t) => t.from && t.to).map((t) => `- ${t.from} → ${t.to}`);
+  if (!lines.length) return '';
+  return `\n\n【用語辞書（左の読み・誤変換は右の表記に統一してください）】\n${lines.join('\n')}`;
+}
+/** 録音中のライブ文字起こし用（短くまとめた1行の用語ヒント） */
+function dictPromptLine() {
+  const pairs = termDict.filter((t) => t.from && t.to).slice(0, 30).map((t) => `${t.from}→${t.to}`);
+  if (!pairs.length) return '';
+  return `・次の語はこの表記で書いてください: ${pairs.join('、')}\n`;
+}
+
 /** 文字起こし・AI文字起こし・AI議事録・メール本文をまとめて一括置換する */
 function replaceAllInTranscript(wrong, right) {
   if (!wrong) return 0;
@@ -2945,13 +3045,81 @@ function renderTermDict() {
     const li = document.createElement('li');
     li.innerHTML = `<span class="tp"><span class="wrong"></span><span class="arrow">→</span><span class="right"></span></span>
       <span class="acts"><button class="t-apply" type="button">適用</button><button class="t-del" type="button">削除</button></span>`;
-    li.querySelector('.wrong').textContent = t.wrong;
-    li.querySelector('.right').textContent = t.right;
-    li.querySelector('.t-apply').addEventListener('click', () => { const n = replaceAllInTranscript(t.wrong, t.right); showTermNote(`「${t.wrong}」を ${n} 件置換しました。`); });
-    li.querySelector('.t-del').addEventListener('click', () => { termDict.splice(i, 1); saveTermDict(); renderTermDict(); });
+    li.querySelector('.wrong').textContent = t.from;
+    li.querySelector('.right').textContent = t.to;
+    li.querySelector('.t-apply').addEventListener('click', () => { const n = replaceAllInTranscript(t.from, t.to); showTermNote(`「${t.from}」を ${n} 件置換しました。`); });
+    li.querySelector('.t-del').addEventListener('click', () => { termDict.splice(i, 1); saveTermDict(); renderDicts(); });
     termDictList.appendChild(li);
   });
 }
+
+/* ---- 設定画面の変換辞書（追加・変更・削除） ---- */
+function showDictNote(msg) { if (dictNote) dictNote.textContent = msg; }
+function renderDictSettings() {
+  if (!dictList) return;
+  dictList.innerHTML = '';
+  if (!termDict.length) {
+    const li = document.createElement('li'); li.className = 'word-dict-empty';
+    li.textContent = 'まだ登録された用語はありません。上の欄から追加してください。';
+    dictList.appendChild(li); return;
+  }
+  termDict.forEach((t, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<input class="d-from" type="text" aria-label="読み・誤変換" />
+      <span class="d-arrow" aria-hidden="true">→</span>
+      <input class="d-to" type="text" aria-label="正しい表記" />
+      <button class="d-del" type="button">削除</button>`;
+    const fromEl = li.querySelector('.d-from'), toEl = li.querySelector('.d-to');
+    fromEl.value = t.from; toEl.value = t.to;
+    const commit = () => {
+      const nf = fromEl.value.trim(), nt = toEl.value.trim();
+      if (!nf) { fromEl.value = termDict[i].from; return; }  // 空にはできない（削除ボタンで消す）
+      termDict[i] = { from: nf, to: nt };
+      saveTermDict(); renderTermDict();
+      showDictNote(`「${nf}」→「${nt}」に更新しました。`);
+    };
+    fromEl.addEventListener('change', commit);
+    toEl.addEventListener('change', commit);
+    li.querySelector('.d-del').addEventListener('click', () => {
+      const removed = termDict[i];
+      termDict.splice(i, 1); saveTermDict(); renderDicts();
+      showDictNote(`「${removed.from}」を削除しました。`);
+    });
+    dictList.appendChild(li);
+  });
+}
+function renderDicts() { renderTermDict(); renderDictSettings(); }
+
+function addDictEntry() {
+  const f = (dictFrom.value || '').trim(), t = (dictTo.value || '').trim();
+  if (!f || !t) { showDictNote('「読み・誤変換」と「正しい表記」を両方入力してください。'); return; }
+  if (f === t) { showDictNote('変換前と変換後が同じです。'); return; }
+  const idx = termDict.findIndex((x) => x.from === f);
+  if (idx >= 0) termDict[idx].to = t; else termDict.push({ from: f, to: t });
+  saveTermDict(); renderDicts();
+  dictFrom.value = ''; dictTo.value = '';
+  dictFrom.focus();
+  showDictNote(`「${f}」→「${t}」を登録しました。以後、文字起こし・AI議事録の作成時に自動で変換します。`);
+}
+if (dictAdd) dictAdd.addEventListener('click', addDictEntry);
+[dictFrom, dictTo].forEach((el) => {
+  if (!el) return;
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addDictEntry(); } });
+});
+if (dictAuto) dictAuto.addEventListener('change', () => {
+  dictAutoApply = dictAuto.checked;
+  localStorage.setItem(DICT_AUTO_KEY, dictAutoApply ? '1' : '0');
+  showDictNote(dictAutoApply
+    ? '文字起こし・AI議事録の作成時に、登録した用語を自動で変換します。'
+    : '自動変換はオフです。枠の「用語修正」から手動で置換できます。');
+});
+if (dictApplyNow) dictApplyNow.addEventListener('click', () => {
+  if (!termDict.length) { showDictNote('登録された用語がありません。'); return; }
+  const n = applyDictToAll(false);
+  showDictNote(n > 0
+    ? `文字起こし・AI議事録・メール本文に辞書を適用しました（計 ${n} 件置換）。`
+    : '置換する語は見つかりませんでした。');
+});
 function showTermNote(msg) { termFoundNote.textContent = msg; }
 function openTermModal(note) {
   showTermNote(note || '会社名や固有名詞など、誤変換された語を正しい語に一括置換できます。');
@@ -2975,22 +3143,27 @@ termApply.addEventListener('click', () => {
 termRegister.addEventListener('click', () => {
   const w = termWrong.value.trim(), r = termRight.value.trim();
   if (!w || !r) { showTermNote('「誤り」と「正しい」を両方入力してください。'); return; }
-  if (!termDict.some((t) => t.wrong === w)) termDict.push({ wrong: w, right: r });
-  saveTermDict(); renderTermDict();
-  showTermNote(`辞書に登録しました。以後、録音後に「${w}」を自動でチェックします。`);
+  const idx = termDict.findIndex((t) => t.from === w);
+  if (idx >= 0) termDict[idx].to = r; else termDict.push({ from: w, to: r });
+  saveTermDict(); renderDicts();
+  showTermNote(`辞書に登録しました。以後、文字起こし・AI議事録の作成時に「${w}」を「${r}」へ自動変換します（設定でも変更できます）。`);
 });
 termApplyAll.addEventListener('click', () => {
-  let total = 0;
-  for (const t of termDict) total += replaceAllInTranscript(t.wrong, t.right);
+  const total = applyDictToAll(false);
   showTermNote(`登録用語をすべて適用しました（計 ${total} 件置換）。`);
 });
-/** 録音後に登録用語が含まれていれば確認ポップアップを開く */
+/**
+ * 録音後の辞書チェック。
+ * 自動変換がオンなら確定した文字起こしへ辞書を適用し、
+ * オフのときだけ「用語の確認・修正」ポップアップを開く。
+ */
 function checkTerms() {
   if (!termDict.length) return;
+  if (dictAutoApply) { applyDictToAll(true); return; }
   const text = liveTranscript.value;
-  const found = termDict.filter((t) => text.includes(t.wrong));
+  const found = termDict.filter((t) => t.from && text.includes(t.from));
   if (found.length) {
-    openTermModal(`「${found.map((t) => t.wrong).join('」「')}」が見つかりました。正しい語に一括修正できます。`);
+    openTermModal(`「${found.map((t) => t.from).join('」「')}」が見つかりました。正しい語に一括修正できます。`);
   }
 }
 
@@ -3636,7 +3809,7 @@ function buildAudioPrompt() {
 
 【会議情報】
 会議名: ${m.name}
-日付: ${formatDateJp(m.date)}${timeLine}${partLine}`;
+日付: ${formatDateJp(m.date)}${timeLine}${partLine}${dictPromptBlock()}`;
 }
 
 function setAiAudioStatus(kind, html) {
@@ -3991,7 +4164,8 @@ async function geminiTranscribeAll(onStage) {
     + '・聞き取りにくい箇所は文脈から自然に補正し、判断できない部分は（聞き取れず）と書いてください。\n'
     + speakerRule
     + '・相槌だけの行は省いてかまいません。\n'
-    + '・数値・固有名詞・日付・金額・型番は必ず保持してください。';
+    + '・数値・固有名詞・日付・金額・型番は必ず保持してください。'
+    + dictPromptBlock();   // 登録した用語は指定の表記で書いてもらう
   return geminiAudioRequest(recordedBlob, prompt, { onStage, stage: 'Geminiが文字起こし中…' });
 }
 
@@ -4103,7 +4277,7 @@ async function runAiTranscribe(opts) {
   updateFabState();
     startTxtProgress();
   try {
-    const text = await geminiTranscribeAll((st) => { txtStage = st; tickTxtProgress(); });
+    const text = autoConvert(await geminiTranscribeAll((st) => { txtStage = st; tickTxtProgress(); }));
     if (aiTextEl) aiTextEl.value = text;
     saveAiTranscriptToHistory(text);
     endTxtProgress(true);
@@ -4252,6 +4426,8 @@ let mailAuto = { subject: '', body: '' };
  * 議事録枠には議事録のみ、メール枠には件名と貼り付け用の本文をそれぞれ入れる。
  */
 function applyAiOutput(text) {
+  // AIの出力にも変換辞書を適用し、社名・固有名詞を登録した表記に揃える
+  text = autoConvert(text);
   const parts = splitAiOutput(text);
   if (aiResult) aiResult.value = parts.minutes || text;
   if (mailSubject && parts.subject
@@ -4612,6 +4788,7 @@ applyLiveUI();  // ライブ表示（Web Speech）の対応状況を反映
 updateHomeUI();
 renderParticipants();
 loadTermDict();
+renderDicts();      // 「用語の確認・修正」と設定の変換辞書を描画
 drawerVerMain.textContent = APP_VERSION;
 drawerVerSub.textContent = APP_UPDATED;
 

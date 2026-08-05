@@ -276,7 +276,8 @@
       <!-- 中央: 点滅する案内（待機中のみ） -->
       <div class="idle-prompt" id="idlePrompt">
         <span class="idle-text">
-          <svg class="idle-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
+          <!-- 中央下部のマイクボタンと同じアイコン（色は文字色に合わせてマスクで描画） -->
+          <span class="idle-mic" aria-hidden="true"></span>
           で録音開始
         </span>
       </div>
@@ -389,6 +390,39 @@
           <p class="field-hint warn" id="modelWarn" hidden></p>
         </div>
         </div><!-- /#whisperSettings -->
+      </div>
+
+      <!-- 変換辞書（ひらがな等 → 指定の漢字） -->
+      <div class="panel">
+        <h3 class="settings-group-title">変換辞書（読み → 漢字）</h3>
+        <p class="field-hint">
+          「しんけんこう」→「新建高」のように、<b>読み（ひらがな）や誤変換</b>と<b>正しい表記</b>をセットで登録します。
+          登録した語は<b>文字起こし・AI文字起こし・AI議事録・メール文面</b>で自動的に変換され、AIへ渡す指示にも用語集として付きます。
+        </p>
+        <div class="field settings-field">
+          <label class="switch-row" for="dictAuto">
+            <span>
+              自動で変換する
+              <span class="field-hint inline">オフにすると自動変換せず、枠の「用語修正」から手動で置換できます。</span>
+            </span>
+            <input type="checkbox" id="dictAuto" checked />
+          </label>
+        </div>
+        <div class="field settings-field">
+          <label>用語を追加</label>
+          <div class="dict-add">
+            <input id="dictFrom" type="text" aria-label="読み・誤変換" placeholder="例: しんけんこう" />
+            <span class="dict-arrow" aria-hidden="true">→</span>
+            <input id="dictTo" type="text" aria-label="正しい表記" placeholder="例: 新建高" />
+            <button id="dictAdd" class="chip-btn" type="button">＋ 追加</button>
+          </div>
+          <p class="field-hint" id="dictNote">ひらがなで登録すると、カタカナ表記（シンケンコウ）も一緒に変換します。</p>
+        </div>
+        <div class="mini-label-row">
+          <span class="mini-label">登録済みの用語（その場で編集できます）</span>
+          <button id="dictApplyNow" class="link-btn" type="button">今の内容に適用</button>
+        </div>
+        <ul id="dictList" class="word-dict"></ul>
       </div>
 
       <div class="panel">
@@ -570,7 +604,8 @@
         <ul class="man-def">
           <li><b>枠内の展開ボタン</b><span>文字起こし・AI文字起こし・AI議事録・メール本文の各枠の<b>右下にある「＜」</b>を押すと、機能ボタンが左へ順に開きます（もう一度「＞」で閉じます）。<b>コピー</b>（枠内の全文）／<b>用語修正</b>／<b>情報編集</b>（議事録・メール）／<b>ダウンロード</b>（議事録: .txt・Word・.md）／<b>作り直す</b>がここにまとまっています。作成ボタンは廃止し、録音を止めるとAIが自動で作ります。</span></li>
           <li><b>話者の自動判別（A / B …）</b><span>設定でオンにすると、録音中は<b>声の高さ</b>から話し手の交代を推定して行頭に A・B などを付けます。停止後の「AI文字起こし」ではAIが音声を聞いて話者を分けます。文字起こしの本文には手を加えないので、精度には影響しません。</span></li>
-          <li><b>用語の修正・辞書</b><span>枠の展開ボタン内の「用語修正」で、会社名など誤変換されやすい語を<b>文字起こし・AI文字起こし・AI議事録・メール本文まとめて</b>一括置換。辞書に登録すると録音後に自動でチェックします。</span></li>
+          <li><b>変換辞書（読み → 漢字）</b><span><b>設定 →「変換辞書」</b>で「しんけんこう」→「新建高」のように、読み（ひらがな）や誤変換と正しい表記をセットで登録できます。登録した語は<b>文字起こし・AI文字起こし・AI議事録・メール文面</b>で自動的に変換され、AIへ渡す指示にも用語集として付くので、社名や固有名詞が正しい漢字で書かれます（ひらがなで登録するとカタカナ表記も変換）。追加・変更・削除はいつでも設定から行えます。</span></li>
+          <li><b>用語の修正</b><span>枠の展開ボタン内の「用語修正」からも、誤変換されやすい語を<b>文字起こし・AI文字起こし・AI議事録・メール本文まとめて</b>一括置換・辞書登録できます（設定の変換辞書と同じ辞書です）。</span></li>
           <li><b>会議情報</b><span>タイトル・日付・参加者（部署＋氏名）を録音の前・最中・後いつでも入力でき、出力にも反映されます。</span></li>
           <li><b>引き下げてリセット</b><span>画面のいちばん上で下へスワイプすると丸い矢印が出ます。そのまま引いて離すと、画面が録音待機に戻ります（Chromeの「引き下げて更新」と同じ操作）。<b>今の議事録・録音音声は履歴に残る</b>ので、そのまま次の会議を録れます。</span></li>
           <li><b>録音ボタンの出し入れ</b><span>議事録ができたあとは、読みやすいように録音ボタンを隠します。<b>画面の一番下までスクロール</b>すると出てきて、上に戻すとまた消えます。</span></li>
@@ -703,10 +738,11 @@
         </div>
         <div style="margin-top: 18px;">
           <div class="mini-label-row">
-            <span class="mini-label">登録済みの用語（会社名など）</span>
+            <span class="mini-label">登録済みの用語（変換辞書）</span>
             <button id="termApplyAll" class="link-btn" type="button">すべて適用</button>
           </div>
           <ul id="termDictList" class="term-dict"></ul>
+          <p class="field-hint" style="margin-top:10px;">辞書は<b>設定 →「変換辞書（読み → 漢字）」</b>でも追加・変更できます。登録した語は文字起こし・AI議事録の作成時に自動で変換されます。</p>
         </div>
       </div>
       <div class="modal-foot">
