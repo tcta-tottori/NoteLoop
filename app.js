@@ -97,7 +97,8 @@ const historyList    = $('historyList');
 const screenTitle    = $('screenTitle');
 
 // メール
-const mailTo = $('mailTo'), mailSubject = $('mailSubject'), mailBody = $('mailBody');
+const mailTo = $('mailTo'), mailCc = $('mailCc'), mailSubject = $('mailSubject'), mailBody = $('mailBody');
+const mailToDefault = $('mailToDefault'), mailCcDefault = $('mailCcDefault');
 const mailThunderbird = $('mailThunderbird'), mailEml = $('mailEml'), mailCopy = $('mailCopy');
 // 用語辞書
 const termModal = $('termModal'), termModalClose = $('termModalClose'), termModalDone = $('termModalDone');
@@ -142,7 +143,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.6';
+const APP_VERSION = 'Ver.8.7';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -329,9 +330,10 @@ function showScreen(id, title) {
   if (title) screenTitle.textContent = title;
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (id === 'screen-home') { updateHomeUI(); refreshAudioPanel(); }
+  if (id === 'screen-settings') collapseAllSettings();   // 設定は毎回すべて閉じた状態で開く
   // 設定画面の「マイク」カードを開いている間だけ入力レベルを表示する
   if (id === 'screen-settings' && isSettingsSectionOpen('マイク')) activateSettingsMic();
-  else if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
+  else if (typeof settingsMicMeter !== 'undefined') { settingsMicMeter.stop(); stopNativeSettingsMeter(); if (!recording) stopNativeMonitor(); }
 }
 
 /** 録音音声の再生カードを表示／非表示（音声ができてから表示する） */
@@ -443,15 +445,16 @@ function renderLiveNow() {
   const raw = liveTranscript.value.trim();
   if (!raw) {
     // 準備中は「点滅する文字＋3点アニメーション」で、動いていることが見て分かるようにする
-    const prep = (msg) =>
-      `<span class="live-prep"><span class="prep-text">${msg}</span>`
+    // 「準備中」だけを白文字で出し、改行して白い3点アニメーションを中央に置く
+    const prep = () =>
+      '<span class="live-prep"><span class="prep-text">準備中</span>'
       + '<span class="prep-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>';
     liveNowText.innerHTML =
-      liveMode === 'webspeech' ? prep('リアルタイム文字起こしを準備中')
+      liveMode === 'webspeech' ? prep()
     : liveMode === 'native'    ? (liveWhisperFailed
         ? '<span class="live-wait">録音中の文字起こしを準備できませんでした。<strong>録音は続いています</strong>。停止後に全体をAIが文字起こし・議事録化します。</span>'
-        : prep(`リアルタイム文字起こしを準備中（${LIVE_UPDATE_SEC}秒ごとに更新）`))
-    :                            '<span class="live-wait">録音モードのため、録音中の文字起こしは行いません。停止後にAIが文字起こし＋議事録を作成します（設定でライブ字幕モードに変更できます）。</span>';
+        : prep())
+    :                            '<span class="live-wait">録音モードのため、録音中の文字起こしは行いません。停止後にAIが文字起こし＋議事録を作成します。</span>';
     return;
   }
   const lines = raw.split('\n').filter((l) => l.trim());
@@ -1260,6 +1263,7 @@ async function stopNativeRecording() {
 }
 
 async function startRecording() {
+  stopNativeMonitor();   // 待機中のマイク監視を止めてから録音を始める（マイクの取り合いを防ぐ）
   hideError();
   closeHistoryDetail(); // 履歴を見ていた場合はカード群を録音画面へ戻す
   resetFlowCards(); // 新しい録音: 前回の段階カードを一旦すべて隠す
@@ -2063,6 +2067,7 @@ function onNativePcm(ev) {
  *   - 声は強弱があるので、ピークが平均に対して十分大きいことも見る
  */
 const LIVE_SILENCE_PEAK = 0.03;   // 山がこれ以下なら発話なし（LIVE_SILENCE_RMS と併用）
+const NO_SPEECH_MARK = '（音声に発言はありませんでした）';
 function hasSpeech(audio) {
   if (!audio || !audio.length) return false;
   const level = rms(audio);
@@ -2095,6 +2100,40 @@ function withLiveOverlap(chunk) {
   out.set(liveTailAudio, 0);
   out.set(chunk, liveTailAudio.length);
   return out;
+}
+
+/**
+ * 録音全体に「人の声」が入っているか調べる。
+ * 全体の平均で見ると長い録音では薄まるので、1秒ずつの窓で見て、
+ * ひとつでも十分な音量の窓があれば「発言あり」とする。
+ * 無音のままAIへ送ると、指示文や用語辞書に引きずられて
+ * 実際には無い会話が作られてしまうため、その前に止める。
+ */
+let lastSpeechCheck = null;   // 同じ音声を何度も解析しないための控え
+async function recordedHasSpeech() {
+  if (!recordedBlob) return false;
+  const key = recordedBlob.size + ':' + (recordedDurationSec || 0);
+  if (lastSpeechCheck && lastSpeechCheck.key === key) return lastSpeechCheck.ok;
+  let ok = true;
+  try {
+    const audio = await decodeTo16kMono(recordedBlob);
+    const win = SAMPLE_RATE;   // 1秒ずつ見る
+    let best = 0, bestPeak = 0;
+    for (let i = 0; i + win <= audio.length; i += win) {
+      const seg = audio.subarray(i, i + win);
+      const lv = rms(seg);
+      if (lv > best) best = lv;
+      for (let j = 0; j < seg.length; j += 7) { const v = Math.abs(seg[j]); if (v > bestPeak) bestPeak = v; }
+    }
+    ok = best >= LIVE_SILENCE_RMS && bestPeak >= LIVE_SILENCE_PEAK;
+  } catch (_) { ok = true; }   // 判定できないときは、これまでどおり処理する
+  lastSpeechCheck = { key, ok };
+  return ok;
+}
+
+/** 無音だったときの案内（文字起こし・議事録の代わりに出す） */
+function showNoSpeechNotice() {
+  showError('録音に発言が入っていませんでした。文字起こしと議事録は作成していません（実際には無い会話がAIによって作られるのを防ぐためです）。');
 }
 
 function maybeSendChunk() {
@@ -2396,7 +2435,10 @@ function resetSession(opts) {
   // メール（自動で入れた件名・本文も戻す）
   if (mailSubject) mailSubject.value = '';
   if (mailBody) mailBody.value = '';
+  if (mailTo) mailTo.value = '';
+  if (mailCc) mailCc.value = '';
   mailAuto = { subject: '', body: '' };
+  applyMailDefaults();
 
   // 録音音声
   recordedBlob = null;
@@ -3016,18 +3058,54 @@ function buildMailSubject(m) { return `【議事録】${m.name}（${formatDateJp
 /** 件名・本文が空のときだけ、議事録から組み立てて埋める（手で直した内容は残す） */
 function prepareMailFromMinutes() {
   const m = currentMinutes();
+  applyMailDefaults();
   if (!mailSubject.value.trim()) mailSubject.value = buildMailSubject(m);
   if (!mailBody.value.trim()) mailBody.value = buildPlainText(m);
 }
+/* ===== 既定の宛先・CC（設定に入れておくと、メール作成時に自動で入る） ===== */
+const MAIL_TO_KEY = 'noteloop_mail_to';
+const MAIL_CC_KEY = 'noteloop_mail_cc';
+function loadMailDefaults() {
+  return {
+    to: localStorage.getItem(MAIL_TO_KEY) || '',
+    cc: localStorage.getItem(MAIL_CC_KEY) || '',
+  };
+}
+/** 空の宛先・CC に既定値を入れる（利用者が入れた値は上書きしない） */
+function applyMailDefaults() {
+  const d = loadMailDefaults();
+  if (mailTo && !mailTo.value.trim() && d.to) mailTo.value = d.to;
+  if (mailCc && !mailCc.value.trim() && d.cc) mailCc.value = d.cc;
+}
+if (mailToDefault) {
+  mailToDefault.value = loadMailDefaults().to;
+  mailToDefault.addEventListener('input', () => {
+    localStorage.setItem(MAIL_TO_KEY, mailToDefault.value.trim());
+    applyMailDefaults();
+  });
+}
+if (mailCcDefault) {
+  mailCcDefault.value = loadMailDefaults().cc;
+  mailCcDefault.addEventListener('input', () => {
+    localStorage.setItem(MAIL_CC_KEY, mailCcDefault.value.trim());
+    applyMailDefaults();
+  });
+}
+
 mailThunderbird.addEventListener('click', () => {
   const to = mailTo.value.trim();
-  const href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(mailSubject.value)}&body=${encodeURIComponent(mailBody.value)}`;
+  const cc = mailCc ? mailCc.value.trim() : '';
+  const href = `mailto:${encodeURIComponent(to)}?`
+    + (cc ? `cc=${encodeURIComponent(cc)}&` : '')
+    + `subject=${encodeURIComponent(mailSubject.value)}&body=${encodeURIComponent(mailBody.value)}`;
   window.location.href = href;
 });
 mailEml.addEventListener('click', () => {
   const to = mailTo.value.trim();
+  const cc = mailCc ? mailCc.value.trim() : '';
   const eml =
     (to ? `To: ${to}\n` : '') +
+    (cc ? `Cc: ${cc}\n` : '') +
     `Subject: ${mailSubject.value}\n` +
     `X-Unsent: 1\n` +
     `Content-Type: text/plain; charset=UTF-8\n\n` +
@@ -3038,7 +3116,9 @@ mailEml.addEventListener('click', () => {
 mailCopy.addEventListener('click', async () => {
   // 件名と本文をまとめてコピーする（メールアプリへそのまま貼り付けられるように）
   const subject = mailSubject.value.trim();
-  const text = (subject ? `件名: ${subject}\n\n` : '') + mailBody.value;
+  const to = mailTo.value.trim(), cc = mailCc ? mailCc.value.trim() : '';
+  const text = (to ? `宛先: ${to}\n` : '') + (cc ? `CC: ${cc}\n` : '')
+    + (subject ? `件名: ${subject}\n` : '') + (to || cc || subject ? '\n' : '') + mailBody.value;
   const ok = await copyText(text);
   if (ok) { hideError(); showToast('件名と本文をコピーしました'); }
   else showError('コピーに失敗しました。');
@@ -3134,17 +3214,17 @@ function applyDictToAll(safe = false) {
   return total;
 }
 
-/** AIへ渡す指示に付ける用語集 */
+/**
+ * AIへ渡す指示に付ける用語集。
+ * 「この表記で書いてください」と書くと、音声に無くてもAIが登録語を
+ * 会話に混ぜてしまう（無音の録音から社名入りの会話が生成された事例あり）。
+ * そのため、あくまで「聞こえたときの書き方」であることを強く伝える。
+ */
 function dictPromptBlock() {
   const lines = termDict.filter((t) => t.from && t.to).map((t) => `- ${t.from} → ${t.to}`);
   if (!lines.length) return '';
-  return `\n\n【用語辞書（左の読み・誤変換は右の表記に統一してください）】\n${lines.join('\n')}`;
-}
-/** 録音中のライブ文字起こし用（短くまとめた1行の用語ヒント） */
-function dictPromptLine() {
-  const pairs = termDict.filter((t) => t.from && t.to).slice(0, 30).map((t) => `${t.from}→${t.to}`);
-  if (!pairs.length) return '';
-  return `・次の語はこの表記で書いてください: ${pairs.join('、')}\n`;
+  return `\n\n【表記の統一（音声に出てきたときだけ使う一覧）】\n${lines.join('\n')}\n`
+    + '※この一覧は表記をそろえるためだけのものです。音声に無い語は絶対に書かないでください。';
 }
 
 /** 文字起こし・AI文字起こし・AI議事録・メール本文をまとめて一括置換する */
@@ -3363,28 +3443,78 @@ function updateMeetingSummary() {
   meetingSummary.innerHTML = html;
 }
 // 会議情報・マイク設定を1画面（モーダル）で開く。マイクのレベルメーターもここで開始/停止する。
+/* --- アプリ版のレベル表示 ---
+ * アプリ版はマイクをネイティブの録音サービスが持っているため、
+ * WebView から getUserMedia でマイクを開くことはできない（開けても二重になる）。
+ * 録音中はサービスが出す音量を、待機中は軽量な監視（startLevelMonitor）を使う。 */
+let nativeMeterRaf = null, nativeMonitorOn = false;
+function startNativeModalMeter() {
+  stopNativeModalMeter();
+  const tick = () => {
+    nativeMeterRaf = requestAnimationFrame(tick);
+    const level = Math.max(0, Math.min(1, nativeLevel || 0));
+    if (micMeterHomeMask) micMeterHomeMask.style.width = Math.round((1 - level) * 100) + '%';
+  };
+  tick();
+}
+function stopNativeModalMeter() {
+  if (nativeMeterRaf) cancelAnimationFrame(nativeMeterRaf);
+  nativeMeterRaf = null;
+  if (micMeterHomeMask) micMeterHomeMask.style.width = '100%';
+}
+/** 待機中にネイティブ側でマイクの音量だけを見張る（対応していない版では false） */
+async function startNativeMonitor() {
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.startLevelMonitor !== 'function') return false;
+  try {
+    if (!nativeLevelSub && typeof rec.addListener === 'function') {
+      nativeLevelSub = rec.addListener('level', (ev) => { setNativeLevel(ev && ev.level); });
+    }
+    const r = await rec.startLevelMonitor();
+    if (r && r.available === false) return false;
+    nativeMonitorOn = true;
+    return true;
+  } catch (_) { return false; }
+}
+function stopNativeMonitor() {
+  if (!nativeMonitorOn) return;
+  nativeMonitorOn = false;
+  const rec = nativeRecorder();
+  if (rec && typeof rec.stopLevelMonitor === 'function') { try { rec.stopLevelMonitor(); } catch (_) {} }
+  setNativeLevel(0);
+}
+
 async function openMeetingModal() {
   meetingModal.hidden = false;
   requestAnimationFrame(() => meetingModal.classList.add('show'));
   await populateMicSelects();
   if (recording) {
-    // 録音中: 別ストリームは開かず、録音側 analyser でレベルを表示。
     if (micPermNoteHome) micPermNoteHome.hidden = true;
     if (micRecNote) {
       micRecNote.hidden = false;
-      micRecNote.textContent = activeEngine === 'webspeech'
-        ? '録音中です。マイクを切り替えると録音音声に反映されます（音声認識のマイクはブラウザの既定が使われます）。'
-        : '録音中です。マイクを切り替えると、その場で録音に反映されます。';
+      micRecNote.textContent = ' 録音中です。マイクを切り替えると、その場で録音に反映されます。';
     }
-    startModalRecMeter();
+    // アプリ版はネイティブの音量を、ブラウザ版は録音側 analyser を使う
+    if (NATIVE) startNativeModalMeter(); else startModalRecMeter();
   } else {
     if (micRecNote) micRecNote.hidden = true;
-    const ok = await homeMicMeter.start(getSavedMicId());
-    if (micPermNoteHome) micPermNoteHome.hidden = ok;
+    if (NATIVE) {
+      const ok = await startNativeMonitor();
+      if (ok) startNativeModalMeter();
+      if (micPermNoteHome) {
+        micPermNoteHome.hidden = ok;
+        if (!ok) micPermNoteHome.textContent = 'マイクの音量を確認できません。端末の設定でマイクの権限を許可してください。';
+      }
+    } else {
+      const ok = await homeMicMeter.start(getSavedMicId());
+      if (micPermNoteHome) micPermNoteHome.hidden = ok;
+    }
   }
 }
 function closeMeetingModal() {
   stopModalRecMeter();
+  stopNativeModalMeter();
+  stopNativeMonitor();
   homeMicMeter.stop();
   meetingModal.classList.remove('show');
   setTimeout(() => { if (!meetingModal.classList.contains('show')) meetingModal.hidden = true; }, 260);
@@ -3529,9 +3659,34 @@ function syncMicSelects() {
 /** 設定画面のマイク入力レベルを開始（権限取得→一覧更新） */
 async function activateSettingsMic() {
   if (!micMeterSettingsMask) return;
+  // アプリ版はネイティブ側の音量を使う（WebViewからはマイクを開けない）
+  if (NATIVE) {
+    const ok = recording || await startNativeMonitor();
+    if (ok) startNativeSettingsMeter();
+    await populateMicSelects();
+    if (micPermNoteSettings) micPermNoteSettings.hidden = ok;
+    return;
+  }
   const ok = await settingsMicMeter.start(getSavedMicId());
   await populateMicSelects();
   if (micPermNoteSettings) micPermNoteSettings.hidden = ok;
+}
+
+/** 設定画面のレベル表示（アプリ版・ネイティブの音量を使う） */
+let nativeSettingsRaf = null;
+function startNativeSettingsMeter() {
+  stopNativeSettingsMeter();
+  const tick = () => {
+    nativeSettingsRaf = requestAnimationFrame(tick);
+    const level = Math.max(0, Math.min(1, nativeLevel || 0));
+    if (micMeterSettingsMask) micMeterSettingsMask.style.width = Math.round((1 - level) * 100) + '%';
+  };
+  tick();
+}
+function stopNativeSettingsMeter() {
+  if (nativeSettingsRaf) cancelAnimationFrame(nativeSettingsRaf);
+  nativeSettingsRaf = null;
+  if (micMeterSettingsMask) micMeterSettingsMask.style.width = '100%';
 }
 
 /* --- 録音中のポップアップ用: 録音側 analyser からレベル表示 --- */
@@ -4331,8 +4486,10 @@ async function geminiTranscribeAll(onStage) {
     + '・聞き取りにくい箇所は文脈から自然に補正し、判断できない部分は（聞き取れず）と書いてください。\n'
     + speakerRule
     + '・相槌だけの行は省いてかまいません。\n'
-    + '・数値・固有名詞・日付・金額・型番は必ず保持してください。'
-    + dictPromptBlock();   // 登録した用語は指定の表記で書いてもらう
+    + '・数値・固有名詞・日付・金額・型番は必ず保持してください。\n'
+    + '・音声に人の声が入っていない（無音・雑音だけ）の場合は、想像で会話を作らず\n'
+    + `　「${NO_SPEECH_MARK}」とだけ出力してください。`
+    + dictPromptBlock();
   return geminiAudioRequest(recordedBlob, prompt, { onStage, stage: 'Geminiが文字起こし中…' });
 }
 
@@ -4406,6 +4563,8 @@ async function runAiTranscribe(opts) {
     if (!auto) setAiTextStatus('warn', '⚠ 録音音声がありません。');
     return false;
   }
+  // 無音の録音をAIへ送ると、指示文や用語辞書に引きずられて会話が作られてしまう
+  if (!(await recordedHasSpeech())) { showNoSpeechNotice(); return false; }
   aiTextRunning = true;
   updateFabState();
   // 進捗は上部の総合ゲージ1本に集約する。単独で呼ばれたときはここで開始・終了する。
@@ -4413,7 +4572,14 @@ async function runAiTranscribe(opts) {
   if (ownFlow) startAiFlowProgress();
   setAiFlowStage('AIが文字起こし中…');
   try {
-    const text = autoConvert(await geminiTranscribeAll((st) => { txtStage = st; setAiFlowStage(st); }));
+    const raw = await geminiTranscribeAll((st) => { txtStage = st; setAiFlowStage(st); });
+    // AIが「発言なし」と答えたら、その文言を本文に入れず案内だけ出す
+    if (!raw.trim() || raw.trim().indexOf(NO_SPEECH_MARK) === 0) {
+      showNoSpeechNotice();
+      if (ownFlow) endAiFlowProgress(false);
+      return false;
+    }
+    const text = autoConvert(raw);
     if (aiTextEl) aiTextEl.value = text;
     saveAiTranscriptToHistory(text);
     applyHighAccuracyTranscript(text);   // 録音中の速報を高精度版へ置き換える
@@ -4635,6 +4801,7 @@ function applyAiOutput(text) {
     mailBody.value = parts.body;
     mailAuto.body = parts.body;
   }
+  applyMailDefaults();   // 設定に入れてある宛先・CCを自動で入れる
   return parts;
 }
 
@@ -4649,6 +4816,7 @@ async function runAiAutoMinutes(opts) {
     setAiAutoStatus('warn', '⚠ 録音音声がありません。設定で<strong>ライブ字幕モードをOFF（録音モード）</strong>にして録音してからお試しください。');
     return false;
   }
+  if (!(await recordedHasSpeech())) { showNoSpeechNotice(); return false; }
   aiAutoRunning = true;
   updateFabState();
   // 進捗は上部の総合ゲージ1本だけ（カード内には出さない）
@@ -5031,7 +5199,7 @@ function initSettingsAccordion() {
       // マイクの入力レベルは、カードを開いている間だけ動かす
       if (key === 'マイク') {
         if (open && $('screen-settings').classList.contains('active')) activateSettingsMic();
-        else if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
+        else if (typeof settingsMicMeter !== 'undefined') { settingsMicMeter.stop(); stopNativeSettingsMeter(); if (!recording) stopNativeMonitor(); }
       }
     };
     apply(!!openState[key]);   // 既定は閉じた状態（タイトルのみ）
@@ -5045,6 +5213,14 @@ function initSettingsAccordion() {
     settingsSections.set(key, { panel, body, toggle, isOpen: () => panel.classList.contains('open') });
   }
 }
+/** 設定のカードをすべて閉じる（設定画面を開くたびに呼ぶ） */
+function collapseAllSettings() {
+  for (const [, sec] of settingsSections) {
+    if (!sec.isOpen()) continue;
+    sec.toggle.click();   // 開閉と保存の処理をそのまま通す
+  }
+}
+
 /** そのカードが開いているか（見出しの一部でも可） */
 function isSettingsSectionOpen(name) {
   for (const [key, sec] of settingsSections) if (key.includes(name)) return sec.isOpen();

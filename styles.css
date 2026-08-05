@@ -1158,17 +1158,17 @@ body.is-recording.is-paused .rec-hint { color: var(--muted); animation: none; }
   .out-act { transform: none; }
 }
 
-/* ---------- 録音中「リアルタイム文字起こしの準備中」表示 ---------- */
-.live-prep { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* ---------- 録音中「準備中」表示（白文字＋下に白い3点・中央そろえ） ---------- */
+.live-prep { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
 .live-prep .prep-text {
-  color: var(--brand1); font-size: 13.5px; font-weight: 700; line-height: 1.8;
+  color: #fff; font-size: 13.5px; font-weight: 700; line-height: 1.8;
   animation: blinkText 1.5s ease-in-out infinite;
 }
 /* 3点が左から順に上がり、一呼吸おいて順に落ちるアニメーション */
-.prep-dots { display: inline-flex; align-items: flex-end; gap: 6px; height: 14px; }
+.prep-dots { display: inline-flex; align-items: flex-end; justify-content: center; gap: 7px; height: 14px; }
 .prep-dots i {
   display: block; width: 7px; height: 7px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--brand1), var(--brand2));
+  background: #fff;
   animation: fabDotHop 1.9s cubic-bezier(.34, .1, .3, 1) infinite;
 }
 .prep-dots i:nth-child(2) { animation-delay: .13s; }

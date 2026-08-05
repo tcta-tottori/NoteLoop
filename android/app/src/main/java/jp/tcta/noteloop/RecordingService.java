@@ -354,6 +354,9 @@ public class RecordingService extends Service {
      *   ・会議の声で振り切れるよう、全体の 35% 程度を上限として扱う
      * とし、生の振幅をそのまま割るより「素直に効く」ようにしている。
      */
+    /** 振幅（0〜32767）を表示用の 0〜1 に直す。プラグイン側の監視でも同じ式を使う。 */
+    static float levelFromAmp(int amp) { return toLevel(amp); }
+
     private static float toLevel(int amp) {
         float norm = amp / 32767f;
         if (norm <= LEVEL_GATE) return 0f;

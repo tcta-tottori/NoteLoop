@@ -204,6 +204,10 @@
           <input id="mailTo" type="text" placeholder="taro@example.com, hanako@example.com" />
         </div>
         <div class="field settings-field">
+          <label for="mailCc">CC（任意）</label>
+          <input id="mailCc" type="text" placeholder="cc@example.com" />
+        </div>
+        <div class="field settings-field">
           <label for="mailSubject">件名</label>
           <input id="mailSubject" type="text" />
         </div>
@@ -394,6 +398,19 @@
           <p class="field-hint">この画面を開いている間、マイクの入力レベルを表示します。話すとバーが動けば正しく拾えています。緑〜黄が適正、赤が続くときはマイクから離れるか音量を下げてください。</p>
         </div>
         <p class="field-hint mic-perm-note" id="micPermNoteSettings" hidden>マイクを利用できません。ブラウザのマイク権限を許可してください（HTTPS または localhost が必要です）。</p>
+      </div>
+
+      <div class="panel">
+        <h3 class="settings-group-title">メール</h3>
+        <p class="field-hint">ここに入れておくと、メールを作るときに宛先・CCが自動で入ります。</p>
+        <div class="field settings-field">
+          <label for="mailToDefault">既定の宛先（カンマ区切り）</label>
+          <input id="mailToDefault" type="text" placeholder="taro@example.com, hanako@example.com" />
+        </div>
+        <div class="field settings-field">
+          <label for="mailCcDefault">既定のCC（カンマ区切り）</label>
+          <input id="mailCcDefault" type="text" placeholder="cc@example.com" />
+        </div>
       </div>
 
       <div class="panel">

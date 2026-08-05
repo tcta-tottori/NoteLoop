@@ -5,6 +5,9 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -49,6 +52,7 @@ public class RecorderPlugin extends Plugin {
 
     @PluginMethod
     public void start(PluginCall call) {
+        stopMonitorInternal();   // 待機中の音量監視がマイクを掴んだままだと録音を開始できない
         boolean needMic = getPermissionState("microphone") != com.getcapacitor.PermissionState.GRANTED;
         // 通知（Android 13+）も要る。許可が無いと録音中の通知が通知領域にもロック画面にも
         // 出ない（録音自体は続く）。以前はマイクが未許可のときしか要求していなかったため、
@@ -263,6 +267,95 @@ public class RecorderPlugin extends Plugin {
     public void stopLevelUpdates(PluginCall call) {
         if (levelHandler != null) levelHandler.removeCallbacks(levelPush);
         call.resolve();
+    }
+
+    /* ===== 待機中のマイク音量の監視 =====
+     * 会議情報ポップアップ・設定のレベルバーは、録音中は録音サービスの音量を使う。
+     * 録音していないときは音量の出どころが無く、WebView からは getUserMedia で
+     * マイクを開けないためバーが動かなかった。ここでマイクを軽く開いて振幅だけを読み、
+     * 録音中と同じ "level" イベントで Web 側へ送る（ファイルには何も書かない）。 */
+    private static final int MONITOR_RATE = 16000;
+    private AudioRecord monitorRecord;
+    private Thread monitorThread;
+    private volatile boolean monitoring = false;
+    private volatile float monitorLevel = 0f;
+
+    @PluginMethod
+    public void startLevelMonitor(PluginCall call) {
+        JSObject r = new JSObject();
+        // 録音中はサービス側の音量が流れてくるので、ここでマイクを開く必要はない
+        if (RecordingService.isRecording() || monitoring) {
+            r.put("available", true);
+            call.resolve(r);
+            return;
+        }
+        try {
+            int minBuf = AudioRecord.getMinBufferSize(MONITOR_RATE,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            if (minBuf <= 0) minBuf = 4096;
+            monitorRecord = new AudioRecord(MediaRecorder.AudioSource.MIC, MONITOR_RATE,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf * 2);
+            if (monitorRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                throw new IllegalStateException("AudioRecord を初期化できませんでした");
+            }
+            monitorRecord.startRecording();
+        } catch (Exception e) {
+            stopMonitorInternal();
+            r.put("available", false);
+            call.resolve(r);
+            return;
+        }
+        monitoring = true;
+        monitorLevel = 0f;
+        monitorThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                short[] buf = new short[1024];   // 約64msぶん
+                while (monitoring) {
+                    AudioRecord ar = monitorRecord;
+                    if (ar == null) break;
+                    int n;
+                    try { n = ar.read(buf, 0, buf.length); } catch (Exception e) { break; }
+                    if (n <= 0) continue;
+                    int peak = 0;
+                    for (int i = 0; i < n; i++) {
+                        int v = Math.abs(buf[i]);
+                        if (v > peak) peak = v;
+                    }
+                    float target = RecordingService.levelFromAmp(peak);
+                    // 上がるのは即座に、下がるのは少し滑らかに（録音中の表示と同じ動き）
+                    monitorLevel = target > monitorLevel ? target : monitorLevel * 0.55f + target * 0.45f;
+                    JSObject ev = new JSObject();
+                    ev.put("level", monitorLevel);
+                    notifyListeners("level", ev);
+                }
+            }
+        }, "noteloop-mic-monitor");
+        monitorThread.start();
+        r.put("available", true);
+        call.resolve(r);
+    }
+
+    @PluginMethod
+    public void stopLevelMonitor(PluginCall call) {
+        stopMonitorInternal();
+        call.resolve();
+    }
+
+    private void stopMonitorInternal() {
+        monitoring = false;
+        Thread t = monitorThread;
+        monitorThread = null;
+        if (t != null) {
+            try { t.join(300); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+        }
+        AudioRecord ar = monitorRecord;
+        monitorRecord = null;
+        if (ar != null) {
+            try { if (ar.getState() == AudioRecord.STATE_INITIALIZED) ar.stop(); } catch (Exception ignored) {}
+            try { ar.release(); } catch (Exception ignored) {}
+        }
+        monitorLevel = 0f;
     }
 
     /* ===== ライブ文字起こし用の PCM 送信 =====
