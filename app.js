@@ -143,7 +143,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.7';
+const APP_VERSION = 'Ver.8.8';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -3126,7 +3126,7 @@ mailCopy.addEventListener('click', async () => {
 
 /* =========================================================
  * 変換辞書（読み → 漢字）＋ 用語の確認・修正
- *   「しんけんこう」→「新建高」のように、読み（ひらがな）や誤変換と
+ *   「さくらしょうじ」→「さくら商事」のように、読み（ひらがな）や誤変換と
  *   正しい表記をセットで登録する辞書。文字起こし・AI文字起こし・AI議事録・
  *   メール文面で自動的に参照され、AIへ渡す指示にも用語集として付く。
  *   設定画面と「用語の確認・修正」の両方から追加・変更できる。
@@ -3162,12 +3162,12 @@ function dictVariants(from) {
   return [...set];
 }
 function countIn(text, s) { return s ? text.split(s).length - 1 : 0; }
-/** 長い語から先に置換する（「新建高校」が「新建高」に食われないように） */
+/** 長い語から先に置換する（「さくら商事株式会社」が「さくら商事」に食われないように） */
 function sortedDict() { return termDict.slice().sort((a, b) => b.from.length - a.from.length); }
 
 /**
  * 辞書1件をテキストへ適用し、{ text, n（置換件数）} を返す。
- * 「田中 → 田中商事」のように変換後が変換前を含む場合、
+ * 「さくら → さくら商事」のように変換後が変換前を含む場合、
  *   - safe=true（自動変換）: 何度でも呼ばれるため適用しない（伸び続けるのを防ぐ）
  *   - safe=false（手動適用）: 変換済みの箇所を一時退避してから置換（二重変換なし）
  */
