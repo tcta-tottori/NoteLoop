@@ -264,22 +264,29 @@ function updateHomeUI() {
   if (showWave) startWave(); else stopWave();
 }
 
-/** 録音ボタンの段階変化: 録音 → 文字起こし中 → 議事録作成 → メール */
+/**
+ * 録音ボタンの段階変化: 録音 → 議事録作成 → メール。
+ * 文字起こし・議事録の生成中はボタンを出さない（進捗は上部の通知カードに集約）。
+ */
 function updateFabState() {
+  if (homeProcessing && !recording) {
+    recordBtn.hidden = true;
+    recHint.hidden = true;
+    return;
+  }
+  recordBtn.hidden = false;
   let state;
   if (recording) state = 'recording';
-  else if (homeProcessing) state = 'processing';
   else {
     const hasText = liveTranscript.value.trim().length > 0;
-    const hasMinutes = !!(secSummary.value.trim() || secDecisions.value.trim() || secTodos.value.trim());
-    if (hasMinutes) state = 'mail';
+    if (hasMinutes()) state = 'mail';
     else if (hasText) state = 'minutes';
     else state = 'idle';
   }
   recordBtn.dataset.state = state;
-  recordBtn.disabled = (state === 'processing');
-  const labels = { idle: '', recording: '録音中… タップで停止', processing: '文字起こし中…', minutes: 'タップで議事録を作成', mail: 'タップでメールを作成' };
-  const arias = { idle: '録音開始', recording: '録音停止', processing: '文字起こし中', minutes: '議事録を作成', mail: 'メールを作成' };
+  recordBtn.disabled = false;
+  const labels = { idle: '', recording: '録音中… タップで停止', minutes: 'タップで議事録を作成', mail: 'タップでメールを作成' };
+  const arias = { idle: '録音開始', recording: '録音停止', minutes: '議事録を作成', mail: 'メールを作成' };
   recHint.textContent = labels[state] || '';
   recHint.hidden = (state === 'idle');
   recordBtn.setAttribute('aria-label', arias[state]);
@@ -427,7 +434,7 @@ async function releaseWakeLock() {
 recordBtn.addEventListener('click', async () => {
   const st = recordBtn.dataset.state;
   if (st === 'recording') return stopRecording();
-  if (st === 'processing') return;
+  if (homeProcessing) return;   // 生成中は操作を受け付けない（ボタン自体も非表示）
   if (st === 'minutes') { runGenerate(); scrollToEl('minutesFlowCard'); return; }
   if (st === 'mail') { prepareMailFromMinutes(); scrollToEl('mailPanel'); return; }
   return startRecording();

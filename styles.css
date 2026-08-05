@@ -521,17 +521,8 @@ select:focus, input:focus, textarea:focus {
 .fab-doc, .fab-mail { width: 30px; height: 30px; }
 .mic-fab[data-state="idle"] .fab-mic,
 .mic-fab[data-state="recording"] .fab-mic { display: block; }
-.mic-fab[data-state="processing"] .fab-spin { display: block; }
 .mic-fab[data-state="minutes"] .fab-doc { display: block; }
 .mic-fab[data-state="mail"] .fab-mail { display: block; }
-.fab-spin { width: 28px; height: 28px; border: 3px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: fabspin .8s linear infinite; }
-@keyframes fabspin { to { transform: rotate(360deg); } }
-/* 読み込み中（録音直後）も、録音前のマイクボタンと同じグラデーションのまま */
-.mic-fab[data-state="processing"] {
-  background: linear-gradient(135deg, #ff2d6b 0%, #ff5a5f 45%, #ff9d4d 100%);
-  box-shadow: 0 10px 26px rgba(255, 61, 113, .45);
-}
-.mic-fab[data-state="processing"]:disabled { opacity: 1; }
 .mic-fab[data-state="minutes"], .mic-fab[data-state="mail"] {
   background: linear-gradient(135deg, var(--brand1), var(--brand2));
   box-shadow: 0 10px 26px color-mix(in srgb, var(--brand1) 42%, transparent);
