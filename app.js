@@ -44,7 +44,6 @@ const notifyWarn     = $('notifyWarn');
 const notifyWarnText = $('notifyWarnText');
 const notifyWarnBtn  = $('notifyWarnBtn');
 const audioWrap      = $('audioWrap');
-const audioEmptyNote = $('audioEmptyNote');
 const player         = $('player');
 const audioSize      = $('audioSize');
 const audioWarn      = $('audioWarn');
@@ -145,7 +144,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.3';
+const APP_VERSION = 'Ver.8.4';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -337,10 +336,9 @@ function showScreen(id, title) {
   else if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
 }
 
-/** 録音音声パネルの表示（音声の有無で再生カードと案内文を切替） */
+/** 録音音声の再生カードを表示／非表示（音声ができてから表示する） */
 function setAudioAvailable(has) {
   if (audioWrap) audioWrap.hidden = !has;
-  if (audioEmptyNote) audioEmptyNote.hidden = has;
 }
 function refreshAudioPanel() { setAudioAvailable(!!recordedBlob); }
 
@@ -352,29 +350,59 @@ const audioFlowCard  = $('audioPanel');
 const aiTextCard     = $('aiTextCard');
 const minutesFlowCard= $('minutesFlowCard');
 const mailFlowCard   = $('mailPanel');
-function flowCardList() { return [audioFlowCard, aiTextCard, minutesFlowCard, mailFlowCard].filter(Boolean); }
+
+/** 議事録・メールなど「AIの出力が入る欄」に中身があるか */
+function hasVal(id) { const el = document.getElementById(id); return !!(el && el.value && el.value.trim()); }
+
+/**
+ * カードと「そのカードを出してよいか（出力ができたか）」の対応。
+ * 中身ができるまでは出さず、できた順に1枚ずつフェードインさせる。
+ */
+function flowSteps() {
+  return [
+    { el: liveNowPanel,    ready: () => recording && hasVal('liveTranscript') },
+    { el: audioFlowCard,   ready: () => !!recordedBlob },
+    { el: transcriptPanel, ready: () => !recording && hasVal('liveTranscript') },
+    { el: aiTextCard,      ready: () => hasVal('aiText') },
+    { el: minutesFlowCard, ready: () => hasVal('aiResult') },
+    { el: mailFlowCard,    ready: () => hasVal('mailBody') || hasVal('mailSubject') },
+  ].filter((st) => st.el);
+}
+function flowCardList() { return flowSteps().map((st) => st.el); }
 
 /** すべてのフローカードを隠して初期状態へ戻す（新規録音・クリア・再読込時） */
 function resetFlowCards() {
-  flowCardList().forEach((c) => { c.hidden = true; c.classList.remove('revealed'); });
+  flowCardList().forEach((c) => { c.hidden = true; c.classList.remove('revealed'); revealedCards.delete(c); });
 }
 
 /**
- * フローカードを出現させる。
- * stagger=true で1枚ずつ時間差フェードイン（録音直後の演出）。
+ * 出力ができたカードだけを表示する。
+ * 新しく出るカードは1枚ずつ時間差でフェードインする。
+ * 何度呼んでも、すでに出したカードには触らない（表示中に再生成が走っても点滅しない）。
  */
-function revealFlowCards(stagger) {
+const revealedCards = new WeakSet();
+function syncFlowCards() {
   refreshAudioPanel();
-  flowCardList().forEach((c, i) => {
-    c.hidden = false;
-    if (stagger) {
-      c.classList.remove('revealed');
-      setTimeout(() => c.classList.add('revealed'), 90 + i * 150);
-    } else {
-      c.classList.add('revealed');
+  let n = 0;
+  for (const st of flowSteps()) {
+    if (!st.ready()) {
+      st.el.hidden = true;
+      st.el.classList.remove('revealed');
+      revealedCards.delete(st.el);
+      continue;
     }
-  });
+    if (revealedCards.has(st.el)) continue;
+    revealedCards.add(st.el);
+    st.el.hidden = false;
+    st.el.classList.remove('revealed');
+    // 表示（display 復帰）を確定させてからトランジションを始める
+    setTimeout(((el) => () => el.classList.add('revealed'))(st.el), 60 + n * 150);
+    n++;
+  }
 }
+
+/** 履歴からの表示など、演出なしで一括表示したいとき */
+function revealFlowCards() { syncFlowCards(); }
 
 /* =========================================================
  * ホーム画面の表示状態（最小構成: 待機はマイクと点滅案内のみ）
@@ -391,9 +419,8 @@ function updateHomeUI() {
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   // マイク選択・編集バー: 録音中、または待機（結果なし）のときに表示
   if (homeActions) homeActions.hidden = !(recording || (!homeProcessing && !hasText && !hasAudio));
-  // 録音中は読み取り専用のリアルタイム表示、停止後は編集できるテキストエリアに切り替える
-  if (liveNowPanel) liveNowPanel.hidden = !recording;
-  transcriptPanel.hidden = recording || !(hasText || hasAudio);
+  // 各カードは中身（出力）ができてから、できた順に出す
+  syncFlowCards();
   transcriptPanel.classList.toggle('fade-old', homeProcessing); // 文字起こし中は上側を薄く
   if (recording) renderLiveNow();
   updateRecFrame();
@@ -414,6 +441,7 @@ function updateRecFrame() {
  */
 function renderLiveNow() {
   if (!liveNowText) return;
+  syncFlowCards();   // 最初の出力が出た時点でカードを表示する
   const raw = liveTranscript.value.trim();
   if (!raw) {
     // 準備中は「点滅する文字＋3点アニメーション」で、動いていることが見て分かるようにする
@@ -437,22 +465,28 @@ function renderLiveNow() {
 }
 
 /**
- * 録音ボタンの段階変化: 録音 → 文字起こし中 → AI議事録の作成中（読込アニメーション）
+ * 録音ボタンの段階変化: 録音 → 待機。
  *   ・「議事録を作成」「メールを作成」ボタンは廃止（AIが自動で作るため押す必要がない）。
- *   ・AI議事録の作成中は白背景に3つの点の読込アニメーションを出す。
+ *   ・文字起こし・AI議事録の作成中は読込ボタンを出さず、ボタン自体を隠す
+ *     （進み具合は画面上部の総合ゲージ1本だけで伝える）。
  *   ・作成が終わったらボタンは消し、画面最下部までスクロールしたときだけ出す。
  */
 function updateFabState() {
-  let state;
-  if (recording) state = 'recording';
-  else if (homeProcessing) state = 'processing';
-  else if (aiFlowRunning || aiAutoRunning || aiTextRunning) state = 'loading';
-  else state = 'idle';
+  const busy = homeProcessing || aiFlowRunning || aiAutoRunning || aiTextRunning;
+  if (busy && !recording) {
+    recordBtn.hidden = true;
+    if (pauseBtn) pauseBtn.hidden = true;
+    recHint.hidden = true;
+    updateOutToolsBusy();
+    return;
+  }
+  recordBtn.hidden = false;
 
+  const state = recording ? 'recording' : 'idle';
   recordBtn.dataset.state = state;
-  recordBtn.disabled = (state === 'processing' || state === 'loading');
+  recordBtn.disabled = false;
   updateOutToolsBusy();   // AI処理中は枠内の「作り直す」を押せないようにする
-  const arias = { idle: '録音開始', recording: '録音停止', processing: '文字起こし中', loading: 'AI議事録を作成中' };
+  const arias = { idle: '録音開始', recording: '録音停止' };
   recordBtn.setAttribute('aria-label', arias[state]);
 
   // 録音後（結果が出ている待機中）は、最下部までスクロールしたときだけ録音ボタンを出す
@@ -463,7 +497,6 @@ function updateFabState() {
   // ボタンの下の案内文。録音後はボタンが消えるので、戻し方をここで伝える。
   let hint = '';
   if (state === 'recording') hint = paused ? '一時停止中… タップで録音完了' : '録音中… タップで停止';
-  else if (state === 'processing') hint = '文字起こし中…';
   else if (done) hint = away ? '引き下げてリセット\n下までスクロールで録音ボタン' : 'タップで新しい録音（今の内容は履歴に残ります）';
   const hintText = document.getElementById('recHintText') || recHint;
   if (hintText.textContent !== hint) hintText.textContent = hint;
@@ -4269,52 +4302,13 @@ function saveAiTextToHistory(text) {
 const aiTextCardEl   = $('aiTextCard');
 const aiTextEl       = $('aiText');
 const aiTextStatus   = $('aiTextStatus');
-const txtProgress      = $('txtProgress');
-const txtProgressBar   = $('txtProgressBar');
-const txtProgressPct   = $('txtProgressPct');
-const txtProgressLabel = $('txtProgressLabel');
-const txtProgressEta   = $('txtProgressEta');
-let txtTimer = null, txtStart = 0, txtEst = 0, txtStage = '';
+let txtStage = '';
 
 function setAiTextStatus(kind, html) {
   if (!aiTextStatus) return;
   aiTextStatus.hidden = false;
   aiTextStatus.className = 'claude-status' + (kind ? ' ' + kind : '');
   aiTextStatus.innerHTML = html;
-}
-
-function startTxtProgress() {
-  if (!txtProgress) return;
-  txtStart = Date.now();
-  // 文字起こしだけなので議事録より少し速い見積もり
-  txtEst = Math.min(600, Math.max(10, 10 + (recordedDurationSec || 0) * 0.10));
-  txtStage = 'AIが文字起こし中…';
-  txtProgress.hidden = false;
-  clearInterval(txtTimer);
-  tickTxtProgress();
-  txtTimer = setInterval(tickTxtProgress, 250);
-}
-function tickTxtProgress() {
-  if (!txtProgress || txtProgress.hidden) return;
-  const el = (Date.now() - txtStart) / 1000;
-  let p = el < txtEst ? (el / txtEst) * 0.95 : 0.95 + 0.04 * (1 - Math.exp(-(el - txtEst) / 60));
-  p = Math.min(0.99, p);
-  const pct = Math.round(p * 100);
-  txtProgressBar.style.width = pct + '%';
-  txtProgressPct.textContent = pct + '%';
-  txtProgressLabel.textContent = txtStage;
-  const remain = Math.ceil(txtEst - el);
-  txtProgressEta.textContent = remain > 0 ? `完了まで約 ${formatDurationJp(remain)}` : 'まもなく完了します…';
-}
-function endTxtProgress(ok) {
-  clearInterval(txtTimer); txtTimer = null;
-  if (!txtProgress) return;
-  if (!ok) { txtProgress.hidden = true; return; }
-  txtProgressBar.style.width = '100%';
-  txtProgressPct.textContent = '100%';
-  txtProgressLabel.textContent = '文字起こしが完了しました';
-  txtProgressEta.textContent = '完了';
-  setTimeout(() => { txtProgress.hidden = true; }, 1200);
 }
 
 /**
@@ -4334,16 +4328,19 @@ async function runAiTranscribe(opts) {
   }
   aiTextRunning = true;
   updateFabState();
-    startTxtProgress();
+  // 進捗は上部の総合ゲージ1本に集約する。単独で呼ばれたときはここで開始・終了する。
+  const ownFlow = !aiFlowRunning;
+  if (ownFlow) startAiFlowProgress();
+  setAiFlowStage('AIが文字起こし中…');
   try {
-    const text = autoConvert(await geminiTranscribeAll((st) => { txtStage = st; tickTxtProgress(); }));
+    const text = autoConvert(await geminiTranscribeAll((st) => { txtStage = st; setAiFlowStage(st); }));
     if (aiTextEl) aiTextEl.value = text;
     saveAiTranscriptToHistory(text);
-    endTxtProgress(true);
-    setAiTextStatus('ok', '✓ 文字起こしができました。上の「文字起こし」と読み比べられます。');
+    if (ownFlow) endAiFlowProgress(true);
+    updateHomeUI();   // 出力ができたので「高精度文字起こし」カードを表示
     return true;
   } catch (err) {
-    endTxtProgress(false);
+    if (ownFlow) endAiFlowProgress(false);
     const msg = (err && err.noKey) ? 'APIキーが未設定です。設定→AI連携で入力してください。'
               : (err && err.message ? err.message : String(err));
     setAiTextStatus('warn', '⚠ ' + msg);
@@ -4371,66 +4368,17 @@ function useAiTranscript() {
   if (!aiTextEl || !aiTextEl.value.trim()) { setAiTextStatus('warn', '⚠ まだ文字起こしがありません。'); return false; }
   liveTranscript.value = aiTextEl.value;
   updateHomeUI();
-  setAiTextStatus('ok', '✓ 上の「文字起こし」に反映しました。');
+  if (aiTextStatus) { aiTextStatus.hidden = true; aiTextStatus.innerHTML = ''; }
   return true;
 }
 
-/* ===== 生成中の進捗表示（進捗率＋完了までの目安時間） ===== */
-const genProgress      = $('genProgress');
-const genProgressBar   = $('genProgressBar');
-const genProgressPct   = $('genProgressPct');
-const genProgressLabel = $('genProgressLabel');
-const genProgressEta   = $('genProgressEta');
-let genTimer = null, genStart = 0, genEst = 0, genStage = '';
-
-/** 録音の長さから完了までの目安（秒）を見積もる */
-function estimateGenSeconds() {
-  const d = recordedDurationSec || 0;
-  return Math.min(600, Math.max(15, 15 + d * 0.12));
-}
-
-/** 進捗表示を出して、目安時間のカウントダウンを始める */
-function startGenProgress() {
-  if (!genProgress) return;
-  genStart = Date.now();
-  genEst = estimateGenSeconds();
-  genStage = 'AIが議事録を作成中…';
-  genProgress.hidden = false;
-  clearInterval(genTimer);
-  tickGenProgress();
-  genTimer = setInterval(tickGenProgress, 250);
-}
-
-/** 生成の段階（音声を準備中／アップロード中／作成中）を表示に反映 */
+/* ===== 生成の段階表示 =====
+ * 進捗ゲージは画面上部の総合ゲージ（#aiFlowProgress）1本だけ。
+ * ここでは段階名（音声を準備中／アップロード中／作成中）をそこへ流す。
+ */
 function setGenStage(text) {
-  genStage = (text || '').replace(/^録音が終わりました。/, '') || genStage;
-  tickGenProgress();
-}
-
-function tickGenProgress() {
-  if (!genProgress || genProgress.hidden) return;
-  const el = (Date.now() - genStart) / 1000;
-  // 見積もりを超えても止まって見えないよう、95%へゆっくり漸近させる
-  let p = el < genEst ? (el / genEst) * 0.95 : 0.95 + 0.04 * (1 - Math.exp(-(el - genEst) / 60));
-  p = Math.min(0.99, p);
-  const pct = Math.round(p * 100);
-  genProgressBar.style.width = pct + '%';
-  genProgressPct.textContent = pct + '%';
-  genProgressLabel.textContent = genStage;
-  const remain = Math.ceil(genEst - el);
-  genProgressEta.textContent = remain > 0 ? `完了まで約 ${formatDurationJp(remain)}` : 'まもなく完了します…';
-}
-
-/** 生成の終了。成功なら100%を見せてから閉じる */
-function endGenProgress(ok) {
-  clearInterval(genTimer); genTimer = null;
-  if (!genProgress) return;
-  if (!ok) { genProgress.hidden = true; return; }
-  genProgressBar.style.width = '100%';
-  genProgressPct.textContent = '100%';
-  genProgressLabel.textContent = '議事録の作成が完了しました';
-  genProgressEta.textContent = '完了';
-  setTimeout(() => { genProgress.hidden = true; }, 1200);
+  const t = (text || '').replace(/^録音が終わりました。/, '');
+  if (t) setAiFlowStage(t);
 }
 
 /* ===== AIの出力を「議事録」「メール件名」「メール本文」に切り分ける ===== */
@@ -4515,15 +4463,16 @@ async function runAiAutoMinutes(opts) {
   }
   aiAutoRunning = true;
   updateFabState();
-  startGenProgress(); // 進捗率と完了までの目安時間を表示
+  // 進捗は上部の総合ゲージ1本だけ（カード内には出さない）
+  const ownFlow = !aiFlowRunning;
+  if (ownFlow) startAiFlowProgress();
+  setAiFlowStage('AIが議事録を作成中…');
   try {
-    const prefix = auto ? '録音が終わりました。' : '';
-    const text = await geminiGenerateMinutes((s) => { setGenStage(s); setAiAutoStatus('', prefix + s); });
+    const text = await geminiGenerateMinutes((s) => setGenStage(s));
     const parts = applyAiOutput(text); // 議事録枠は議事録のみ、メール枠は件名・本文へ
     aiResultWrap.hidden = false;
     ensureAutoTitle();
     saveAiTextToHistory(text); // 再読み込み・履歴からの再表示でも残るように保存
-    const u = loadUsage();
     let note = lastGeminiFallbackModel
       ? `<br>※選択中のモデルが使えなかったため <strong>${lastGeminiFallbackModel}</strong> で作成しました。設定→AI連携 でモデルを変更できます。`
       : '';
@@ -4532,18 +4481,19 @@ async function runAiAutoMinutes(opts) {
     if (audioShortfall) {
       note += `<br>⚠ <strong>この議事録は、残っている音声（${formatDurationJp(audioShortfall.audioSec)}）だけから作成されています。</strong>`
         + `録音時間は ${formatDurationJp(audioShortfall.wallSec)} なので、会議の一部しか含まれていません。`
-        + `上の「録音した音声」の注意書きをご確認ください。`;
+        + `上の「録音データ」の注意書きをご確認ください。`;
     }
-    endGenProgress(true);
-    const mailNote = (parts.subject || parts.body)
-      ? '下の「メールを作成」に<strong>件名と本文</strong>を入れました。'
-      : 'メール文面が読み取れなかったため、全文を議事録欄に入れました。';
-    setAiAutoStatus('ok', `✓ 議事録を作成しました（本日 ${u.requests}/${GEMINI_FREE_RPD}回・推定）。${mailNote}${note}`);
+    if (ownFlow) endAiFlowProgress(true);
+    // 完了の緑バーは出さない（できたカードが順に現れることで完了が分かる）。
+    // 注意が要るときだけ知らせる。
+    if (note) setAiAutoStatus('warn', note.replace(/^<br>/, ''));
+    else if (aiAutoStatus) { aiAutoStatus.hidden = true; aiAutoStatus.innerHTML = ''; }
+    updateHomeUI();   // 議事録・メールのカードを表示
     // 自動実行では結果まで自動で表示されないと気づけないので、生成結果へスクロールする
     if (auto) scrollToEl('aiResultWrap');
     return true;
   } catch (err) {
-    endGenProgress(false);
+    if (ownFlow) endAiFlowProgress(false);
     const msg = (err && err.noKey) ? 'APIキーが未設定です。設定→AI連携で入力してください。'
               : (err && err.message ? err.message : String(err));
     // 自動実行の失敗は「手動でやり直せる」ことまで伝える
@@ -4626,22 +4576,12 @@ if (geminiKeyReveal && geminiApiKey) {
     geminiKeyReveal.classList.toggle('on', show);
   });
 }
-/** 議事録カードに、いま自動生成モードかどうかを表示する */
-function updateAiAutoModeHint() {
-  const el = $('aiAutoModeHint');
-  if (!el) return;
-  el.textContent = isAiAutoAfterStop()
-    ? '録音を止めると自動で作成されます。作り直したいときは、下の枠の右下「＜」→「作り直す」から。'
-    : '自動作成はOFFです。下の枠の右下「＜」→「作り直す」で、録音音声から議事録＋メール文面を作成します。';
-}
 if (aiAutoAfterStop) {
   aiAutoAfterStop.checked = isAiAutoAfterStop();
   aiAutoAfterStop.addEventListener('change', () => {
     localStorage.setItem(AI_AUTO_AFTER_STOP_KEY, aiAutoAfterStop.checked ? '1' : '0');
-    updateAiAutoModeHint();
   });
 }
-updateAiAutoModeHint();
 if (geminiApiKey) {
   geminiApiKey.value = loadGeminiKey();
   geminiApiKey.addEventListener('input', () => { localStorage.setItem(GEMINI_KEY_KEY, geminiApiKey.value.trim()); updateGeminiKeyStatus(); });

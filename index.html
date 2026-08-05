@@ -84,8 +84,10 @@
       <p class="captured-hint" id="capturedHint" role="status" aria-live="polite" hidden></p>
 
       <!-- 録音中のリアルタイム文字起こし（読み取り専用・自動スクロール） -->
-      <div class="live-now" id="liveNowPanel" hidden>
-        <div class="live-rule"><span>文字起こし</span></div>
+      <div class="panel flow-card live-now" id="liveNowPanel" hidden>
+        <div class="section-head">
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> リアルタイム文字起こし</span>
+        </div>
         <div class="live-now-body" id="liveNowText" role="status" aria-live="polite"></div>
       </div>
 
@@ -132,13 +134,12 @@
           </div>
         </div>
         <p class="field-hint warn" id="audioWarn" hidden></p>
-        <p class="field-hint" id="audioEmptyNote">まだ録音した音声はありません。録音すると、ここで再生・保存できます。</p>
       </div>
 
-      <!-- リアルタイム文字起こし（録音中／結果があるときのみ表示） -->
-      <div class="home-transcript" id="transcriptPanel" hidden>
-        <div class="mini-label-row">
-          <label class="mini-label" for="liveTranscript">リアルタイム文字起こし</label>
+      <!-- リアルタイム文字起こし（出力が出てから表示） -->
+      <div class="panel flow-card" id="transcriptPanel" hidden>
+        <div class="section-head">
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> リアルタイム文字起こし</span>
           <span class="mini-actions">
             <button id="clearTranscript" class="link-btn" type="button">クリア</button>
           </span>
@@ -154,83 +155,60 @@
         <div class="section-head">
           <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> 高精度文字起こし</span>
         </div>
-        <p class="field-hint">録音した音声の全体を、議事録とは別に文字起こしします。</p>
-        <div class="gen-progress" id="txtProgress" hidden>
-          <div class="gen-progress-head">
-            <span class="gen-progress-label" id="txtProgressLabel">AIが文字起こし中…</span>
-            <span class="gen-progress-pct" id="txtProgressPct">0%</span>
-          </div>
-          <div class="progress"><div class="progress-bar" id="txtProgressBar"></div></div>
-          <p class="gen-progress-eta" id="txtProgressEta">完了まで約 —</p>
-        </div>
         <div class="claude-status" id="aiTextStatus" hidden></div>
         <div class="out-box">
-          <textarea id="aiText" class="minutes-area" rows="10" placeholder="録音を止めると、ここに高精度な文字起こしが自動で表示されます。"></textarea>
+          <textarea id="aiText" class="minutes-area" rows="10"></textarea>
           <div class="out-tools" data-out="aitext" data-acts="copy,term,use,redo"></div>
         </div>
       </div>
 
-      <!-- 議事録づくり（AIに投げる / 貼り付け） -->
+      <!-- 議事録（AIの出力ができてから表示） -->
       <div class="panel flow-card" id="minutesFlowCard" hidden>
+        <div class="section-head">
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg> 議事録</span>
+        </div>
         <div id="meetingSummary" class="meeting-summary"></div>
-
-        <!-- A. 音声をAIに送る（Gemini）— 文字起こし不要・高精度 -->
-        <div class="ai-inline ai-audio">
-          <p class="route-title">録音音声から議事録を作成 <span class="route-badge">Gemini・おすすめ</span></p>
-          <p class="field-hint" id="aiAutoModeHint"></p>
-          <!-- 生成中の進捗率と完了までの目安時間 -->
-          <div class="gen-progress" id="genProgress" hidden>
-            <div class="gen-progress-head">
-              <span class="gen-progress-label" id="genProgressLabel">AIが議事録を作成中…</span>
-              <span class="gen-progress-pct" id="genProgressPct">0%</span>
-            </div>
-            <div class="progress"><div class="progress-bar" id="genProgressBar"></div></div>
-            <p class="gen-progress-eta" id="genProgressEta">完了まで約 —</p>
+        <div class="claude-status" id="aiAutoStatus" hidden></div>
+        <div class="ai-result-wrap" id="aiResultWrap" hidden>
+          <div class="out-box">
+            <textarea id="aiResult" class="minutes-area" rows="12"></textarea>
+            <div class="out-tools" data-out="minutes" data-acts="copy,term,info,download,redo"></div>
           </div>
-          <div class="claude-status" id="aiAutoStatus" hidden></div>
-          <div class="ai-result-wrap" id="aiResultWrap" hidden>
-            <label class="mini-label" for="aiResult"><span class="tag tag-sum">AI議事録（編集可）</span></label>
-            <div class="out-box">
-              <textarea id="aiResult" class="minutes-area" rows="12" placeholder="生成された議事録がここに表示されます。メールの件名・本文は下の「メールを作成」に入ります。"></textarea>
-              <div class="out-tools" data-out="minutes" data-acts="copy,term,info,download,redo"></div>
-            </div>
-          </div>
-          <details class="claude-preview" style="margin-top:12px;">
-            <summary>APIキーを使わず手動でGeminiに渡す</summary>
-            <p class="field-hint" style="margin:8px 0;">録音音声をダウンロード＆共有し、指示文を貼り付けてGeminiに渡します（APIキー不要）。</p>
-            <div class="claude-actions">
-              <button class="secondary-btn" id="aiAudioSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 音声を共有</button>
-              <button class="secondary-btn" id="aiAudioCopy" type="button">指示をコピー</button>
-            </div>
-            <div class="claude-status" id="aiAudioStatus" hidden></div>
-            <a class="claude-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
-            <textarea id="aiAudioPreview" class="minutes-area" rows="4" readonly placeholder="「指示をコピー」で共有する指示文がここに表示されます。"></textarea>
-          </details>
         </div>
 
+        <!-- APIキーを使わない手動ルート（普段は畳んでおく） -->
+        <details class="claude-preview manual-route">
+          <summary>手動でGeminiに渡す</summary>
+          <div class="claude-actions">
+            <button class="secondary-btn" id="aiAudioSend" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 音声を共有</button>
+            <button class="secondary-btn" id="aiAudioCopy" type="button">指示をコピー</button>
+          </div>
+          <div class="claude-status" id="aiAudioStatus" hidden></div>
+          <a class="claude-open-link" id="aiAudioOpen" href="https://gemini.google.com/app" target="_blank" rel="noopener" hidden>→ Gemini を開く</a>
+          <textarea id="aiAudioPreview" class="minutes-area" rows="4" readonly></textarea>
+        </details>
       </div>
 
       <!-- メール（作成・送信） -->
       <div class="panel flow-card" id="mailPanel" hidden>
         <div class="section-head">
-          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg> メールを作成</span>
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg> メール</span>
         </div>
         <div class="field settings-field">
-          <label for="mailTo">宛先（任意・カンマ区切り）</label>
-          <input id="mailTo" type="text" placeholder="例: taro@example.com, hanako@example.com" />
+          <label for="mailTo">宛先（任意）</label>
+          <input id="mailTo" type="text" placeholder="taro@example.com, hanako@example.com" />
         </div>
         <div class="field settings-field">
-          <label for="mailSubject">件名（AIが生成した件名）</label>
-          <input id="mailSubject" type="text" placeholder="AIで議事録を作成すると、ここに件名が入ります。" />
+          <label for="mailSubject">件名</label>
+          <input id="mailSubject" type="text" />
         </div>
         <div class="field settings-field">
-          <label for="mailBody">本文（メールに貼り付ける内容）</label>
+          <label for="mailBody">本文</label>
           <div class="out-box">
-            <textarea id="mailBody" class="minutes-area" rows="12" placeholder="録音を止めると、AIが作った貼り付け用の本文がここに入ります。手入力や貼り付けもできます。"></textarea>
+            <textarea id="mailBody" class="minutes-area" rows="12"></textarea>
             <div class="out-tools" data-out="mail" data-acts="copy,term,info"></div>
           </div>
         </div>
-        <span class="export-heading">送信・書き出し</span>
         <div class="export-row">
           <button class="export-btn" id="mailThunderbird" type="button">
             <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg> 既定メーラー
@@ -242,7 +220,7 @@
             <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー（件名+本文）
           </button>
         </div>
-        <p class="field-hint">「既定メーラー」は端末のメールアプリを開きます（長い本文は途中で切れることがあります）。「.eml」はメール形式のファイルとして保存、「コピー（件名+本文）」は件名と本文をまとめてクリップボードへコピーします。</p>
+        <p class="field-hint">「既定メーラー」は端末のメールアプリを開きます（長い本文は途中で切れることがあります）。</p>
       </div>
 
       </div><!-- /#homeFlow -->
@@ -261,9 +239,6 @@
         <button id="recordBtn" class="mic-fab" type="button" data-state="idle" aria-label="録音開始">
           <span class="rec-ring" aria-hidden="true"></span>
           <img class="fab-ico fab-mic" src="./icons/mic-white.png" alt="" aria-hidden="true" />
-          <span class="fab-ico fab-spin" aria-hidden="true"></span>
-          <!-- AI議事録の作成中: 白背景に3つの点が左から順に上がり、一呼吸おいて順に落ちる -->
-          <span class="fab-ico fab-dots" aria-hidden="true"><i></i><i></i><i></i></span>
         </button>
 
         <!-- 録音中だけ右下に出る一時停止／再開ボタン -->
