@@ -354,7 +354,7 @@
       <div class="panel">
         <h3 class="settings-group-title">変換辞書（読み → 漢字）</h3>
         <p class="field-hint">
-          「しんけんこう」→「新建高」のように、<b>読み（ひらがな）や誤変換</b>と<b>正しい表記</b>をセットで登録します。
+          「さくらしょうじ」→「さくら商事」のように、<b>読み（ひらがな）や誤変換</b>と<b>正しい表記</b>をセットで登録します。
           登録した語は<b>文字起こし・AI文字起こし・AI議事録・メール文面</b>で自動的に変換され、AIへ渡す指示にも用語集として付きます。
         </p>
         <div class="field settings-field">
@@ -369,12 +369,12 @@
         <div class="field settings-field">
           <label>用語を追加</label>
           <div class="dict-add">
-            <input id="dictFrom" type="text" aria-label="読み・誤変換" placeholder="例: しんけんこう" />
+            <input id="dictFrom" type="text" aria-label="読み・誤変換" placeholder="例: さくらしょうじ" />
             <span class="dict-arrow" aria-hidden="true">→</span>
-            <input id="dictTo" type="text" aria-label="正しい表記" placeholder="例: 新建高" />
+            <input id="dictTo" type="text" aria-label="正しい表記" placeholder="例: さくら商事" />
             <button id="dictAdd" class="chip-btn" type="button">＋ 追加</button>
           </div>
-          <p class="field-hint" id="dictNote">ひらがなで登録すると、カタカナ表記（シンケンコウ）も一緒に変換します。</p>
+          <p class="field-hint" id="dictNote">ひらがなで登録すると、カタカナ表記（サクラショウジ）も一緒に変換します。</p>
         </div>
         <div class="mini-label-row">
           <span class="mini-label">登録済みの用語（その場で編集できます）</span>
@@ -575,7 +575,7 @@
         <ul class="man-def">
           <li><b>枠内の展開ボタン</b><span>文字起こし・AI文字起こし・AI議事録・メール本文の各枠の<b>右下にある「＜」</b>を押すと、機能ボタンが左へ順に開きます（もう一度「＞」で閉じます）。<b>コピー</b>（枠内の全文）／<b>用語修正</b>／<b>情報編集</b>（議事録・メール）／<b>ダウンロード</b>（議事録: .txt・Word・.md）／<b>作り直す</b>がここにまとまっています。作成ボタンは廃止し、録音を止めるとAIが自動で作ります。</span></li>
           <li><b>話者の自動判別（A / B …）</b><span>設定でオンにすると、録音中は<b>声の高さ</b>から話し手の交代を推定して行頭に A・B などを付けます。停止後の「AI文字起こし」ではAIが音声を聞いて話者を分けます。文字起こしの本文には手を加えないので、精度には影響しません。</span></li>
-          <li><b>変換辞書（読み → 漢字）</b><span><b>設定 →「変換辞書」</b>で「しんけんこう」→「新建高」のように、読み（ひらがな）や誤変換と正しい表記をセットで登録できます。登録した語は<b>文字起こし・AI文字起こし・AI議事録・メール文面</b>で自動的に変換され、AIへ渡す指示にも用語集として付くので、社名や固有名詞が正しい漢字で書かれます（ひらがなで登録するとカタカナ表記も変換）。追加・変更・削除はいつでも設定から行えます。</span></li>
+          <li><b>変換辞書（読み → 漢字）</b><span><b>設定 →「変換辞書」</b>で「さくらしょうじ」→「さくら商事」のように、読み（ひらがな）や誤変換と正しい表記をセットで登録できます。登録した語は<b>文字起こし・AI文字起こし・AI議事録・メール文面</b>で自動的に変換され、AIへ渡す指示にも用語集として付くので、社名や固有名詞が正しい漢字で書かれます（ひらがなで登録するとカタカナ表記も変換）。追加・変更・削除はいつでも設定から行えます。</span></li>
           <li><b>用語の修正</b><span>枠の展開ボタン内の「用語修正」からも、誤変換されやすい語を<b>文字起こし・AI文字起こし・AI議事録・メール本文まとめて</b>一括置換・辞書登録できます（設定の変換辞書と同じ辞書です）。</span></li>
           <li><b>会議情報</b><span>タイトル・日付・参加者（部署＋氏名）を録音の前・最中・後いつでも入力でき、出力にも反映されます。</span></li>
           <li><b>引き下げてリセット</b><span>画面のいちばん上で下へスワイプすると丸い矢印が出ます。そのまま引いて離すと、画面が録音待機に戻ります（Chromeの「引き下げて更新」と同じ操作）。<b>今の議事録・録音音声は履歴に残る</b>ので、そのまま次の会議を録れます。</span></li>
@@ -697,11 +697,11 @@
         <p class="field-hint" id="termFoundNote">会社名や固有名詞など、誤変換された語を正しい語に一括置換できます。</p>
         <div class="field">
           <label for="termWrong">誤り（この語を）</label>
-          <input id="termWrong" type="text" placeholder="例: 田中商事" />
+          <input id="termWrong" type="text" placeholder="例: さくら商事" />
         </div>
         <div class="field" style="margin-top: 10px;">
           <label for="termRight">正しい（これに一括置換）</label>
-          <input id="termRight" type="text" placeholder="例: 田中商事株式会社" />
+          <input id="termRight" type="text" placeholder="例: さくら商事株式会社" />
         </div>
         <div class="gen-row" style="margin-top: 12px;">
           <button id="termApply" class="primary-btn" type="button">すべて置換</button>
