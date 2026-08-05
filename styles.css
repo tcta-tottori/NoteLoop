@@ -482,6 +482,27 @@ select:focus, input:focus, textarea:focus {
 
 /* ---------- Settings ---------- */
 .settings-group-title { margin: 0 0 14px; font-size: 14px; font-weight: 800; }
+
+/* ---------- 設定: カードごとに開閉（閉じるとタイトルだけ） ---------- */
+#screen-settings > .settings-card { padding: 0; overflow: hidden; }
+.settings-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; margin: 0; padding: clamp(14px, 2vw, 18px) clamp(16px, 2.4vw, 22px);
+  background: none; border: 0; border-radius: var(--radius);
+  color: var(--text); font: inherit; font-size: 14px; font-weight: 800; text-align: left;
+  cursor: pointer; transition: .16s;
+}
+.settings-head:hover { background: color-mix(in srgb, var(--brand1) 8%, transparent); }
+.settings-head:focus-visible { outline: 2px solid var(--brand1); outline-offset: -2px; }
+.settings-head-text { min-width: 0; }
+.settings-chev { display: inline-flex; flex: none; color: var(--faint); transition: transform .2s ease, color .16s; }
+.settings-chev svg { width: 17px; height: 17px; }
+/* 閉: 下向き（開けます） / 開: 上向き */
+.settings-chev { transform: rotate(-90deg); }
+.settings-card.open .settings-chev { transform: rotate(90deg); color: var(--brand1); }
+.settings-card.open .settings-head { border-bottom: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0; }
+.settings-body { padding: clamp(14px, 2vw, 18px) clamp(16px, 2.4vw, 22px) clamp(16px, 2.4vw, 22px); }
+.settings-body > .field:first-child, .settings-body > p:first-child { margin-top: 0; }
 .static-value { font-size: 14px; font-weight: 600; padding: 11px 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); }
 .settings-field { margin-bottom: 18px; }
 .settings-field:last-child { margin-bottom: 0; }

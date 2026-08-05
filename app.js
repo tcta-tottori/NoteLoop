@@ -150,7 +150,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.1';
+const APP_VERSION = 'Ver.8.2';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -337,8 +337,8 @@ function showScreen(id, title) {
   if (title) screenTitle.textContent = title;
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (id === 'screen-home') { updateHomeUI(); refreshAudioPanel(); }
-  // 設定画面を開いている間だけマイクの入力レベルを表示する
-  if (id === 'screen-settings') activateSettingsMic();
+  // 設定画面の「マイク」カードを開いている間だけ入力レベルを表示する
+  if (id === 'screen-settings' && isSettingsSectionOpen('マイク')) activateSettingsMic();
   else if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
 }
 
@@ -4839,6 +4839,71 @@ if (diagNotifBtn) {
 function showError(msg) { errorBox.textContent = msg; errorBox.hidden = false; }
 function hideError() { errorBox.hidden = true; errorBox.textContent = ''; }
 
+/* =========================================================
+ * 設定のカード開閉
+ *   設定の各カードは見出しをタップで開閉でき、閉じるとタイトルだけになる。
+ *   どれを開いていたかは端末に保存し、次に開いたときも同じ状態にする。
+ * =======================================================*/
+const SETTINGS_OPEN_KEY = 'noteloop_settings_open';
+const settingsSections = new Map();   // 見出しテキスト → { panel, body, toggle, isOpen() }
+
+function loadSettingsOpen() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_OPEN_KEY)) || {}; } catch (_) { return {}; }
+}
+function initSettingsAccordion() {
+  const screen = $('screen-settings');
+  if (!screen) return;
+  const openState = loadSettingsOpen();
+  for (const panel of screen.querySelectorAll(':scope > .panel')) {
+    const heading = panel.querySelector('.settings-group-title');
+    if (!heading) continue;
+    const key = heading.textContent.trim();
+
+    // 見出しより後ろの要素をまとめて本文にする（開閉するのはこの部分）
+    const body = document.createElement('div');
+    body.className = 'settings-body';
+    body.id = 'settingsBody-' + key.replace(/[^\w぀-ヿ一-龯]+/g, '-');
+    let node = heading.nextSibling;
+    while (node) { const next = node.nextSibling; body.appendChild(node); node = next; }
+    panel.appendChild(body);
+
+    // 見出しを開閉ボタンに差し替える
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'settings-head';
+    toggle.setAttribute('aria-controls', body.id);
+    toggle.innerHTML = `<span class="settings-head-text"></span><span class="settings-chev" aria-hidden="true">${ICO_CHEVRON}</span>`;
+    toggle.querySelector('.settings-head-text').textContent = key;
+    panel.replaceChild(toggle, heading);
+    panel.classList.add('settings-card');
+
+    const apply = (open) => {
+      panel.classList.toggle('open', open);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      body.hidden = !open;
+      // マイクの入力レベルは、カードを開いている間だけ動かす
+      if (key === 'マイク') {
+        if (open && $('screen-settings').classList.contains('active')) activateSettingsMic();
+        else if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
+      }
+    };
+    apply(!!openState[key]);   // 既定は閉じた状態（タイトルのみ）
+    toggle.addEventListener('click', () => {
+      const open = !panel.classList.contains('open');
+      apply(open);
+      const state = loadSettingsOpen();
+      state[key] = open;
+      localStorage.setItem(SETTINGS_OPEN_KEY, JSON.stringify(state));
+    });
+    settingsSections.set(key, { panel, body, toggle, isOpen: () => panel.classList.contains('open') });
+  }
+}
+/** そのカードが開いているか（見出しの一部でも可） */
+function isSettingsSectionOpen(name) {
+  for (const [key, sec] of settingsSections) if (key.includes(name)) return sec.isOpen();
+  return false;
+}
+
 meetingDate.value = todayStr();
 downloadAudio.disabled = true;
 downloadWav.disabled = true;
@@ -4860,6 +4925,7 @@ updateHomeUI();
 renderParticipants();
 loadTermDict();
 renderDicts();      // 「用語の確認・修正」と設定の変換辞書を描画
+initSettingsAccordion();  // 設定は各カードを開閉できる（既定は閉じてタイトルのみ）
 drawerVerMain.textContent = APP_VERSION;
 drawerVerSub.textContent = APP_UPDATED;
 
