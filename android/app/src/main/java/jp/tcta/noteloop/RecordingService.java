@@ -10,10 +10,8 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.graphics.Shader;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
@@ -69,8 +67,8 @@ public class RecordingService extends Service {
     /** ここで振り切れる（＝約 11500/32767。会議の声で上まで届く高さ） */
     private static final float LEVEL_FULL = 0.35f;
     /** バーの色（アプリのブランド色。明るい通知でも暗い通知でも見える中間の明度） */
-    private static final int[] GAUGE_COLORS = { 0xFF6E86FF, 0xFF8B8CFF, 0xFFA68CFF };
-    private static final float[] GAUGE_STOPS = { 0f, 0.55f, 1f };
+    /* 通知カードのゲージは白。通知の文字色と同じ白でそろえ、地の色に負けないようにする。 */
+    private static final int GAUGE_COLOR = 0xFFFFFFFF;
 
     /** 録音状態。プラグインから参照するのでプロセス内で共有する。 */
     private static volatile boolean recording = false;
@@ -435,8 +433,7 @@ public class RecordingService extends Service {
         Canvas c = new Canvas(bmp);
         if (gaugePaint == null) {
             gaugePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            gaugePaint.setShader(new LinearGradient(
-                    0, 0, GAUGE_W, 0, GAUGE_COLORS, GAUGE_STOPS, Shader.TileMode.CLAMP));
+            gaugePaint.setColor(GAUGE_COLOR);
         }
         ensureBars();
         final float pitch = (float) GAUGE_W / (BARS + 1);  // 左右に余白を残して等間隔に並べる

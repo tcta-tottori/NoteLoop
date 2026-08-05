@@ -420,8 +420,6 @@ select:focus, input:focus, textarea:focus {
 .claude-inline-desc strong { color: var(--text); font-weight: 700; }
 
 /* 経路の見出し（A: 音声 / B: 文字起こし）— 説明は最小限 */
-.route-title { margin: 0 0 10px; font-size: 14px; font-weight: 800; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.route-badge { font-size: 10.5px; font-weight: 700; color: var(--brand1); background: color-mix(in srgb, var(--brand1) 12%, transparent); border-radius: 999px; padding: 2px 9px; letter-spacing: .02em; }
 .minutes-fields { margin-top: 16px; }
 .minutes-fields > summary { font-size: 12.5px; color: var(--brand1); cursor: pointer; font-weight: 600; margin-bottom: 10px; }
 
@@ -436,6 +434,7 @@ select:focus, input:focus, textarea:focus {
 .claude-status.warn { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
 .claude-open-link { display: inline-block; font-size: 13px; font-weight: 700; margin-bottom: 8px; }
 .claude-preview { margin-top: 6px; }
+.manual-route { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .claude-preview summary { font-size: 12.5px; color: var(--brand1); cursor: pointer; font-weight: 600; margin-bottom: 8px; }
 .claude-preview textarea { line-height: 1.6; font-size: 12.5px; }
 .claude-note { margin: 12px 0 0; font-size: 11.5px; color: var(--faint); line-height: 1.6; }
@@ -549,23 +548,7 @@ body.is-recording .wave-timer { color: #fff; }
 .wave-wrap[data-paused="1"] .wave-timer { color: var(--muted); }
 .wave-wrap[data-paused="1"] .wave-timer::before { background: var(--faint); box-shadow: none; animation: none; }
 
-/* ---------- Home: 録音中のリアルタイム文字起こし（枠なし・地の上に直接） ---------- */
-.live-now {
-  position: relative;
-  margin: 2px 0 14px;
-  padding: 0 2px;
-  background: none; border: none; box-shadow: none;
-  animation: fade .25s ease;
-}
-/* ゲージの下の区切り線。中央に「文字起こし」、その両側に線を引く。 */
-.live-rule {
-  display: flex; align-items: center; gap: 12px;
-  margin: 2px 0 10px;
-  font-size: 12px; font-weight: 700; color: var(--faint); letter-spacing: .08em;
-}
-.live-rule::before, .live-rule::after {
-  content: ""; flex: 1; height: 1px; background: var(--border-strong);
-}
+/* ---------- Home: 録音中のリアルタイム文字起こし（カード） ---------- */
 .live-now-body {
   max-height: 46vh; overflow-y: auto;
   font-size: 15.5px; line-height: 1.95; color: var(--text);
@@ -603,20 +586,18 @@ body.is-recording .wave-timer { color: #fff; }
 /* 録音停止直後に画面上部へ出す進捗（完了バッジの代わり） */
 .gen-progress-top { margin: 0 0 16px; }
 
-/* ---------- Home: transcript（枠なし） ---------- */
-.home-transcript { animation: fade .25s ease; }
-.home-transcript .transcript {
-  min-height: 220px; border: none; background: transparent; box-shadow: none;
-  resize: none; padding: 4px 2px; font-size: 15.5px; line-height: 1.95;
+/* ---------- Home: 文字起こしカードの本文 ---------- */
+#transcriptPanel .transcript {
+  min-height: 200px; border: none; background: transparent; box-shadow: none;
+  resize: none; padding: 0; font-size: 15.5px; line-height: 1.9;
 }
 /* 文字起こし中は上側（過去）を少し薄くフェード */
-.home-transcript.fade-old .transcript {
+#transcriptPanel.fade-old .transcript {
   -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,.28) 0, rgba(0,0,0,.6) 12%, #000 32%);
   mask-image: linear-gradient(to bottom, rgba(0,0,0,.28) 0, rgba(0,0,0,.6) 12%, #000 32%);
 }
-.home-transcript .transcript:hover,
-.home-transcript .transcript:focus { border: none; box-shadow: none; outline: none; }
-.home-transcript .audio-card { margin-top: 16px; border: none; background: transparent; padding: 0; }
+#transcriptPanel .transcript:hover,
+#transcriptPanel .transcript:focus { border: none; box-shadow: none; outline: none; }
 
 /* ---------- Home: 段階フローカード（録音後にフェードインで順に出現） ---------- */
 .home-flow { display: flex; flex-direction: column; }
@@ -881,27 +862,9 @@ body.is-recording.is-paused .rec-hint { color: var(--muted); animation: none; }
 .fab-mic { height: 37px; width: auto; filter: drop-shadow(0 1px 3px rgba(0,0,0,.2)); }
 .mic-fab[data-state="idle"] .fab-mic,
 .mic-fab[data-state="recording"] .fab-mic { display: block; }
-.mic-fab[data-state="processing"] .fab-spin { display: block; }
-.mic-fab[data-state="loading"] .fab-dots { display: flex; }
-.fab-spin { width: 28px; height: 28px; border: 3px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: fabspin .8s linear infinite; }
 @keyframes fabspin { to { transform: rotate(360deg); } }
 
-/* AI議事録の作成中: 白い円の中で3つの点が左から順に上がり、一呼吸おいて順に落ちる */
-.mic-fab[data-state="loading"] {
-  background: #fff;
-  box-shadow: 0 10px 26px rgba(20, 24, 40, .28);
-  cursor: default;
-}
-.mic-fab[data-state="loading"]:hover { transform: none; }
-.mic-fab[data-state="loading"]:disabled { opacity: 1; }
-.fab-dots { align-items: flex-end; justify-content: center; gap: 7px; height: 22px; }
-.fab-dots i {
-  display: block; width: 8px; height: 8px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--brand1), var(--brand2));
-  animation: fabDotHop 1.9s cubic-bezier(.34, .1, .3, 1) infinite;
-}
-.fab-dots i:nth-child(2) { animation-delay: .13s; }
-.fab-dots i:nth-child(3) { animation-delay: .26s; }
+/* 「準備中」表示の3点アニメーション（.prep-dots）で使う */
 @keyframes fabDotHop {
   0%   { transform: translateY(0); }
   18%  { transform: translateY(-13px); }  /* 左から順に上昇 */
@@ -1105,7 +1068,7 @@ body.is-recording.is-paused .rec-hint { color: var(--muted); animation: none; }
    下余白は展開ボタンのぶん（文字がボタンに隠れないように）。 */
 .out-box > textarea { display: block; }
 .out-box > textarea,
-.home-transcript .out-box > .transcript { padding-bottom: 52px; }
+#transcriptPanel .out-box > .transcript { padding-bottom: 52px; }
 
 /* 枠の下端いっぱいに広げつつ、自身は素通し（pointer-events: none）。
    押せるのは展開ボタンと、展開中の機能ボタンだけ。 */
@@ -1187,7 +1150,7 @@ body.is-recording.is-paused .rec-hint { color: var(--muted); animation: none; }
   color: var(--brand1); font-size: 13.5px; font-weight: 700; line-height: 1.8;
   animation: blinkText 1.5s ease-in-out infinite;
 }
-/* 録音後の読み込み表示（.fab-dots）と同じ動きの3点アニメーション */
+/* 3点が左から順に上がり、一呼吸おいて順に落ちるアニメーション */
 .prep-dots { display: inline-flex; align-items: flex-end; gap: 6px; height: 14px; }
 .prep-dots i {
   display: block; width: 7px; height: 7px; border-radius: 50%;
