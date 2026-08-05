@@ -119,10 +119,26 @@
       <!-- 録音後の段階フロー（録音がおわると下のカードが順にフェードインで出現） -->
       <div class="home-flow" id="homeFlow">
 
-      <!-- 文字起こし本文（録音中／結果があるときのみ表示） -->
+      <!-- 録音データ（再生・m4aで保存） -->
+      <div class="panel flow-card" id="audioPanel" hidden>
+        <div class="section-head">
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 録音データ</span>
+          <span class="audio-size" id="audioSize"></span>
+        </div>
+        <div class="audio-card" id="audioWrap" hidden>
+          <audio id="player" controls preload="metadata"></audio>
+          <div class="audio-actions">
+            <button class="chip-btn" id="downloadAudio" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> m4aで保存</button>
+          </div>
+        </div>
+        <p class="field-hint warn" id="audioWarn" hidden></p>
+        <p class="field-hint" id="audioEmptyNote">まだ録音した音声はありません。録音すると、ここで再生・保存できます。</p>
+      </div>
+
+      <!-- リアルタイム文字起こし（録音中／結果があるときのみ表示） -->
       <div class="home-transcript" id="transcriptPanel" hidden>
         <div class="mini-label-row">
-          <label class="mini-label" for="liveTranscript">文字起こし</label>
+          <label class="mini-label" for="liveTranscript">リアルタイム文字起こし</label>
           <span class="mini-actions">
             <button id="clearTranscript" class="link-btn" type="button">クリア</button>
           </span>
@@ -133,29 +149,12 @@
         </div>
       </div>
 
-      <!-- 録音した音声（再生・音声出力） -->
-      <div class="panel flow-card" id="audioPanel" hidden>
-        <div class="section-head">
-          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg> 録音した音声</span>
-          <span class="audio-size" id="audioSize"></span>
-        </div>
-        <div class="audio-card" id="audioWrap" hidden>
-          <audio id="player" controls preload="metadata"></audio>
-          <div class="audio-actions">
-            <button class="chip-btn" id="downloadAudio" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> 音声を保存</button>
-            <button class="chip-btn" id="downloadWav" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg> WAVに変換</button>
-          </div>
-        </div>
-        <p class="field-hint warn" id="audioWarn" hidden></p>
-        <p class="field-hint" id="audioEmptyNote">まだ録音した音声はありません。録音すると、ここで再生・保存できます。</p>
-      </div>
-
       <!-- AIによる高精度な文字起こし（議事録とは別に出力・比較用） -->
       <div class="panel flow-card" id="aiTextCard" hidden>
         <div class="section-head">
-          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> AI文字起こし（Gemini・高精度）</span>
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> 高精度文字起こし</span>
         </div>
-        <p class="field-hint">録音した音声の全体を、議事録とは別に文字起こしします。録音中のリアルタイム表示と読み比べられます。</p>
+        <p class="field-hint">録音した音声の全体を、議事録とは別に文字起こしします。</p>
         <div class="gen-progress" id="txtProgress" hidden>
           <div class="gen-progress-head">
             <span class="gen-progress-label" id="txtProgressLabel">AIが文字起こし中…</span>
@@ -211,25 +210,6 @@
 
       </div>
 
-      <!-- 書き出し -->
-      <div class="panel flow-card" id="exportFlowCard" hidden>
-        <span class="export-heading">書き出し</span>
-        <div class="export-row">
-          <button class="export-btn" id="exportTxt" type="button">
-            <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg> .txt
-          </button>
-          <button class="export-btn" id="exportMd" type="button">
-            <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 17v-4l2 2 2-2v4"/></svg> .md
-          </button>
-          <button class="export-btn" id="exportDocx" type="button">
-            <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13l1.5 4L11 13l1.5 4L14 13"/></svg> Word
-          </button>
-          <button class="export-btn save" id="saveMinutes" type="button">
-            <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg> 一覧に保存
-          </button>
-        </div>
-      </div>
-
       <!-- メール（作成・送信） -->
       <div class="panel flow-card" id="mailPanel" hidden>
         <div class="section-head">
@@ -255,20 +235,14 @@
           <button class="export-btn" id="mailThunderbird" type="button">
             <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg> 既定メーラー
           </button>
-          <button class="export-btn" id="mailGmail" type="button">
-            <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg> Gmail
-          </button>
-          <button class="export-btn" id="mailOutlook" type="button">
-            <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg> Outlook
-          </button>
           <button class="export-btn" id="mailEml" type="button">
             <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg> .eml
           </button>
           <button class="export-btn" id="mailCopy" type="button">
-            <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> 本文コピー
+            <svg class="ex-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg> コピー（件名+本文）
           </button>
         </div>
-        <p class="field-hint">Gmail / Outlook はWeb版の作成画面が新しいタブで開き、件名・本文が入った状態になります（各サービスへのログインが必要）。「既定メーラー」はThunderbird等の既定アプリを開きます。</p>
+        <p class="field-hint">「既定メーラー」は端末のメールアプリを開きます（長い本文は途中で切れることがあります）。「.eml」はメール形式のファイルとして保存、「コピー（件名+本文）」は件名と本文をまとめてクリップボードへコピーします。</p>
       </div>
 
       </div><!-- /#homeFlow -->
@@ -556,8 +530,8 @@
           <li><span class="man-n">1</span><div><b>録音する</b><p>「録音」画面の中央下にある丸いマイクボタンをタップ。マイクの使用を許可すると録音が始まり、話しながら文字起こしが画面に表示されます。</p></div></li>
           <li><span class="man-n">2</span><div><b>停止する</b><p>もう一度ボタンをタップで停止。文字起こしが整い、下部に「録音した音声」の再生・保存が表示されます。誤変換のループは自動で除去されます。中断したいときは <b>右下の一時停止ボタン</b>（録音中だけ出ます）で止めて、同じボタンで続きから再開できます。止めていた間は音声にも録音時間にも入りません。</p></div></li>
           <li><span class="man-n">3</span><div><b>議事録ができるのを待つ</b><p>停止すると、<b>そのまま録音音声が Gemini に送られ、議事録＋メール文面が自動で作られます</b>（数十秒）。画面上部に<b>進捗バーと「完了まで約○分」</b>が出て、録音ボタンの位置は<b>白い丸の読み込み表示（点が3つ）</b>に変わります。できあがると読み込み表示は消え、画面が結果までスクロールします。文面はその場で編集でき、メール本文にも反映済みです。<br>自動で作らせたくないときは <b>設定 → AI連携 →「録音停止後に自動でAI議事録を作成」</b> をOFFにしてください。OFFのときは、AI議事録の枠の右下「＜」を押して出てくる「作り直す」で作れます。</p></div></li>
-          <li><span class="man-n">4</span><div><b>文字起こしを見比べる（任意）</b><p>「<b>AI文字起こし（Gemini・高精度）</b>」に、録音全体をAIが起こした文章が出ます。録音中のリアルタイム表示と読み比べ、必要なら枠の右下「＜」→「上に反映」で差し替えられます。</p></div></li>
-          <li><span class="man-n">5</span><div><b>出力・共有する</b><p>txt / Word / メールで書き出し。<b>一覧に保存</b>で履歴に残せます。</p></div></li>
+          <li><span class="man-n">4</span><div><b>文字起こしを見比べる（任意）</b><p>「<b>高精度文字起こし</b>」に、録音全体をAIが起こした文章が出ます。録音中のリアルタイム表示と読み比べ、必要なら枠の右下「＜」→「上に反映」で差し替えられます。</p></div></li>
+          <li><span class="man-n">5</span><div><b>出力・共有する</b><p>議事録の枠の右下「＜」→<b>ダウンロード</b>で txt / Word / md に書き出し。メールは<b>既定メーラー / .eml / コピー（件名+本文）</b>から。録音するたびに<b>自動で履歴に残ります</b>。</p></div></li>
           <li><span class="man-n">6</span><div><b>次の会議を録る</b><p>議事録ができると録音ボタンは消えます。<b>画面の一番下までスクロール</b>すると録音ボタンが出てくるのでタップ。または<b>画面のいちばん上で下へ引き下げて離す</b>（Chromeの「引き下げて更新」と同じ操作）と、画面が録音待機に戻ります。<b>どちらの場合も、今の議事録・録音音声は履歴に残ります。</b></p></div></li>
         </ol>
       </div>
@@ -566,7 +540,7 @@
         <h3 class="settings-group-title">画面の説明</h3>
         <ul class="man-def">
           <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止（録音前は紫、録音中は赤）。録音中は右下に一時停止ボタンが出ます。録音中は経過時間と白いゲージ、リアルタイム文字起こし（ライブ字幕モード時）を表示し、画面のふちが赤く光ります。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
-          <li><b>履歴</b><span>保存した議事録をカードで一覧。カードには<b>タイトル・日時・録音した時間帯・議事録の要約（2〜3行）・録音の合計時間・データ容量</b>が並びます。カードをタップすると<b>この画面のまま</b>、音声の再生・保存、AI議事録、書き出し、メール作成まで確認・編集できます（「一覧へ戻る」で一覧に戻ります）。カード右下のアイコンは削除です（音声の保存は開いた先の「録音した音声」から）。最大10件を保存します。</span></li>
+          <li><b>履歴</b><span>保存した議事録をカードで一覧。カードには<b>タイトル・日時・録音した時間帯・議事録の要約（2〜3行）・録音の合計時間・データ容量</b>が並びます。カードをタップすると<b>この画面のまま</b>、音声の再生・保存、AI議事録、メール作成まで確認・編集できます（「一覧へ戻る」で一覧に戻ります）。カード右下のアイコンは削除です（音声の保存は開いた先の「録音データ」から）。最大10件を保存します。</span></li>
           <li><b>設定</b><span>項目ごとのカードに分かれていて、<b>タイトルをタップすると開閉</b>できます（閉じるとタイトルだけになり、開いていたカードは次に開いたときも開いたままです）。録音中のライブ文字起こしの切替、<b>実行バックエンド（WebGPU / WASM）</b>、高精度モデル（tiny〜large-v3-turbo）、録音中の画面常時オン、変換辞書、AI（Gemini）のキー・モデル・指示テンプレートを設定できます。</span></li>
           <li><b>メニュー</b><span>左上の三本線（PC では常時左側）から各画面へ移動。上部に現在のバージョンを表示します。</span></li>
         </ul>
@@ -592,10 +566,10 @@
       <div class="panel" id="man-export">
         <h3 class="settings-group-title">書き出し・メール</h3>
         <ul class="man-def">
-          <li><b>ファイル</b><span>議事録を <b>.txt / .md / Word（.docx）</b> で保存できます。</span></li>
-          <li><b>メール</b><span>議事録から本文を自動作成し、<b>既定メーラー / Gmail / Outlook / .eml / 本文コピー</b> で送信・書き出し。Gmail・Outlook は Web 作成画面が件名・本文入りで開きます。</span></li>
-          <li><b>録音音声</b><span><b>音声を保存</b>（m4a 等）と <b>WAVに変換</b>。AI への共有や記録用に使えます。</span></li>
-          <li><b>履歴に保存</b><span>「一覧に保存」で議事録を履歴に残し、あとから開けます。</span></li>
+          <li><b>ファイル</b><span>議事録の枠の右下「＜」→<b>ダウンロード</b>から、<b>.txt / .md / Word（.docx）</b> で保存できます。</span></li>
+          <li><b>メール</b><span>議事録から件名・本文を自動作成し、<b>既定メーラー / .eml / コピー（件名+本文）</b> の3つで送信・書き出しできます。</span></li>
+          <li><b>録音データ</b><span><b>m4aで保存</b>。AI への共有や記録用に使えます。</span></li>
+          <li><b>履歴に保存</b><span>録音するたびに自動で履歴に残るので、保存の操作は要りません。</span></li>
         </ul>
       </div>
 

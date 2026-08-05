@@ -121,6 +121,13 @@ public class RecordingService extends Service {
 
     /** 各バーの現在の高さ（0..1）。位置は固定なので、ここだけが動く。 */
     private final float[] barV = new float[BARS];
+    /* 1本ごとの個性。アプリ画面のゲージ（app.js の newGaugeBar）と同じ式で決める。 */
+    private final float[] barGain = new float[BARS];
+    private final float[] barSpeed = new float[BARS];
+    private final float[] barPhase = new float[BARS];
+    private final float[] barLo = new float[BARS];
+    private final float[] barStep = new float[BARS];
+    private boolean barsReady = false;
     private Paint gaugePaint;
 
     private final Runnable gaugeTick = new Runnable() {
@@ -128,6 +135,7 @@ public class RecordingService extends Service {
         public void run() {
             if (!recording) return;
             if (!paused) sampleLevel();
+            stepBars();   // 高さは 50ms ごとに進める（通知の描き替えより細かく動かす）
             if (--notifCountdown <= 0) {
                 notifCountdown = paused ? NOTIF_EVERY_PAUSED
                         : (isScreenOn() ? NOTIF_EVERY_AWAKE : NOTIF_EVERY_ASLEEP);
@@ -360,6 +368,54 @@ public class RecordingService extends Service {
         return (float) (x - Math.floor(x)); // 0..1
     }
 
+    /**
+     * i 本目のバーの、いまの乱数値（0..1）。
+     * tn の整数が変わるたびに別の乱数へ移り、その間はなめらかに繋ぐ。
+     * 一定周期の sin と違って伸びる長さが毎回変わるので、パタパタと動いて見える。
+     * （アプリ画面のゲージ = app.js の barRandom と同じ式）
+     */
+    private static float barRandom(int i, double tn) {
+        double k = Math.floor(tn);
+        float f = (float) (tn - k);
+        float sm = f * f * (3f - 2f * f);
+        return gaugeNoise(i * 17.3 + k * 1.7) * (1f - sm)
+                + gaugeNoise(i * 17.3 + (k + 1) * 1.7) * sm;
+    }
+
+    /** 1本ごとの個性を決める（毎回同じ値なので、描き直しても暴れない） */
+    private void ensureBars() {
+        if (barsReady) return;
+        for (int i = 0; i < BARS; i++) {
+            barGain[i] = 0.55f + gaugeNoise(i * 3.9) * 1.15f;   // 伸びやすさ
+            barSpeed[i] = 1.6f + gaugeNoise(i * 1.3) * 5.2f;    // 揺れの速さ
+            barPhase[i] = gaugeNoise(i * 2.7) * (float) Math.PI * 2f;
+            barLo[i] = 0.04f + gaugeNoise(i * 8.7) * 0.34f;     // 揺れ幅の下限
+            barStep[i] = 0.085f + gaugeNoise(i * 4.4) * 0.115f; // 乱数の切り替わる間隔（秒）
+        }
+        barsReady = true;
+    }
+
+    /**
+     * バーの高さを一段進める。アプリ画面のゲージ（app.js drawWaveFrame）と同じ計算で、
+     * 本ごとに違う乱数を主役にし、sin の揺れを少し混ぜる。
+     * 伸びるのは即座に、戻るのも速め（声にきびきび追従する）。
+     */
+    private void stepBars() {
+        ensureBars();
+        final double now = SystemClock.elapsedRealtime() / 1000.0;
+        final float lv = paused ? 0f : level;
+        for (int i = 0; i < BARS; i++) {
+            float t = BARS > 1 ? (float) i / (BARS - 1) : 0.5f;
+            // 中央ほど大きく振れる（両端は控えめ）
+            float env = (float) (0.55 + 0.45 * Math.pow(Math.sin(Math.PI * t), 0.5));
+            float rnd = barRandom(i, now / barStep[i]);
+            float s1 = (float) Math.sin(now * barSpeed[i] + barPhase[i]);
+            float wobble = barLo[i] + (1f - barLo[i]) * (0.72f * rnd + 0.28f * (0.5f + 0.5f * s1));
+            float target = Math.min(1f, lv * barGain[i] * env * wobble);
+            barV[i] += (target - barV[i]) * (target > barV[i] ? 1f : 0.5f);
+        }
+    }
+
     /** 画面が点いているか（消えている間は通知の描き替えを粗くして電池を節約する） */
     private boolean isScreenOn() {
         try {
@@ -369,9 +425,10 @@ public class RecordingService extends Service {
     }
 
     /**
-     * 通知に載せるゲージを描く。
-     * バーの位置は固定で、いまの音量に応じてその場で上下に伸びる。
-     * 静かなときは丸い点になる。アプリ画面のゲージと同じ見た目・動きにそろえている。
+     * 通知に載せるゲージ（5点）を描く。
+     * 位置も太さも揃った5つの点が、いまの音量に応じてその場で上下に伸びる。
+     * 静かなときは丸い点に戻る。高さの計算は stepBars() で、アプリ画面の
+     * ゲージとまったく同じ動きにそろえてある。
      */
     private Bitmap renderGauge() {
         Bitmap bmp = Bitmap.createBitmap(GAUGE_W, GAUGE_H, Bitmap.Config.ARGB_8888);
@@ -381,37 +438,19 @@ public class RecordingService extends Service {
             gaugePaint.setShader(new LinearGradient(
                     0, 0, GAUGE_W, 0, GAUGE_COLORS, GAUGE_STOPS, Shader.TileMode.CLAMP));
         }
-        final float pitch = (float) GAUGE_W / BARS;
-        final float barW = pitch * 0.34f;                 // 本数が少ないぶん少し太く
-        final float maxH = GAUGE_H * 0.92f;               // いちばん大きい声のときの高さ
-        final float minH = barW;                          // 無音は「点」になる
+        ensureBars();
+        final float pitch = (float) GAUGE_W / (BARS + 1);  // 左右に余白を残して等間隔に並べる
+        final float barW = pitch * 0.34f;                  // 太さは5点とも同じ
+        final float maxH = GAUGE_H * 0.92f;                // いちばん大きい声のときの高さ
+        final float minH = barW;                           // 無音は「点」になる
         final float mid = GAUGE_H / 2f;
-        final double now = SystemClock.elapsedRealtime() / 1000.0;
-        final float lv = level;
+        final float left = (GAUGE_W - (BARS - 1) * pitch) / 2f;
 
         for (int i = 0; i < BARS; i++) {
-            float t = BARS > 1 ? (float) i / (BARS - 1) : 0.5f;
-            // 中央ほど大きく振れる（両端は控えめ）。本数が少ないので端も動くようにする。
-            float env = (float) (0.6 + 0.4 * Math.pow(Math.sin(Math.PI * t), 0.7));
-            // 1本ごとに高さ・太さ・位置・揺れ方を変え、不揃いに見せる（画面のゲージと同じ）。
-            // 本数が5本と少ないので、大きい声ではしっかり振り切るように底上げしてある。
-            float gain = 0.75f + gaugeNoise(i * 3.9) * 0.9f;
-            float speed = 0.8f + gaugeNoise(i * 1.3) * 3.0f;
-            float phase = gaugeNoise(i * 2.7) * (float) Math.PI * 2f;
-            float jitter = (gaugeNoise(i * 5.1) - 0.5f) * 0.44f;
-            float wide = 0.85f + gaugeNoise(i * 7.3) * 0.35f;
-            double s1 = Math.sin(now * speed + phase);
-            double s2 = Math.sin(now * speed * 0.43 + phase * 1.7);
-            float wobble = (float) (0.55 + 0.45 * (0.5 + 0.5 * (0.65 * s1 + 0.35 * s2)));
-            float target = Math.min(1f, lv * gain * env * wobble);
-            // 伸びるのは速く、戻るのはゆっくり
-            barV[i] += (target - barV[i]) * (target > barV[i] ? 0.5f : 0.25f);
-
-            float bw = barW * wide;
-            float bh = Math.max(bw, minH + (maxH - minH) * barV[i]);
-            float x = i * pitch + (pitch - bw) / 2f + jitter * pitch;
-            RectF r = new RectF(x, mid - bh / 2f, x + bw, mid + bh / 2f);
-            c.drawRoundRect(r, bw / 2f, bw / 2f, gaugePaint);
+            float bh = Math.max(barW, minH + (maxH - minH) * barV[i]);
+            float x = left + i * pitch - barW / 2f;
+            RectF r = new RectF(x, mid - bh / 2f, x + barW, mid + bh / 2f);
+            c.drawRoundRect(r, barW / 2f, barW / 2f, gaugePaint);
         }
         return bmp;
     }

@@ -29,6 +29,22 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+/* 端末が出す四角いタップハイライトは消し、代わりに丸い波（.tap-wave）を出す */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* ---------- タップの波（押した位置から丸く広がる） ---------- */
+.tap-wave-layer { position: fixed; inset: 0; z-index: 9999; pointer-events: none; overflow: hidden; }
+.tap-wave {
+  position: absolute; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle,
+    color-mix(in srgb, var(--brand1) 46%, transparent) 0%,
+    color-mix(in srgb, var(--brand2) 24%, transparent) 55%,
+    transparent 72%);
+  transform: scale(.2); opacity: .95;
+  animation: tapWave .5s cubic-bezier(.22, 1, .36, 1) forwards;
+}
+@keyframes tapWave { to { transform: scale(1); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .tap-wave { display: none; } }
 
 html, body {
   margin: 0; padding: 0;
@@ -379,11 +395,8 @@ select:focus, input:focus, textarea:focus {
 .claude-desc { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
 /* 議事録カード内に置くClaude連携（下部） */
 .claude-inline { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border-strong); }
-.ai-inline.ai-audio {
-  margin-top: 8px; padding: 14px; border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--brand1) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--brand1) 22%, transparent);
-}
+/* 議事録カードの中身。カード自体に枠があるので、ここでは枠を重ねない（枠の二重化を防ぐ） */
+.ai-inline.ai-audio { margin-top: 4px; }
 .ai-inline.ai-audio .claude-inline-desc { margin-bottom: 12px; }
 .ai-auto-btn { width: 100%; justify-content: center; }
 .ai-result-wrap { margin-top: 12px; }
@@ -1085,12 +1098,19 @@ body.is-recording.is-paused .rec-hint { color: var(--muted); animation: none; }
  *   枠の右下に「＜」を固定表示。押すと機能ボタンが左へ時間差で展開し、
  *   ボタンは「＞」に変わる（もう一度押すと逆順で閉じる）。
  * =======================================================*/
-.out-box { position: relative; padding-bottom: 46px; }
+/* 展開ボタンは出力テキストの枠の中（右下）に重ねる。
+   文字がボタンの下に隠れないよう、テキスト側の下余白を広げておく。 */
+.out-box { position: relative; }
+/* display:block でテキスト下の行間ぶんの隙間を消し、枠の下端と揃える。
+   下余白は展開ボタンのぶん（文字がボタンに隠れないように）。 */
+.out-box > textarea { display: block; }
+.out-box > textarea,
+.home-transcript .out-box > .transcript { padding-bottom: 52px; }
 
 /* 枠の下端いっぱいに広げつつ、自身は素通し（pointer-events: none）。
    押せるのは展開ボタンと、展開中の機能ボタンだけ。 */
 .out-tools {
-  position: absolute; left: 4px; right: 4px; bottom: 4px; z-index: 6;
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 6;
   display: flex; align-items: flex-end; justify-content: flex-end; gap: 8px;
   pointer-events: none;
 }

@@ -49,7 +49,6 @@ const player         = $('player');
 const audioSize      = $('audioSize');
 const audioWarn      = $('audioWarn');
 const downloadAudio  = $('downloadAudio');
-const downloadWav    = $('downloadWav');
 const liveTranscript = $('liveTranscript');
 const clearTranscript= $('clearTranscript');
 // 録音中のリアルタイム表示
@@ -97,16 +96,12 @@ const toastEl        = $('toast');
 // 要点／決定事項／ToDo を書き出し・メールに使えるよう、状態としては保持する。
 let legacyMinutes = { summary: [], decisions: [], todos: [] };
 
-const exportTxt      = $('exportTxt');
-const exportMd       = $('exportMd');
-const exportDocx     = $('exportDocx');
-const saveMinutes    = $('saveMinutes');
 const historyList    = $('historyList');
 const screenTitle    = $('screenTitle');
 
 // メール
 const mailTo = $('mailTo'), mailSubject = $('mailSubject'), mailBody = $('mailBody');
-const mailThunderbird = $('mailThunderbird'), mailGmail = $('mailGmail'), mailOutlook = $('mailOutlook'), mailEml = $('mailEml'), mailCopy = $('mailCopy');
+const mailThunderbird = $('mailThunderbird'), mailEml = $('mailEml'), mailCopy = $('mailCopy');
 // 用語辞書
 const termModal = $('termModal'), termModalClose = $('termModalClose'), termModalDone = $('termModalDone');
 const termWrong = $('termWrong'), termRight = $('termRight'), termApply = $('termApply'), termRegister = $('termRegister'), termApplyAll = $('termApplyAll');
@@ -150,7 +145,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.2';
+const APP_VERSION = 'Ver.8.3';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -174,7 +169,7 @@ const SAMPLE_RATE = 16000;
 const CHUNK_MIN_SEC = 5;          // ライブは 5 秒ためてから送る（文脈が増え誤認識が減る）
 const LIVE_INTERVAL_MS = 3000;
 const MAX_LIVE_BACKLOG_SEC = 8;   // ライブの未処理音声の上限（超過分は捨てる＝確定パスで再処理）
-const LIVE_SILENCE_RMS = 0.006;   // これ未満のチャンクは無音とみなし送らない（「！」ハルシネーション回避）
+const LIVE_SILENCE_RMS = 0.006;   // これ未満のチャンクは無音とみなし送らない（hasSpeech で使用）
 
 // 録音の分割保存・見張り（画面オフ中に録音が止まる問題への対策）
 const REC_TIMESLICE_MS = 3000;    // この間隔でエンコード済みデータを取り出す（＝取りこぼしを最小化）
@@ -356,9 +351,8 @@ function refreshAudioPanel() { setAudioAvailable(!!recordedBlob); }
 const audioFlowCard  = $('audioPanel');
 const aiTextCard     = $('aiTextCard');
 const minutesFlowCard= $('minutesFlowCard');
-const exportFlowCard = $('exportFlowCard');
 const mailFlowCard   = $('mailPanel');
-function flowCardList() { return [audioFlowCard, aiTextCard, minutesFlowCard, exportFlowCard, mailFlowCard].filter(Boolean); }
+function flowCardList() { return [audioFlowCard, aiTextCard, minutesFlowCard, mailFlowCard].filter(Boolean); }
 
 /** すべてのフローカードを隠して初期状態へ戻す（新規録音・クリア・再読込時） */
 function resetFlowCards() {
@@ -1395,9 +1389,8 @@ async function stopRecording() {
     showAudioShortfallWarning(wallSec, recordedDurationSec);
     setAudioAvailable(true);
     downloadAudio.disabled = false;
-    downloadWav.disabled = false;
     // 保存ボタンに実際の拡張子を表示
-    downloadAudio.innerHTML = `${ICO_DOWNLOAD} 音声を保存 (.${extFromMime(recordedBlob.type)})`;
+    downloadAudio.innerHTML = `${ICO_DOWNLOAD} ${extFromMime(recordedBlob.type)}で保存`;
   }
   teardownAudio();
 
@@ -2031,19 +2024,41 @@ function onNativePcm(ev) {
 }
 
 /** 溜まった音声がまとまったら文字起こしへ回す（前の処理が終わるまでは待つ） */
+/**
+ * ひとかたまりに「人の声」が入っているか。
+ * 無音や空調音だけの区間をAIへ送ると、話していないのに文字が出てくる
+ * （ハルシネーション）ため、送る前にここで捨てる。
+ *   - 全体の音量（RMS）が小さすぎるものは無音とみなす
+ *   - 声は強弱があるので、ピークが平均に対して十分大きいことも見る
+ */
+const LIVE_SILENCE_PEAK = 0.03;   // 山がこれ以下なら発話なし（LIVE_SILENCE_RMS と併用）
+function hasSpeech(audio) {
+  if (!audio || !audio.length) return false;
+  const level = rms(audio);
+  if (level < LIVE_SILENCE_RMS) return false;
+  let peak = 0;
+  const step = Math.max(1, Math.floor(audio.length / 20000));
+  for (let i = 0; i < audio.length; i += step) { const v = Math.abs(audio[i]); if (v > peak) peak = v; }
+  if (peak < LIVE_SILENCE_PEAK) return false;
+  return true;
+}
+
 function maybeSendChunk() {
   if (!liveWhisperOn) return;
   if (liveEngine === 'gemini') {
     if (liveBusy) return;
     if (totalSamples(pendingChunks) < SAMPLE_RATE * LIVE_GEMINI_SEC) return;
     markLiveWindow();
-    sendLiveToGemini(drainPending());
+    const chunk = drainPending();
+    if (!hasSpeech(chunk)) return;   // 無音は送らない（勝手に文字が出るのを防ぐ）
+    sendLiveToGemini(chunk);
     return;
   }
   if (workerBusy) return;
   if (totalSamples(pendingChunks) < SAMPLE_RATE * LIVE_CHUNK_SEC) return;
   markLiveWindow();
   const audio = drainPending();
+  if (!hasSpeech(audio)) return;     // 無音は文字起こしにかけない
   workerBusy = true;
   worker.postMessage(
     { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: LIVE_MODEL, language: LANGUAGE, device: 'wasm' },
@@ -2116,6 +2131,7 @@ function resetSpeakers() {
   speakerCentroids = [];
   lastSpeaker = '';
   liveWin = null;
+  lastLiveChunk = '';
 }
 
 /** 届いた PCM から声の高さを拾って記録する（64ms ごとに1点） */
@@ -2236,12 +2252,44 @@ function isJunkChunk(text) {
   if (!t) return true;
   return !/[\p{L}\p{N}]/u.test(t); // 文字・数字を含まなければ捨てる
 }
+
+/**
+ * 話していないのに出てくる「幻の文字起こし」を捨てる。
+ * 無音や物音だけの区間を AI に渡すと、学習データによくある決まり文句
+ *（「ご視聴ありがとうございました」等）を返してくることがある。
+ * 音を送る前の無音判定（hasSpeech）と合わせた二段構えで防ぐ。
+ */
+const GHOST_PHRASES = [
+  'ご視聴ありがとうございました', 'ご清聴ありがとうございました', 'ありがとうございました',
+  'おやすみなさい', 'お疲れ様でした', 'おつかれさまでした',
+  'チャンネル登録をお願いします', 'チャンネル登録お願いします', '高評価をお願いします',
+  '最後までご視聴いただきありがとうございます', 'また次回お会いしましょう',
+  '字幕', '字幕視聴ありがとうございました', '音楽', 'BGM', '拍手',
+  'Thank you for watching', 'Thanks for watching', 'Please subscribe', 'you',
+];
+let lastLiveChunk = '';   // 直前に採用したかたまり（同じ文言の繰り返しを弾く）
+function isGhostChunk(text) {
+  const t = (text || '').trim();
+  if (!t) return true;
+  // 記号・空白・かっこを除いた「中身」で判定する
+  const core = t.replace(/[\s。、．，!！?？…・「」『』（）()【】\[\]"'`~-]/g, '');
+  if (core.length <= 1) return true;
+  const norm = core.toLowerCase();
+  for (const p of GHOST_PHRASES) {
+    const q = p.replace(/\s/g, '').toLowerCase();
+    if (norm === q) return true;
+  }
+  if (t === lastLiveChunk) return true;   // 直前とまったく同じなら重複
+  return false;
+}
 /**
  * ライブの文字起こし結果を末尾に足す。
  * 話者が前のかたまりから変わったときだけ改行して「A：」を付ける。
  */
 function appendTranscript(text) {
   if (isJunkChunk(text)) return; // 記号だけの誤認識は表示しない（実語のみ表示）
+  if (isGhostChunk(text)) return; // 話していないのに出る決まり文句・直前と同じ文言は捨てる
+  lastLiveChunk = (text || '').trim();
   const spk = liveWin ? speakerFor(liveWin.t0, liveWin.t1) : '';
   const cur = liveTranscript.value.trimEnd();
   let next;
@@ -2303,7 +2351,6 @@ function resetSession(opts) {
   if (player) { try { player.pause(); } catch (_) {} player.removeAttribute('src'); player.load(); }
   if (audioSize) audioSize.textContent = '';
   if (downloadAudio) downloadAudio.disabled = true;
-  if (downloadWav) downloadWav.disabled = true;
   setAudioAvailable(false);
   clearAudioWarning();
 
@@ -2848,10 +2895,11 @@ function download(filename, content, mime) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-exportTxt.addEventListener('click', () => { const m = currentMinutes(); download(`${safeFileName(m)}.txt`, buildPlainText(m), 'text/plain;charset=utf-8'); });
-exportMd.addEventListener('click', () => { const m = currentMinutes(); download(`${safeFileName(m)}.md`, buildMarkdown(m), 'text/markdown;charset=utf-8'); });
+/* 書き出しは「書き出し」カードを廃止し、議事録の枠内「ダウンロード」からのみ呼ぶ */
+function exportTxtNow() { const m = currentMinutes(); download(`${safeFileName(m)}.txt`, buildPlainText(m), 'text/plain;charset=utf-8'); }
+function exportMdNow() { const m = currentMinutes(); download(`${safeFileName(m)}.md`, buildMarkdown(m), 'text/markdown;charset=utf-8'); }
 
-exportDocx.addEventListener('click', async () => {
+async function exportDocxNow() {
   const m = currentMinutes();
   if (!window.docx) { showError('Word 出力ライブラリの読み込みに失敗しました（オンライン環境で再読み込みしてください）。'); return; }
   const { Document, Packer, Paragraph, HeadingLevel, TextRun } = window.docx;
@@ -2875,11 +2923,11 @@ exportDocx.addEventListener('click', async () => {
     const blob = await Packer.toBlob(doc);
     download(`${safeFileName(m)}.docx`, blob, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
   } catch (err) { showError('Word 出力に失敗しました: ' + (err && err.message ? err.message : err)); }
-});
+}
 
 
 /* =========================================================
- * メール作成（既定メーラー / Gmail / Outlook / .eml）
+ * メール作成（既定メーラー / .eml / 件名＋本文のコピー）
  * =======================================================*/
 function buildMailSubject(m) { return `【議事録】${m.name}（${formatDateJp(m.date)}）`; }
 /** 件名・本文が空のときだけ、議事録から組み立てて埋める（手で直した内容は残す） */
@@ -2893,14 +2941,6 @@ mailThunderbird.addEventListener('click', () => {
   const href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(mailSubject.value)}&body=${encodeURIComponent(mailBody.value)}`;
   window.location.href = href;
 });
-mailGmail.addEventListener('click', () => {
-  const u = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(mailTo.value.trim())}&su=${encodeURIComponent(mailSubject.value)}&body=${encodeURIComponent(mailBody.value)}`;
-  window.open(u, '_blank', 'noopener');
-});
-mailOutlook.addEventListener('click', () => {
-  const u = `https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(mailTo.value.trim())}&subject=${encodeURIComponent(mailSubject.value)}&body=${encodeURIComponent(mailBody.value)}`;
-  window.open(u, '_blank', 'noopener');
-});
 mailEml.addEventListener('click', () => {
   const to = mailTo.value.trim();
   const eml =
@@ -2913,9 +2953,12 @@ mailEml.addEventListener('click', () => {
   download(`${safeFileName(m)}.eml`, eml, 'message/rfc822;charset=utf-8');
 });
 mailCopy.addEventListener('click', async () => {
-  const ok = await copyText(mailBody.value);
-  showError(ok ? '' : '本文のコピーに失敗しました。');
-  if (ok) { hideError(); }
+  // 件名と本文をまとめてコピーする（メールアプリへそのまま貼り付けられるように）
+  const subject = mailSubject.value.trim();
+  const text = (subject ? `件名: ${subject}\n\n` : '') + mailBody.value;
+  const ok = await copyText(text);
+  if (ok) { hideError(); showToast('件名と本文をコピーしました'); }
+  else showError('コピーに失敗しました。');
 });
 
 /* =========================================================
@@ -3192,46 +3235,6 @@ downloadAudio.addEventListener('click', () => {
   const m = currentMinutes();
   download(`${safeFileName(m)}.${extFromMime(recordedBlob.type)}`, recordedBlob, recordedBlob.type || 'audio/webm');
 });
-downloadWav.addEventListener('click', async () => {
-  if (!recordedBlob) { showError('変換できる音声がありません。先に録音してください。'); return; }
-  hideError();
-  downloadWav.disabled = true;
-  downloadWav.textContent = '変換中…';
-  try {
-    const arrayBuffer = await recordedBlob.arrayBuffer();
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-    ctx.close();
-    const m = currentMinutes();
-    download(`${safeFileName(m)}.wav`, audioBufferToWav(audioBuffer), 'audio/wav');
-  } catch (err) {
-    showError('WAV への変換に失敗しました: ' + (err && err.message ? err.message : err));
-  } finally {
-    downloadWav.disabled = false;
-    downloadWav.innerHTML = `${ICO_MUSIC} WAVに変換`;
-  }
-});
-function audioBufferToWav(buffer) {
-  const numCh = buffer.numberOfChannels, sampleRate = buffer.sampleRate, channels = [];
-  for (let c = 0; c < numCh; c++) channels.push(buffer.getChannelData(c));
-  const frames = buffer.length, bytesPerSample = 2, blockAlign = numCh * bytesPerSample, dataSize = frames * blockAlign;
-  const arr = new ArrayBuffer(44 + dataSize), view = new DataView(arr);
-  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
-  writeStr(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeStr(8, 'WAVE');
-  writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, numCh, true);
-  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true); view.setUint16(34, 16, true);
-  writeStr(36, 'data'); view.setUint32(40, dataSize, true);
-  let offset = 44;
-  for (let i = 0; i < frames; i++) {
-    for (let c = 0; c < numCh; c++) {
-      const s = Math.max(-1, Math.min(1, channels[c][i]));
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true); offset += 2;
-    }
-  }
-  return new Blob([view], { type: 'audio/wav' });
-}
-
 /* =========================================================
  * 参加者（部署・氏名）
  * =======================================================*/
@@ -3779,7 +3782,6 @@ async function openMinutes(item) {
   setAudioAvailable(false);
   clearAudioWarning();
   downloadAudio.disabled = true;
-  downloadWav.disabled = true;
   if (item.audio) {
     try {
       const blob = await idbGet(item.id);
@@ -3792,8 +3794,7 @@ async function openMinutes(item) {
           : formatBytes(blob.size);
         setAudioAvailable(true);
         downloadAudio.disabled = false;
-        downloadWav.disabled = false;
-        downloadAudio.innerHTML = `${ICO_DOWNLOAD} 音声を保存 (.${extFromMime(blob.type)})`;
+        downloadAudio.innerHTML = `${ICO_DOWNLOAD} ${extFromMime(blob.type)}で保存`;
       }
     } catch (_) { /* 音声が取り出せなくても議事録の閲覧・編集は継続 */ }
   }
@@ -3825,19 +3826,6 @@ const historyBack = $('historyBack');
 if (historyBack) historyBack.addEventListener('click', () => {
   closeHistoryDetail();
   window.scrollTo({ top: 0, behavior: 'smooth' });
-});
-
-saveMinutes.addEventListener('click', () => {
-  const m = currentMinutes();
-  if (!hasStructuredMinutes(m) && !m.ai) { showError('保存する議事録が空です。録音を止めるとAIが作成します。'); return; }
-  hideError();
-  const list = loadStore();
-  const id = 'm-' + Date.now() + '-' + Math.floor(performance.now());
-  list.push({ id, name: m.name, date: m.date, participants: m.participants, transcript: liveTranscript.value.trim(), summary: m.summary, decisions: m.decisions, todos: m.todos, aiText: m.ai || '', startedAt: recStartedAt || null });
-  while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
-  saveStore(list);
-  renderHistory();
-  showScreen('screen-history', '過去の議事録');
 });
 
 /* =========================================================
@@ -4840,6 +4828,37 @@ function showError(msg) { errorBox.textContent = msg; errorBox.hidden = false; }
 function hideError() { errorBox.hidden = true; errorBox.textContent = ''; }
 
 /* =========================================================
+ * タップの波
+ *   端末が出す四角いハイライトの代わりに、押した位置から丸い波を広げる。
+ *   画面のいちばん上に重ねた層へ描くので、ボタンの形や重なりに影響しない。
+ * =======================================================*/
+const TAP_TARGETS = 'button, [role="button"], a[href], .drawer-item, .history-item, .settings-head, label.switch-row';
+let tapWaveLayer = null;
+function showTapWave(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const el = e.target && e.target.closest ? e.target.closest(TAP_TARGETS) : null;
+  if (!el || el.disabled) return;
+  if (!tapWaveLayer) {
+    tapWaveLayer = document.createElement('div');
+    tapWaveLayer.className = 'tap-wave-layer';
+    document.body.appendChild(tapWaveLayer);
+  }
+  const r = el.getBoundingClientRect();
+  const x = e.clientX || (r.left + r.width / 2);
+  const y = e.clientY || (r.top + r.height / 2);
+  // 押した位置から、その要素を覆うくらいの大きさまで広がる（広がりすぎない上限つき）
+  const size = Math.max(44, Math.min(Math.hypot(r.width, r.height) * 1.15, 240));
+  const w = document.createElement('span');
+  w.className = 'tap-wave';
+  w.style.left = (x - size / 2) + 'px';
+  w.style.top = (y - size / 2) + 'px';
+  w.style.width = w.style.height = size + 'px';
+  w.addEventListener('animationend', () => w.remove());
+  tapWaveLayer.appendChild(w);
+}
+document.addEventListener('pointerdown', showTapWave, { passive: true });
+
+/* =========================================================
  * 設定のカード開閉
  *   設定の各カードは見出しをタップで開閉でき、閉じるとタイトルだけになる。
  *   どれを開いていたかは端末に保存し、次に開いたときも同じ状態にする。
@@ -4906,7 +4925,6 @@ function isSettingsSectionOpen(name) {
 
 meetingDate.value = todayStr();
 downloadAudio.disabled = true;
-downloadWav.disabled = true;
 setAudioAvailable(false);
 if (keepAwake) { const kw = localStorage.getItem(WAKE_KEY); if (kw === '0') keepAwake.checked = false; }
 geminiInstruction.value = loadGeminiInstruction();
@@ -5055,9 +5073,9 @@ const OUT_ACTS = {
   redo:     { label: '作り直す',     ico: ICO_REDO },
 };
 const DL_FORMATS = [
-  { label: '.txt で保存',  ico: ICO_DOC,  run: () => { const m = currentMinutes(); download(`${safeFileName(m)}.txt`, buildPlainText(m), 'text/plain;charset=utf-8'); } },
-  { label: 'Word (.docx)', ico: ICO_WORD, run: () => exportDocx.click() },
-  { label: '.md で保存',   ico: ICO_MD,   run: () => { const m = currentMinutes(); download(`${safeFileName(m)}.md`, buildMarkdown(m), 'text/markdown;charset=utf-8'); } },
+  { label: '.txt で保存',  ico: ICO_DOC,  run: () => exportTxtNow() },
+  { label: 'Word (.docx)', ico: ICO_WORD, run: () => exportDocxNow() },
+  { label: '.md で保存',   ico: ICO_MD,   run: () => exportMdNow() },
 ];
 
 /**
