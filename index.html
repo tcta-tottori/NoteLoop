@@ -127,20 +127,32 @@
         </div>
         <div class="audio-card" id="audioWrap" hidden>
           <audio id="player" controls preload="metadata"></audio>
-          <div class="audio-actions">
-            <button class="chip-btn" id="downloadAudio" type="button"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> m4aで保存</button>
-          </div>
         </div>
         <p class="field-hint warn" id="audioWarn" hidden></p>
       </div>
 
-      <!-- リアルタイム文字起こし（出力が出てから表示） -->
+      <!-- 要約（AIが録音内容を短くまとめたもの） -->
+      <div class="panel flow-card" id="summaryCard" hidden>
+        <div class="section-head">
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h10"/></svg> 要約</span>
+        </div>
+        <h3 class="sum-title" id="sumTitle"></h3>
+        <ul class="sum-list" id="sumBody"></ul>
+        <div class="sum-block" id="sumDecisionsBlock" hidden>
+          <span class="tag tag-dec">決定事項</span>
+          <ul class="sum-list" id="sumDecisions"></ul>
+        </div>
+        <div class="sum-block" id="sumTodosBlock" hidden>
+          <span class="tag tag-todo">ToDo</span>
+          <ul class="sum-list" id="sumTodos"></ul>
+        </div>
+      </div>
+
+      <!-- 文字起こし（録音中は速報、あとからAIの高精度版に置き換わる） -->
       <div class="panel flow-card" id="transcriptPanel" hidden>
         <div class="section-head">
-          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> リアルタイム文字起こし</span>
-          <span class="mini-actions">
-            <button id="clearTranscript" class="link-btn" type="button">クリア</button>
-          </span>
+          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> 文字起こし</span>
+          <span class="mini-actions"><span class="stage-badge" id="transcriptStage" hidden></span></span>
         </div>
         <div class="out-box">
           <textarea id="liveTranscript" class="transcript" placeholder="録音中の文字起こしがここに表示されます。停止後に編集できます。"></textarea>
@@ -148,16 +160,11 @@
         </div>
       </div>
 
-      <!-- AIによる高精度な文字起こし（議事録とは別に出力・比較用） -->
-      <div class="panel flow-card" id="aiTextCard" hidden>
-        <div class="section-head">
-          <span class="section-title label-ico"><svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg> 高精度文字起こし</span>
-        </div>
+      <!-- AIの高精度な文字起こし。表示は上の「文字起こし」に統合したので、
+           ここは履歴保存・やり直しのためのデータ置き場として持つだけ。 -->
+      <div id="aiTextCard" hidden>
         <div class="claude-status" id="aiTextStatus" hidden></div>
-        <div class="out-box">
-          <textarea id="aiText" class="minutes-area" rows="10"></textarea>
-          <div class="out-tools" data-out="aitext" data-acts="copy,term,use,redo"></div>
-        </div>
+        <textarea id="aiText"></textarea>
       </div>
 
       <!-- 議事録（AIの出力ができてから表示） -->
