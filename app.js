@@ -11,7 +11,6 @@ const $ = (id) => document.getElementById(id);
 const SVG_ATTR = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
 const ICO_DOWNLOAD   = `<svg class="btn-ico" ${SVG_ATTR}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
 const ICO_MUSIC      = `<svg class="btn-ico" ${SVG_ATTR}><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`;
-const ICO_HEADPHONES = `<svg class="btn-ico" ${SVG_ATTR}><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h3z"/><path d="M3 19a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1H3z"/></svg>`;
 const ICO_TRASH      = `<svg class="btn-ico" ${SVG_ATTR}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
 const ICO_COPY       = `<svg class="btn-ico" ${SVG_ATTR}><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
 const ICO_TERM       = `<svg class="btn-ico" ${SVG_ATTR}><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"/><path d="M9 20h6"/><path d="M12 4v16"/></svg>`;
@@ -22,6 +21,8 @@ const ICO_DOC        = `<svg class="btn-ico" ${SVG_ATTR}><path d="M14 2H6a2 2 0 
 const ICO_MD         = `<svg class="btn-ico" ${SVG_ATTR}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 17v-4l2 2 2-2v4"/></svg>`;
 const ICO_WORD       = `<svg class="btn-ico" ${SVG_ATTR}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13l1.5 4L11 13l1.5 4L14 13"/></svg>`;
 const ICO_CHEVRON    = `<svg ${SVG_ATTR}><polyline points="15 18 9 12 15 6"/></svg>`;
+const ICO_CLOCK      = `<svg class="btn-ico" ${SVG_ATTR}><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
+const ICO_DISC       = `<svg class="btn-ico" ${SVG_ATTR}><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>`;
 
 /* ===== 要素 ===== */
 const recordBtn      = $('recordBtn');
@@ -149,7 +150,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.0';
+const APP_VERSION = 'Ver.8.1';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -3651,34 +3652,104 @@ function renderHistory() {
     li.className = 'history-item';
     li.setAttribute('role', 'button');
     li.tabIndex = 0;
-    // AI議事録があればそれを優先（音声をそのままAIに送る運用では文字起こしが空になる）
-    const excerpt = (item.aiText || '').replace(/^[\s#*>・\-–—•【\[]*(議事録|要点・見出し)[】\]]?\s*/, '').trim()
-      || item.transcript || [...(item.decisions || []), ...(item.summary || [])][0] || '（内容なし）';
-    const meta = formatDateJp(item.date) + (item.participants && item.participants.length ? ' ・ ' + participantsText(item.participants) : '') + (item.audio ? ' ・ 音声あり' : '');
-    li.innerHTML = `<h3></h3><span class="meta"></span><span class="excerpt"></span>
-      <div class="history-actions">
-        <button class="audio icon-btn" type="button" aria-label="音声を保存" hidden>${ICO_HEADPHONES}</button>
+    const range = historyTimeRange(item);   // 録音した時間帯（10:05〜10:52）
+    const sec = (item.audio && item.audio.sec) || 0;
+    const size = (item.audio && item.audio.size) || 0;
+    li.innerHTML = `<h3></h3><span class="meta"></span><p class="excerpt"></p>
+      <div class="history-foot">
+        <span class="history-stats">
+          <span class="stat stat-time" hidden>${ICO_CLOCK}<span></span></span>
+          <span class="stat stat-size" hidden>${ICO_DISC}<span></span></span>
+        </span>
         <button class="del icon-btn" type="button" aria-label="削除">${ICO_TRASH}</button>
       </div>`;
     li.querySelector('h3').textContent = item.name + (item._sample ? '（サンプル）' : '');
-    li.querySelector('.meta').textContent = meta;
-    li.querySelector('.excerpt').textContent = excerpt;
+    // 日時（＋録音した時間帯）
+    li.querySelector('.meta').textContent = formatDateJp(item.date) + (range ? ' ・ ' + range : '');
+    // 議事録を2〜3行に要約した内容
+    li.querySelector('.excerpt').textContent = historySummaryText(item);
+    // 録音のトータル時間とデータ容量
+    if (sec) {
+      const el = li.querySelector('.stat-time');
+      el.hidden = false; el.querySelector('span').textContent = formatDurationCard(sec);
+      el.title = '録音の合計時間';
+    }
+    if (size) {
+      const el = li.querySelector('.stat-size');
+      el.hidden = false; el.querySelector('span').textContent = formatBytes(size);
+      el.title = '録音データの容量';
+    }
     // カードをタップ / Enter で開く
     li.addEventListener('click', () => openMinutes(item));
     li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMinutes(item); } });
-    const audioBtn = li.querySelector('.audio');
-    if (item.audio) { audioBtn.hidden = false; audioBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadHistoryAudio(item); }); }
     li.querySelector('.del').addEventListener('click', (e) => { e.stopPropagation(); deleteMinutes(item.id); });
     historyList.appendChild(li);
   }
 }
-async function downloadHistoryAudio(item) {
-  try {
-    const blob = await idbGet(item.id);
-    if (!blob) { showError('保存された音声が見つかりませんでした。'); return; }
-    hideError();
-    download(`${safeFileName(item)}.${(item.audio && item.audio.ext) || 'webm'}`, blob, blob.type || 'audio/webm');
-  } catch (_) { showError('音声の読み込みに失敗しました。'); }
+
+/** 履歴カード用の長さ表記（1時間05分 / 47分00秒 / 8秒） */
+function formatDurationCard(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  if (h) return `${h}時間${String(m).padStart(2, '0')}分`;
+  return m ? `${m}分${String(s % 60).padStart(2, '0')}秒` : `${s}秒`;
+}
+
+/** 録音した時間帯（10:05〜10:52）。開始時刻か長さが無ければ空 */
+function historyTimeRange(item) {
+  const sec = (item.audio && item.audio.sec) || 0;
+  if (!item.startedAt || !sec) return '';
+  const hm = (d) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return `${hm(new Date(item.startedAt))}〜${hm(new Date(item.startedAt + sec * 1000))}`;
+}
+
+/**
+ * 履歴カードに出す 2〜3 行の要約。
+ * AI議事録があれば見出しを除いた本文を、無ければアプリの要点・決定事項、
+ * それも無ければ文字起こしの冒頭を使う（表示は CSS で3行に収める）。
+ */
+function historySummaryText(item) {
+  const clean = (s) => String(s || '')
+    .replace(/[*_`>]/g, '')
+    .replace(/^[\s・\-–—•]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // 「■要旨・議論の内容」「## 決定事項」「件名：」のような見出し行を拾う
+  const headOf = (l) => {
+    let m = /^(?:[■●▲◆]+|#{1,4}\s*|【)\s*([^】]+?)\s*[】:：]?$/.exec(l);
+    if (m) return m[1];
+    m = /^([^:：]{2,12})[:：]$/.exec(l);   // 「決定事項：」のように記号なしの見出し
+    return m ? m[1] : null;
+  };
+  // カードに日時・参加者は別途出るので、要約からは外す
+  const SKIP = /^(日時|時間|場所|参加者|出席者|件名|本文|メール)/;
+  const PRIORITY = [/要旨|要点|概要|議論|内容/, /決定/, /To-?Do|ToDo|やること|宿題|課題/];
+
+  let lines = [];
+  if (item.aiText) {
+    const sections = [];
+    let cur = { head: '', lines: [] };
+    sections.push(cur);
+    for (const raw of item.aiText.split('\n')) {
+      const l = clean(raw);
+      if (!l) continue;
+      const h = headOf(l);
+      if (h) { cur = { head: h, lines: [] }; sections.push(cur); continue; }
+      cur.lines.push(l);
+    }
+    // 要旨 → 決定事項 → ToDo の順に拾い、どれも無ければ日時・参加者以外の全部
+    for (const re of PRIORITY) for (const s of sections) if (re.test(s.head)) lines.push(...s.lines);
+    if (!lines.length) for (const s of sections) if (!SKIP.test(s.head)) lines.push(...s.lines);
+  }
+  if (!lines.length) lines = [...(item.summary || []), ...(item.decisions || [])].map(clean).filter(Boolean);
+  if (!lines.length && item.transcript) {
+    lines = item.transcript.split(/(?<=[。．！？])/).map(clean).filter(Boolean);
+  }
+  const picked = lines.filter((l) => l.length >= 4).slice(0, 3);
+  if (!picked.length) return '（内容なし）';
+  let text = picked.map((l) => l.replace(/[。．]$/, '')).join('。') + '。';
+  if (text.length > 160) text = text.slice(0, 160) + '…';
+  return text;
 }
 async function openMinutes(item) {
   meetingName.value = item.name || '';
