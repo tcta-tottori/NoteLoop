@@ -231,21 +231,21 @@ select:focus, input:focus, textarea:focus {
 }
 .meta-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 16px; }
 
-/* ---------- Status ---------- */
-.status-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.status-chip {
-  font-size: 12px; font-weight: 600; padding: 6px 13px; border-radius: 999px;
-  background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--muted);
-  display: inline-flex; align-items: center; gap: 7px;
-}
-.status-chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .55; }
-.status-chip.ready { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
-.status-chip.loading { color: var(--brand1); border-color: color-mix(in srgb, var(--brand1) 40%, var(--border)); }
-.status-chip.working { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
-.status-chip.working::before { animation: blink 1s infinite; }
+/* ---------- 通知カード（総合進捗はここだけ / ゲージは白） ---------- */
 @keyframes blink { 50% { opacity: .2; } }
-.progress { flex: 1; min-width: 120px; height: 8px; background: var(--surface-3); border-radius: 999px; overflow: hidden; }
-.progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--brand1), var(--brand2)); transition: width .2s ease; }
+.status-card {
+  background: linear-gradient(135deg, var(--brand1) 0%, var(--brand2) 58%, #c74fbf 118%);
+  border-radius: var(--radius); box-shadow: 0 10px 24px color-mix(in srgb, var(--brand1) 28%, transparent);
+  padding: 14px 16px; margin-bottom: 16px; color: #fff;
+}
+.status-card-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.status-text { font-size: 13.5px; font-weight: 700; }
+.status-pct { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; opacity: .9; }
+.progress { height: 8px; background: rgba(255, 255, 255, .28); border-radius: 999px; overflow: hidden; }
+.progress-bar { height: 100%; width: 0%; background: #fff; border-radius: 999px; transition: width .25s ease; }
+/* 進捗が読めないとき（残り時間が未確定など）は白いバーが往復する */
+.status-card.indet .progress-bar { width: 40%; animation: indet 1.3s ease-in-out infinite; }
+@keyframes indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
 
 .error-box {
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
@@ -258,17 +258,6 @@ select:focus, input:focus, textarea:focus {
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .section-title { font-size: 13.5px; font-weight: 800; color: var(--text); }
 .section-title .btn-ico { width: 17px; height: 17px; color: var(--brand1); }
-/* ホーム: 録音後に議事録へ移動するシンプルなボタン */
-.go-minutes-btn {
-  display: flex; align-items: center; justify-content: center; gap: 7px;
-  width: fit-content; margin: 14px auto 0; padding: 10px 20px;
-  background: var(--surface-2); color: var(--brand1);
-  border: 1px solid color-mix(in srgb, var(--brand1) 30%, var(--border)); border-radius: 999px;
-  font-size: 13.5px; font-weight: 700; cursor: pointer; transition: .16s;
-}
-.go-minutes-btn:hover { border-color: var(--brand1); background: color-mix(in srgb, var(--brand1) 8%, var(--surface)); transform: translateY(-1px); }
-.go-minutes-btn svg { width: 17px; height: 17px; flex: none; }
-
 /* ---------- Audio card ---------- */
 .audio-card audio { width: 100%; margin: 8px 0 10px; }
 .audio-size { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
@@ -292,13 +281,6 @@ select:focus, input:focus, textarea:focus {
 .label-ico { display: inline-flex; align-items: center; gap: 6px; }
 .transcript { min-height: 180px; resize: vertical; line-height: 1.75; }
 
-.wide-btn {
-  width: 100%; margin-top: 12px;
-  background: var(--surface-2); border: 1px dashed var(--border-strong); color: var(--brand1);
-  border-radius: var(--radius-sm); padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; transition: .16s;
-}
-.wide-btn:hover { border-color: var(--brand1); background: color-mix(in srgb, var(--brand1) 6%, var(--surface)); }
-
 /* ---------- Minutes ---------- */
 .gen-row { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
 .primary-btn, .secondary-btn {
@@ -321,32 +303,15 @@ select:focus, input:focus, textarea:focus {
 .tag-todo { color: var(--amber); background: color-mix(in srgb, var(--amber) 15%, transparent); }
 .minutes-area { resize: vertical; line-height: 1.75; }
 
-/* ---------- Claude card ---------- */
-.claude-card { border: 1px solid color-mix(in srgb, var(--brand1) 30%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--brand1) 5%, var(--surface)), var(--surface)); }
-.claude-head { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
-.claude-badge { display: grid; place-items: center; flex: none; width: 40px; height: 40px; border-radius: 12px; font-size: 20px; background: linear-gradient(135deg, var(--brand1), var(--brand2)); box-shadow: 0 5px 14px color-mix(in srgb, var(--brand1) 35%, transparent); }
-.claude-badge svg { width: 22px; height: 22px; }
-.claude-title { margin: 0 0 3px; font-size: 15px; font-weight: 800; }
-.claude-desc { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
-/* 議事録カード内に置くClaude連携（下部） */
-.claude-inline { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border-strong); }
-.claude-inline-desc { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); line-height: 1.65; }
-.claude-inline-desc strong { color: var(--text); font-weight: 700; }
-
-/* Claudeを開く（大）とコピー（小）を1行で配置 */
-.claude-actions { display: flex; gap: 10px; flex-wrap: nowrap; margin-bottom: 8px; }
-.claude-actions #claudeSend { flex: 2 1 0; min-width: 0; justify-content: center; white-space: nowrap; }
-.claude-actions #claudeCopy { flex: 1 1 0; min-width: 0; justify-content: center; white-space: nowrap; padding-left: 12px; padding-right: 12px; }
-.claude-status { font-size: 13px; font-weight: 600; padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 8px; }
-.claude-status.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+/* ---------- AI連携カードの状態表示 ---------- */
+.claude-status { font-size: 12.5px; font-weight: 600; padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 8px; }
+.claude-status.ok { color: var(--brand1); background: color-mix(in srgb, var(--brand1) 10%, transparent); }
 .claude-status.warn { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
 .claude-open-link { display: inline-block; font-size: 13px; font-weight: 700; margin-bottom: 8px; }
 .claude-preview { margin-top: 6px; }
 .claude-preview summary { font-size: 12.5px; color: var(--brand1); cursor: pointer; font-weight: 600; margin-bottom: 8px; }
 .claude-preview textarea { line-height: 1.6; font-size: 12.5px; }
-.claude-note { margin: 12px 0 0; font-size: 11.5px; color: var(--faint); line-height: 1.6; }
 
-.export-heading { font-size: 12.5px; font-weight: 700; color: var(--muted); display: block; margin-bottom: 12px; }
 .export-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .export-btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -405,22 +370,20 @@ select:focus, input:focus, textarea:focus {
   content: ""; width: 9px; height: 9px; border-radius: 50%;
   background: #ff4d4f; box-shadow: 0 0 8px #ff4d4f; animation: blink 1s infinite;
 }
-.home-status { justify-content: center; margin-bottom: 14px; }
-
-/* ---------- Home: transcript（枠なし） ---------- */
-.home-transcript { animation: fade .25s ease; }
-.home-transcript .transcript {
-  min-height: 220px; border: none; background: transparent; box-shadow: none;
-  resize: none; padding: 4px 2px; font-size: 15.5px; line-height: 1.95;
+/* ---------- Home: 文字起こしカード ---------- */
+#transcriptPanel .transcript {
+  min-height: 200px; border: none; background: transparent; box-shadow: none;
+  resize: none; padding: 0; font-size: 15.5px; line-height: 1.9;
 }
+#transcriptPanel .transcript:hover,
+#transcriptPanel .transcript:focus { border: none; box-shadow: none; outline: none; }
 /* 文字起こし中は上側（過去）を少し薄くフェード */
-.home-transcript.fade-old .transcript {
+#transcriptPanel.fade-old .transcript {
   -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,.28) 0, rgba(0,0,0,.6) 12%, #000 32%);
   mask-image: linear-gradient(to bottom, rgba(0,0,0,.28) 0, rgba(0,0,0,.6) 12%, #000 32%);
 }
-.home-transcript .transcript:hover,
-.home-transcript .transcript:focus { border: none; box-shadow: none; outline: none; }
-.home-transcript .audio-card { margin-top: 16px; border: none; background: transparent; padding: 0; }
+/* カード内の短い説明文 */
+.card-note { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
 
 /* ---------- Home: 段階フローカード（録音後にフェードインで順に出現） ---------- */
 .home-flow { display: flex; flex-direction: column; }
@@ -436,9 +399,6 @@ select:focus, input:focus, textarea:focus {
 
 /* AI連携カード（Claude / Gemini） */
 .ai-card { border: 1px solid color-mix(in srgb, var(--brand1) 26%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--brand1) 5%, var(--surface)), var(--surface)); }
-.ai-card .claude-badge { background: linear-gradient(135deg, var(--brand1), var(--brand2)); box-shadow: 0 5px 14px color-mix(in srgb, var(--brand1) 35%, transparent); }
-.ai-card .claude-title { font-family: inherit; color: var(--text); }
-.ai-card .claude-desc { color: var(--muted); }
 .ai-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .ai-actions .primary-btn, .ai-actions .secondary-btn { flex: 1 1 auto; min-width: 128px; justify-content: center; white-space: nowrap; }
 .ai-claude { background: linear-gradient(135deg, #d97757, #c15f3c) !important; box-shadow: 0 8px 18px rgba(217, 119, 87, .30) !important; }
@@ -517,14 +477,8 @@ select:focus, input:focus, textarea:focus {
   .wave-timer { font-size: 15px; }
 }
 
-/* ---------- Meeting info button / summary ---------- */
-.meeting-info-btn {
-  width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text);
-  border-radius: var(--radius-sm); padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; transition: .16s;
-}
-.meeting-info-btn:hover { border-color: var(--brand1); color: var(--brand1); }
-.meeting-summary { font-size: 12.5px; color: var(--muted); margin: 10px 2px 16px; line-height: 1.6; }
+/* ---------- Meeting summary ---------- */
+.meeting-summary { font-size: 12.5px; color: var(--muted); margin: 0 2px 16px; line-height: 1.6; }
 .meeting-summary:empty { display: none; }
 .meeting-summary .ms-title { font-weight: 700; color: var(--text); }
 
@@ -572,6 +526,12 @@ select:focus, input:focus, textarea:focus {
 .mic-fab[data-state="mail"] .fab-mail { display: block; }
 .fab-spin { width: 28px; height: 28px; border: 3px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: fabspin .8s linear infinite; }
 @keyframes fabspin { to { transform: rotate(360deg); } }
+/* 読み込み中（録音直後）も、録音前のマイクボタンと同じグラデーションのまま */
+.mic-fab[data-state="processing"] {
+  background: linear-gradient(135deg, #ff2d6b 0%, #ff5a5f 45%, #ff9d4d 100%);
+  box-shadow: 0 10px 26px rgba(255, 61, 113, .45);
+}
+.mic-fab[data-state="processing"]:disabled { opacity: 1; }
 .mic-fab[data-state="minutes"], .mic-fab[data-state="mail"] {
   background: linear-gradient(135deg, var(--brand1), var(--brand2));
   box-shadow: 0 10px 26px color-mix(in srgb, var(--brand1) 42%, transparent);
@@ -581,19 +541,6 @@ select:focus, input:focus, textarea:focus {
   animation: fabBlink 1.1s ease-in-out infinite;
 }
 .mic-fab[data-state="recording"] .rec-ring { animation: ring 1.5s ease-out infinite; }
-
-/* ---------- Claude card (Claude風) ---------- */
-.claude-card { border-color: #e7ddd0; background: linear-gradient(180deg, #faf8f3, #fbfaf6); }
-.claude-badge { background: linear-gradient(135deg, #d97757, #bf5f3c); box-shadow: 0 5px 14px rgba(217,119,87,.35); }
-.claude-title { color: #201e1c; font-family: Georgia, "Times New Roman", "Noto Serif JP", serif; }
-.claude-desc { color: #6a655d; }
-.claude-card .primary-btn { background: linear-gradient(135deg, #d97757, #c15f3c); box-shadow: 0 8px 18px rgba(217,119,87,.32); }
-.claude-card .secondary-btn { border-color: #e0d3c2; color: #8a6d4f; }
-.claude-card .secondary-btn:hover { border-color: #d97757; color: #c15f3c; }
-.claude-card .claude-preview summary { color: #b06a48; }
-.claude-card .claude-preview textarea { background: #fffdf8; border-color: #e7ddd0; color: #201e1c; font-family: Georgia, "Noto Serif JP", serif; line-height: 1.7; }
-.claude-open-link { color: #c15f3c; }
-.claude-status.ok { color: #b3603f; background: rgba(217,119,87,.12); }
 
 /* ---------- Term dictionary ---------- */
 .mini-actions { display: flex; gap: 14px; }

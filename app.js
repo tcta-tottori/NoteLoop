@@ -24,11 +24,10 @@ const statusBar      = $('statusBar');
 const transcriptPanel= $('transcriptPanel');
 const idlePrompt     = $('idlePrompt');
 const modelStatus    = $('modelStatus');
-const progressWrap   = $('progressWrap');
+const statusPct      = $('statusPct');
 const progressBar    = $('progressBar');
 const errorBox       = $('errorBox');
 const audioWrap      = $('audioWrap');
-const audioEmptyNote = $('audioEmptyNote');
 const player         = $('player');
 const audioSize      = $('audioSize');
 const downloadAudio  = $('downloadAudio');
@@ -48,7 +47,6 @@ const keepAwake      = $('keepAwake');
 
 const meetingName    = $('meetingName');
 const meetingDate    = $('meetingDate');
-const generateBtn    = $('generateBtn');
 const regenerateBtn  = $('regenerateBtn');
 const secSummary     = $('secSummary');
 const secDecisions   = $('secDecisions');
@@ -106,7 +104,7 @@ const mailPanel      = $('mailPanel');
 const geminiSend     = $('geminiSend');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.2.3';
+const APP_VERSION = 'Ver.2.4';
 const APP_UPDATED = '2026.8.5';
 
 let participants = [];   // { dept, name }
@@ -196,41 +194,55 @@ function showScreen(id, title) {
   if (id === 'screen-home') { updateHomeUI(); refreshAudioPanel(); }
 }
 
-/** 録音音声パネルの表示（音声の有無で再生カードと案内文を切替） */
+/** 録音音声の再生カードを表示／非表示（音声ができてから表示する） */
 function setAudioAvailable(has) {
   if (audioWrap) audioWrap.hidden = !has;
-  if (audioEmptyNote) audioEmptyNote.hidden = has;
 }
 function refreshAudioPanel() { setAudioAvailable(!!recordedBlob); }
 
 /* =========================================================
- * 録音後の段階フロー（カードをフェードインで順に出現）
+ * 録音後の段階フロー（カード表示）
+ *   ・カードは中身（＝AIの出力）ができるまで非表示。できた順にフェードインする。
  *   ・状態はメモリのみ。ページ再読込では復元されず、録音待機画面に戻る。
  * =======================================================*/
-function flowCardList() { return [audioFlowCard, minutesFlowCard, aiFlowCard, exportFlowCard, mailPanel].filter(Boolean); }
+function hasMinutes() { return !!(secSummary.value.trim() || secDecisions.value.trim() || secTodos.value.trim()); }
 
-/** すべてのフローカードを隠して初期状態へ戻す（新規録音・クリア・再読込時） */
+/** カードと「そのカードを表示してよいか（出力ができたか）」の対応 */
+function flowSteps() {
+  return [
+    { el: transcriptPanel, ready: () => liveTranscript.value.trim().length > 0 },
+    { el: audioFlowCard,   ready: () => !!recordedBlob },
+    { el: minutesFlowCard, ready: hasMinutes },
+    { el: aiFlowCard,      ready: hasMinutes },
+    { el: exportFlowCard,  ready: hasMinutes },
+    { el: mailPanel,       ready: hasMinutes },
+  ].filter((s) => s.el);
+}
+
+/** すべてのフローカードを隠して初期状態へ戻す（新規録音・クリア時） */
 function resetFlowCards() {
-  flowCardList().forEach((c) => { c.hidden = true; c.classList.remove('revealed'); });
+  flowSteps().forEach((s) => { s.el.hidden = true; s.el.classList.remove('revealed'); });
 }
 
 /**
- * フローカードを出現させる。
- * stagger=true で1枚ずつ時間差フェードイン（録音直後の演出）。
+ * 出力ができたカードだけを表示する。
+ * 新しく出るカードは1枚ずつ時間差でフェードインさせる。
  */
-function revealFlowCards(stagger) {
+function syncFlowCards() {
   refreshAudioPanel();
-  const cards = flowCardList();
-  cards.forEach((c, i) => {
-    c.hidden = false;
-    if (stagger) {
-      c.classList.remove('revealed');
+  let n = 0;
+  for (const s of flowSteps()) {
+    if (!s.ready()) { s.el.hidden = true; s.el.classList.remove('revealed'); continue; }
+    if (s.el.hidden) {
+      s.el.hidden = false;
+      s.el.classList.remove('revealed');
       // 表示（display 復帰）を確定させてからトランジション開始
-      setTimeout(() => c.classList.add('revealed'), 90 + i * 150);
+      setTimeout(((el) => () => el.classList.add('revealed'))(s.el), 60 + n * 150);
+      n++;
     } else {
-      c.classList.add('revealed');
+      s.el.classList.add('revealed');
     }
-  });
+  }
 }
 
 /* =========================================================
@@ -245,8 +257,8 @@ function updateHomeUI() {
   waveWrap.hidden = !showWave;
   timerEl.hidden = !recording;
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
-  transcriptPanel.hidden = !(recording || hasText || hasAudio);
   transcriptPanel.classList.toggle('fade-old', recording || homeProcessing); // 文字起こし中は上側を薄く
+  syncFlowCards();
   updateFabState();
 
   if (showWave) startWave(); else stopWave();
@@ -286,8 +298,7 @@ worker.onmessage = (e) => {
       if (msg.data && typeof msg.data.progress === 'number') { lastDlProgress = performance.now(); setModelLoading(msg.data.progress); }
       break;
     case 'ready':
-      setStatus('ready', 'モデル準備完了');
-      break;
+      break;   // 準備完了は通知しない（進捗カードの表示だけで足りる）
     case 'result':
       if (msg.mode === 'final') {
         // 高精度パスの結果で置き換え（反復除去＋句点で改行）
@@ -311,16 +322,37 @@ worker.onmessage = (e) => {
   }
 };
 
-function setModelLoading(progress) {
-  setStatus('loading', 'モデル読み込み中…');
-  progressWrap.hidden = false;
-  progressBar.style.width = Math.max(2, Math.min(100, progress)).toFixed(0) + '%';
-}
-function setStatus(kind, text) {
+/* =========================================================
+ * 通知カード（総合進捗）
+ *   進捗ゲージはこのカードの1本だけ。モデル読み込み〜文字起こし〜議事録作成を
+ *   ひとつの流れとして 0〜100% で表す（各カードに個別のゲージは持たない）。
+ * =======================================================*/
+const P_MODEL = 0.25;   // モデル読み込み完了時点
+const P_STT   = 0.85;   // 文字起こし完了時点
+
+/** 通知カードを表示して進捗を更新（ratio 省略時は往復アニメーション） */
+function setProgress(text, ratio) {
+  statusBar.hidden = false;
   modelStatus.textContent = text;
-  modelStatus.className = 'status-chip' + (kind ? ' ' + kind : '');
-  if (kind === 'ready') progressWrap.hidden = true;
-  statusBar.hidden = !kind; // 待機（kind='')のときは非表示
+  const known = typeof ratio === 'number';
+  statusBar.classList.toggle('indet', !known);
+  if (known) {
+    const pct = Math.max(2, Math.min(100, Math.round(ratio * 100)));
+    progressBar.style.width = pct + '%';
+    statusPct.textContent = pct + '%';
+  } else {
+    progressBar.style.width = '';
+    statusPct.textContent = '';
+  }
+}
+function clearProgress() {
+  statusBar.hidden = true;
+  statusBar.classList.remove('indet');
+  progressBar.style.width = '0%';
+  statusPct.textContent = '';
+}
+function setModelLoading(progress) {
+  setProgress('モデルを読み込み中', (Math.max(0, Math.min(100, progress)) / 100) * P_MODEL);
 }
 
 /* =========================================================
@@ -396,8 +428,8 @@ recordBtn.addEventListener('click', async () => {
   const st = recordBtn.dataset.state;
   if (st === 'recording') return stopRecording();
   if (st === 'processing') return;
-  if (st === 'minutes') { revealFlowCards(); runGenerate(); scrollToEl('minutesFlowCard'); return; }
-  if (st === 'mail') { revealFlowCards(); prepareMailFromMinutes(); scrollToEl('mailPanel'); return; }
+  if (st === 'minutes') { runGenerate(); scrollToEl('minutesFlowCard'); return; }
+  if (st === 'mail') { prepareMailFromMinutes(); scrollToEl('mailPanel'); return; }
   return startRecording();
 });
 
@@ -410,7 +442,7 @@ async function startRecording() {
   // --- Web Speech: ライブ認識 ＋ 並行して音声録音 ---
   if (activeEngine === 'webspeech') {
     if (!getSR()) {
-      showError('このブラウザは Web Speech API（音声認識）に対応していません。設定でエンジンを「ブラウザ内Whisper」に切り替えてください。');
+      showError('このブラウザは音声認識に対応していません。設定でエンジンをWhisperに切り替えてください。');
       return;
     }
     recordedBlob = null;
@@ -423,7 +455,7 @@ async function startRecording() {
     if (!ok) { teardownAudio(); return; } // 認識を開始できなければ後始末
     recording = true;
     sttActivity = 0.4;
-    setStatus('working', '認識中…（Web Speech）');
+    clearProgress();   // 録音中は波形とタイマーだけ（通知カードは出さない）
     updateHomeUI();
     startTime = Date.now();
     updateTimer();
@@ -436,7 +468,7 @@ async function startRecording() {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
     if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
-      showError('マイクの使用が許可されませんでした。ブラウザのマイク権限を許可してください（HTTPS または localhost が必要です）。');
+      showError('マイクの使用が許可されませんでした。ブラウザのマイク権限を許可してください。');
     } else if (err && err.name === 'NotFoundError') {
       showError('マイクが見つかりませんでした。マイクが接続されているか確認してください。');
     } else {
@@ -488,7 +520,7 @@ async function startRecording() {
   recordedBlob = null;
   setAudioAvailable(false);
 
-  setStatus('working', useLive ? '準備中…' : '録音中');
+  clearProgress();   // 録音中は波形とタイマーだけ
 
   updateHomeUI();
 
@@ -554,33 +586,42 @@ async function stopRecording() {
 
   if (activeEngine === 'webspeech') {
     // Web Speech はリアルタイムで確定済み。高精度パスは行わない。
-    setStatus('ready', '認識完了');
     updateHomeUI();
   } else if (recordedBlob) {
     // Whisper: 音声全体を高精度で再処理して確定版に置き換え
     await runFinalPass(recordedBlob);
   } else {
-    setStatus('ready', 'モデル準備完了');
+    clearProgress();
     updateHomeUI();
   }
   checkTerms(); // 登録用語（会社名など）が含まれていれば確認ポップアップ
   // 文字起こし＋音声を自動的に履歴へ保存（最大10件）
   await autoSaveRecording();
-  // 録音後のフロー: 議事録を自動生成し、カードを段階的にフェードインで出現させる
-  enterReviewFlow();
+  // 録音後のフロー: 議事録を作成し、できたカードから順に出現させる
+  await enterReviewFlow();
 }
 
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * 録音停止後の段階フロー開始。
- * 文字起こしがあれば議事録を自動生成し、音声・議事録・AI・書き出し・メールの
- * カードを1枚ずつフェードインで出現させる（メール生成まで録音ページで完結）。
+ * 録音停止後の段階フロー。
+ * 議事録を作成し、その進捗を通知カードの総合ゲージに出す。
+ * カードは出力ができてから（＝このあとの updateHomeUI で）順に現れる。
  */
-function enterReviewFlow() {
-  if (!liveTranscript.value.trim()) { updateHomeUI(); return; }
+async function enterReviewFlow() {
+  if (!liveTranscript.value.trim()) { clearProgress(); updateHomeUI(); return; }
   ensureAutoTitle();
-  fillMinutesUI(generateMinutes(liveTranscript.value.trim())); // 議事録を自動生成
-  revealFlowCards(true); // 時間差フェードイン
+  homeProcessing = true;
   updateHomeUI();
+  setProgress('議事録を作成中', 0.92);
+  await wait(450);
+  fillMinutesUI(generateMinutes(liveTranscript.value.trim()));
+  prepareMailFromMinutes();   // メールカードも中身が入った状態で出す
+  setProgress('完了', 1);
+  await wait(400);
+  clearProgress();
+  homeProcessing = false;
+  updateHomeUI();   // ここで議事録・AI・書き出し・メールのカードが順に出現
   scrollToEl('transcriptPanel');
 }
 
@@ -617,7 +658,7 @@ function beginRecognition() {
 
 function startWebSpeech() {
   if (!getSR()) {
-    showError('このブラウザは Web Speech API（音声認識）に対応していません。設定でエンジンを「ブラウザ内Whisper」に切り替えてください。');
+    showError('このブラウザは音声認識に対応していません。設定でエンジンをWhisperに切り替えてください。');
     return false;
   }
   sttBase = liveTranscript.value.trim();
@@ -651,6 +692,7 @@ function onSpeechResult(e) {
   sttCurFinal = finalText;
   liveTranscript.value = composeSpeech(interim);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
+  syncFlowCards();   // 最初の出力が出た時点で文字起こしカードを表示
   sttActivity = 0.9; // 発話に反応して波を動かす
 }
 
@@ -709,7 +751,7 @@ async function runFinalPass(blob) {
   homeProcessing = true;
   procProgress = 0;
   updateHomeUI();
-  setStatus('working', '音声を準備中…');
+  setProgress('音声を準備中');
 
   try {
     const audio = await decodeTo16kMono(blob);
@@ -720,16 +762,14 @@ async function runFinalPass(blob) {
     const factor = { 'Xenova/whisper-base': 2, 'Xenova/whisper-small': 4, 'Xenova/whisper-medium': 8 }[accuracyModel.value] || 4;
     const estTotal = Math.max(5, durationSec * factor);
     const procStart = Date.now();
-    progressWrap.hidden = false;
 
     procTimer = setInterval(() => {
       const el = (Date.now() - procStart) / 1000;
       procProgress = Math.min(0.96, el / estTotal);
       // モデルDL中は本物のDL進捗に譲る
       if (performance.now() - lastDlProgress > 1200) {
-        progressBar.style.width = (procProgress * 100).toFixed(0) + '%';
         const remain = Math.max(0, Math.ceil(estTotal - el));
-        setStatus('working', `高精度で文字起こし中… 残り約 ${remain}秒`);
+        setProgress(`文字起こし中　残り約 ${remain}秒`, P_MODEL + (P_STT - P_MODEL) * procProgress);
       }
     }, 300);
 
@@ -743,17 +783,15 @@ async function runFinalPass(blob) {
     });
 
     procProgress = 1;
-    progressBar.style.width = '100%';
-    setStatus('ready', '文字起こし完了');
+    setProgress('文字起こし完了', P_STT);
     if (level < 0.008) {
-      showError('録音の音量がかなり小さいようです。マイクに近づける／端末の録音音量を上げると精度が上がります。');
+      showError('録音の音量が小さいようです。マイクに近づけると精度が上がります。');
     }
   } catch (err) {
-    showError('高精度処理に失敗しました: ' + (err && err.message ? err.message : err));
-    setStatus('ready', 'モデル準備完了');
+    showError('文字起こしに失敗しました: ' + (err && err.message ? err.message : err));
+    clearProgress();
   } finally {
     clearInterval(procTimer); procTimer = null;
-    progressWrap.hidden = true;
     recordBtn.disabled = false;
     homeProcessing = false;
     procProgress = 0;
@@ -873,7 +911,6 @@ function maybeSendChunk(force) {
   if (!force && len / SAMPLE_RATE < CHUNK_MIN_SEC) return;
   const audio = drainPending();
   workerBusy = true;
-  if (recording) setStatus('working', '文字起こし中…（暫定）');
   worker.postMessage(
     { type: 'transcribe', id: ++reqId, mode: 'live', audio, model: liveModel.value, language: LANGUAGE },
     [audio.buffer]
@@ -883,6 +920,7 @@ function appendTranscript(text) {
   const cur = liveTranscript.value.trimEnd();
   liveTranscript.value = formatTranscript(cur ? cur + ' ' + text : text);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
+  syncFlowCards();   // 最初の出力が出た時点で文字起こしカードを表示
 }
 clearTranscript.addEventListener('click', () => {
   liveTranscript.value = '';
@@ -933,8 +971,6 @@ function waveLoop() {
   waveRAF = requestAnimationFrame(waveLoop);
   // 大きいほど速く揺れる（静かなときはゆっくり）
   wavePhase += 0.02 + waveLevel * 0.055;
-  // 高精度処理中は「文字が打たれていく」別アニメーションを表示
-  if (homeProcessing && !recording) { drawProcessingFrame(); return; }
   sttActivity *= 0.9;
   let target;
   if (recording && analyser) {
@@ -955,52 +991,6 @@ function waveLoop() {
   waveLevel += (target - waveLevel) * k;
   drawWaveFrame();
 }
-/** 角丸矩形パス */
-function rrect(ctx, x, y, w, h, r) {
-  r = Math.min(r, h / 2, w / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-/** 高精度処理中: 文字が左から打ち込まれていくアニメーション */
-function drawProcessingFrame() {
-  const ctx = wave.getContext('2d');
-  const w = wave.width, h = wave.height;
-  ctx.clearRect(0, 0, w, h);
-  const marginX = w * 0.13, usable = w - marginX * 2;
-  const widths = [0.94, 0.72, 0.88, 0.56];
-  const lines = widths.length;
-  const lineH = Math.max(7, h * 0.052);
-  const gap = h * 0.135;
-  const startY = h * 0.30;
-  for (let i = 0; i < lines; i++) {
-    const y = startY + i * gap;
-    const bw = usable * widths[i];
-    // ベース（薄い下地）
-    ctx.fillStyle = 'rgba(99, 102, 241, 0.15)';
-    rrect(ctx, marginX, y, bw, lineH, lineH / 2); ctx.fill();
-    // 進捗に応じて行ごとに順番に埋まる（＝タイピング風）
-    const p = Math.max(0, Math.min(1, procProgress * lines - i));
-    const fw = bw * p;
-    if (fw > 1) {
-      const g = ctx.createLinearGradient(marginX, 0, marginX + usable, 0);
-      g.addColorStop(0, '#4f6ef7'); g.addColorStop(0.6, '#7c5cf6'); g.addColorStop(1, '#ec4899');
-      ctx.fillStyle = g;
-      rrect(ctx, marginX, y, fw, lineH, lineH / 2); ctx.fill();
-      // 点滅キャレット
-      if (p < 1 && Math.floor(wavePhase * 3) % 2 === 0) {
-        ctx.fillStyle = 'rgba(124, 92, 246, 0.95)';
-        rrect(ctx, marginX + fw + 3, y - lineH * 0.25, 3, lineH * 1.5, 1.5); ctx.fill();
-      }
-    }
-  }
-}
-
 function drawWaveFrame() {
   const ctx = wave.getContext('2d');
   const w = wave.width, h = wave.height, mid = h * 0.52;
@@ -1068,10 +1058,11 @@ function fillMinutesUI(m) {
 }
 function runGenerate() {
   const src = liveTranscript.value.trim();
-  if (!src) { showError('文字起こしが空です。先に録音するか、テキストを入力してください。'); showScreen('screen-home', '録音・文字起こし'); return; }
+  if (!src) { showError('文字起こしが空です。先に録音してください。'); showScreen('screen-home', '録音・文字起こし'); return; }
   hideError();
   ensureAutoTitle();  // タイトル未設定なら文字起こしから自動生成
   fillMinutesUI(generateMinutes(src));
+  prepareMailFromMinutes();
   updateHomeUI();     // 生成後はマイクボタンを「メール作成」段階へ更新
 }
 
@@ -1090,7 +1081,6 @@ function ensureAutoTitle() {
   const t = autoTitleFromTranscript(liveTranscript.value);
   if (t) { meetingName.value = t; updateMeetingSummary(); }
 }
-generateBtn.addEventListener('click', runGenerate);
 regenerateBtn.addEventListener('click', runGenerate);
 
 /* =========================================================
@@ -1311,7 +1301,7 @@ function renderTermDict() {
   termDictList.innerHTML = '';
   if (!termDict.length) {
     const li = document.createElement('li'); li.className = 'term-dict-empty';
-    li.textContent = 'まだ登録された用語はありません。上で「辞書に登録」できます。';
+    li.textContent = '登録された用語はありません。';
     termDictList.appendChild(li); return;
   }
   termDict.forEach((t, i) => {
@@ -1335,7 +1325,7 @@ function renderDictSettings() {
   dictList.innerHTML = '';
   if (!termDict.length) {
     const li = document.createElement('li'); li.className = 'word-dict-empty';
-    li.textContent = 'まだ登録された用語はありません。上の欄から追加してください。';
+    li.textContent = '登録された用語はありません。';
     dictList.appendChild(li); return;
   }
   termDict.forEach((t, i) => {
@@ -1374,7 +1364,7 @@ function addDictEntry() {
   saveTermDict(); renderDicts();
   dictFrom.value = ''; dictTo.value = '';
   dictFrom.focus();
-  showDictNote(`「${f}」→「${t}」を登録しました。以後、文字起こし・議事録の作成時に自動で変換します。`);
+  showDictNote(`「${f}」→「${t}」を登録しました。`);
 }
 if (dictAdd) dictAdd.addEventListener('click', addDictEntry);
 [dictFrom, dictTo].forEach((el) => {
@@ -1385,18 +1375,18 @@ if (dictAuto) dictAuto.addEventListener('change', () => {
   dictAutoApply = dictAuto.checked;
   localStorage.setItem(DICT_AUTO_KEY, dictAutoApply ? '1' : '0');
   showDictNote(dictAutoApply
-    ? '文字起こし・議事録の作成時に、登録した用語を自動で変換します。'
-    : '自動変換はオフです。録音後に「用語の確認・修正」から手動で置換できます。');
+    ? '登録した用語を自動で変換します。'
+    : '自動変換はオフです。「用語修正」から手動で置換できます。');
 });
 if (dictApplyNow) dictApplyNow.addEventListener('click', () => {
   if (!termDict.length) { showDictNote('登録された用語がありません。'); return; }
   if (!liveTranscript.value.trim()) { showDictNote('文字起こしが空です。先に録音してください。'); return; }
   const n = applyDictToTranscript(false);
-  showDictNote(`今の文字起こしに辞書を適用しました（計 ${n} 件置換）。`);
+  showDictNote(`辞書を適用しました（${n} 件置換）。`);
 });
 function showTermNote(msg) { termFoundNote.textContent = msg; }
 function openTermModal(note) {
-  showTermNote(note || '会社名や固有名詞など、誤変換された語を正しい語に一括置換できます。');
+  showTermNote(note || '誤変換された語を正しい語に一括置換できます。');
   renderTermDict();
   termModal.hidden = false;
   requestAnimationFrame(() => termModal.classList.add('show'));
@@ -1421,11 +1411,11 @@ termRegister.addEventListener('click', () => {
   const idx = termDict.findIndex((t) => t.from === w);
   if (idx >= 0) termDict[idx].to = r; else termDict.push({ from: w, to: r });
   saveTermDict(); renderDicts();
-  showTermNote(`辞書に登録しました。以後、文字起こし・議事録の作成時に「${w}」を「${r}」へ自動変換します（設定でも変更できます）。`);
+  showTermNote(`辞書に登録しました（「${w}」→「${r}」）。`);
 });
 termApplyAll.addEventListener('click', () => {
   const total = applyDictToTranscript(false);
-  showTermNote(`登録用語をすべて適用しました（計 ${total} 件置換）。`);
+  showTermNote(`すべて適用しました（${total} 件置換）。`);
 });
 /**
  * 録音後の辞書チェック。
@@ -1695,8 +1685,7 @@ function openMinutes(item) {
   // 履歴の音声はこの場では読み込まない（保存はカードの案内どおり履歴から）
   recordedBlob = null;
   showScreen('screen-home', '録音・文字起こし・議事録作成');
-  revealFlowCards(false); // 履歴表示は一括で出現
-  updateHomeUI();
+  updateHomeUI();   // 中身のあるカードだけを表示
   scrollToEl('transcriptPanel');
 }
 function deleteMinutes(id) {
@@ -1708,7 +1697,7 @@ function deleteMinutes(id) {
 
 saveMinutes.addEventListener('click', () => {
   const m = currentMinutes();
-  if (!m.summary.length && !m.decisions.length && !m.todos.length) { showError('保存する議事録が空です。先に生成してください。'); return; }
+  if (!m.summary.length && !m.decisions.length && !m.todos.length) { showError('議事録が空です。'); return; }
   hideError();
   const list = loadStore();
   const id = 'm-' + Date.now() + '-' + Math.floor(performance.now());
@@ -1795,7 +1784,7 @@ function setClaudeStatus(kind, html) {
 function ensureTranscript() {
   const t = liveTranscript.value.trim();
   if (!t) {
-    showError('文字起こしが空です。先に「録音」画面で録音するか、テキストを入力してください。');
+    showError('文字起こしが空です。先に録音してください。');
     showScreen('screen-home', '録音・文字起こし');
     return false;
   }
@@ -1817,11 +1806,11 @@ claudeSend.addEventListener('click', async () => {
   claudeOpen.hidden = false; // 手動フォールバックのリンクは常に表示
   const copied = await copyText(prompt);
   if (!win) {
-    setClaudeStatus('warn', 'ポップアップがブロックされました。下の「→ Claudeを開く」を押してください（プロンプトはコピー済みです）。');
+    setClaudeStatus('warn', 'コピー済みです。下の「→ Claudeを開く」から貼り付けてください。');
   } else if (copied) {
-    setClaudeStatus('ok', '✓ Claudeを開きました。プロンプトが未入力の場合は入力欄で <strong>貼り付け（⌘/Ctrl+V）→ 送信</strong>（コピー済み）。');
+    setClaudeStatus('ok', 'コピーしました。Claudeの入力欄に貼り付けて送信してください。');
   } else {
-    setClaudeStatus('warn', 'Claudeを開きました。未入力なら下の「送信するプロンプトを確認」から手動でコピーしてください。');
+    setClaudeStatus('warn', 'コピーできませんでした。「プロンプトを確認」から手動でコピーしてください。');
   }
 });
 
@@ -1836,11 +1825,11 @@ if (geminiSend) geminiSend.addEventListener('click', async () => {
   if (win) { try { win.opener = null; } catch (_) {} }
   const copied = await copyText(prompt);
   if (!win) {
-    setClaudeStatus('warn', 'ポップアップがブロックされました。プロンプトはコピー済みです。<a href="' + GEMINI_URL + '" target="_blank" rel="noopener">Geminiを開く</a>と貼り付けできます。');
+    setClaudeStatus('warn', 'コピー済みです。<a href="' + GEMINI_URL + '" target="_blank" rel="noopener">Geminiを開く</a>から貼り付けてください。');
   } else if (copied) {
-    setClaudeStatus('ok', '✓ Geminiを開きました。入力欄で <strong>貼り付け（⌘/Ctrl+V）→ 送信</strong>（コピー済み）。');
+    setClaudeStatus('ok', 'コピーしました。Geminiの入力欄に貼り付けて送信してください。');
   } else {
-    setClaudeStatus('warn', 'Geminiを開きました。下の「送信するプロンプトを確認」から手動でコピーしてください。');
+    setClaudeStatus('warn', 'コピーできませんでした。「プロンプトを確認」から手動でコピーしてください。');
   }
 });
 
@@ -1852,8 +1841,8 @@ claudeCopy.addEventListener('click', async () => {
   claudePromptPreview.value = prompt;
   const copied = await copyText(prompt);
   claudeOpen.hidden = false;
-  if (copied) setClaudeStatus('ok', '✓ プロンプトをコピーしました。「→ Claudeを開く」から貼り付けて送信してください。');
-  else setClaudeStatus('warn', '⚠ 自動コピーできませんでした。下の「送信するプロンプトを確認」から手動でコピーしてください。');
+  if (copied) setClaudeStatus('ok', 'コピーしました。「→ Claudeを開く」から貼り付けてください。');
+  else setClaudeStatus('warn', 'コピーできませんでした。「プロンプトを確認」から手動でコピーしてください。');
 });
 
 // 指示テンプレートの保存・リセット
@@ -1883,9 +1872,9 @@ function applyEngineUI() {
   const ws = engineSelect.value === 'webspeech';
   whisperSettings.style.display = ws ? 'none' : '';
   engineHint.textContent = ws
-    ? 'ブラウザ標準の音声認識。リアルタイムで高精度ですが、音声はブラウザ経由でクラウド（Chromeは Google、Edgeは Azure）へ送信され、インターネット接続が必要です。'
-    : '音声を端末内で処理します（外部送信なし・オフライン可）。初回はモデルをダウンロードします。';
-  if (!recording) setStatus('', ws ? 'Web Speech（要ネット）' : 'モデル未読み込み');
+    ? 'リアルタイムで高精度。音声はクラウドへ送られ、ネット接続が必要です。'
+    : '端末内で処理します（外部送信なし・オフライン可）。初回はモデルをダウンロードします。';
+  if (!recording) clearProgress();
   localStorage.setItem(ENGINE_KEY, engineSelect.value);
 }
 engineSelect.addEventListener('change', applyEngineUI);
