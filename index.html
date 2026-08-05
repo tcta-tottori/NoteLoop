@@ -230,7 +230,8 @@
       <!-- 中央: 点滅する案内＋会議情報ボタン（待機中のみ） -->
       <div class="idle-prompt" id="idlePrompt">
         <span class="idle-text">
-          <svg class="idle-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><path d="M12 18v4"/></svg>
+          <!-- 中央下部のマイクボタンと同じアイコン（色は文字色に合わせてマスクで描画） -->
+          <span class="idle-mic" aria-hidden="true"></span>
           で録音開始
         </span>
         <button id="openMeetingInfoHome" class="home-meeting-btn" type="button">
@@ -309,6 +310,39 @@
         </div><!-- /#whisperSettings -->
       </div>
 
+      <!-- 変換辞書（ひらがな等 → 指定の漢字） -->
+      <div class="panel">
+        <h3 class="settings-group-title">変換辞書（読み → 漢字）</h3>
+        <p class="field-hint">
+          「しんけんこう」→「新建高」のように、<b>読み（ひらがな）や誤変換</b>と<b>正しい表記</b>をセットで登録します。
+          登録した語は<b>文字起こし・議事録の作成・AI連携</b>のときに自動で変換され、AIへ渡すプロンプトにも用語集として付きます。
+        </p>
+        <div class="field settings-field">
+          <label class="switch-row" for="dictAuto">
+            <span>
+              自動で変換する
+              <span class="field-hint inline">オフにすると自動変換せず、録音後に「用語の確認・修正」で手動置換できます。</span>
+            </span>
+            <input type="checkbox" id="dictAuto" checked />
+          </label>
+        </div>
+        <div class="field settings-field">
+          <label>用語を追加</label>
+          <div class="dict-add">
+            <input id="dictFrom" type="text" aria-label="読み・誤変換" placeholder="例: しんけんこう" />
+            <span class="dict-arrow" aria-hidden="true">→</span>
+            <input id="dictTo" type="text" aria-label="正しい表記" placeholder="例: 新建高" />
+            <button id="dictAdd" class="chip-btn" type="button">＋ 追加</button>
+          </div>
+          <p class="field-hint" id="dictNote">ひらがなで登録すると、カタカナ表記（シンケンコウ）も一緒に変換します。</p>
+        </div>
+        <div class="mini-label-row">
+          <span class="mini-label">登録済みの用語（その場で編集できます）</span>
+          <button id="dictApplyNow" class="link-btn" type="button">文字起こしに適用</button>
+        </div>
+        <ul id="dictList" class="word-dict"></ul>
+      </div>
+
       <div class="panel">
         <h3 class="settings-group-title">Claude連携</h3>
         <div class="field settings-field">
@@ -362,7 +396,7 @@
           <li><b>録音</b><span>中央のマイクボタンで録音の開始／停止。録音中は経過時間と波形、ライブ文字起こしを表示。「編集」から会議情報（タイトル・日付・参加者）を入力できます。</span></li>
           <li><b>議事録</b><span>録音した音声の再生・保存、議事録本文（要点／決定事項／ToDo）、Claude 連携、書き出し、メール作成をまとめた画面です。</span></li>
           <li><b>履歴</b><span>保存した議事録をカードで一覧。カードをタップで開き、右下のアイコンで削除・音声保存。最大10件を保存します。</span></li>
-          <li><b>設定</b><span>文字起こしエンジンの切替、高精度モデル、録音中の画面常時オン、Claude の指示テンプレートを設定できます。</span></li>
+          <li><b>設定</b><span>文字起こしエンジンの切替、高精度モデル、録音中の画面常時オン、変換辞書（読み → 漢字）、Claude の指示テンプレートを設定できます。</span></li>
           <li><b>メニュー</b><span>左上の三本線（PC では常時左側）から各画面へ移動。上部に現在のバージョンを表示します。</span></li>
         </ul>
       </div>
@@ -407,7 +441,8 @@
       <div class="panel" id="man-tips">
         <h3 class="settings-group-title">便利な機能</h3>
         <ul class="man-def">
-          <li><b>用語の修正・辞書</b><span>文字起こし上部の「用語修正」で、会社名など誤変換されやすい語を一括置換。辞書に登録すると録音後に自動でチェックします。</span></li>
+          <li><b>変換辞書（読み → 漢字）</b><span><b>設定 →「変換辞書」</b>で「しんけんこう」→「新建高」のように、読み（ひらがな）や誤変換と正しい表記をセットで登録できます。登録した語は<b>文字起こし・議事録の作成・AI連携</b>で自動的に変換され、AIへ渡すプロンプトにも用語集として付きます（ひらがなで登録するとカタカナ表記も変換）。追加・変更・削除はいつでも設定から行えます。</span></li>
+          <li><b>用語の修正</b><span>文字起こし上部の「用語修正」からも、会社名など誤変換されやすい語を一括置換・辞書登録できます（設定の変換辞書と同じ辞書です）。</span></li>
           <li><b>会議情報</b><span>タイトル・日付・参加者（部署＋氏名）を録音の前・最中・後いつでも入力でき、出力にも反映されます。</span></li>
           <li><b>録音中の通知</b><span>録音中は通知を表示。画面を消していても通知の「停止」から録音を止められます（対応環境）。</span></li>
           <li><b>画面の常時オン</b><span>設定でオンにすると、録音中に画面が消えません（バッテリー消費は増えます）。</span></li>
@@ -521,10 +556,11 @@
         </div>
         <div style="margin-top: 18px;">
           <div class="mini-label-row">
-            <span class="mini-label">登録済みの用語（会社名など）</span>
+            <span class="mini-label">登録済みの用語（変換辞書）</span>
             <button id="termApplyAll" class="link-btn" type="button">すべて適用</button>
           </div>
           <ul id="termDictList" class="term-dict"></ul>
+          <p class="field-hint" style="margin-top:10px;">辞書は<b>設定 →「変換辞書（読み → 漢字）」</b>でも追加・変更できます。登録した語は文字起こし・議事録の作成時に自動で変換されます。</p>
         </div>
       </div>
       <div class="modal-foot">

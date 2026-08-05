@@ -452,7 +452,14 @@ select:focus, input:focus, textarea:focus {
   pointer-events: none; text-align: center; padding: 0 24px;
 }
 .idle-text { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 16px; font-weight: 700; animation: blinkText 1.6s ease-in-out infinite; }
-.idle-mic { width: 21px; height: 21px; flex: none; }
+/* マイクボタン（FAB）と同じ mic-white.png をマスクとして使い、文字色で描画する。
+   これで案内文のアイコンと録音ボタンのアイコンが同じ形になる。 */
+.idle-mic {
+  width: 21px; height: 21px; flex: none; display: inline-block;
+  background-color: currentColor;
+  -webkit-mask: url(./icons/mic-white.png) center / contain no-repeat;
+  mask: url(./icons/mic-white.png) center / contain no-repeat;
+}
 .home-meeting-btn {
   pointer-events: auto;
   display: inline-flex; align-items: center; gap: 7px;
@@ -601,6 +608,28 @@ select:focus, input:focus, textarea:focus {
 .term-dict .t-apply { color: var(--brand1); }
 .term-dict .t-del { color: var(--danger); }
 .term-dict-empty { color: var(--faint); font-size: 12.5px; }
+
+/* ---------- 設定: 変換辞書（読み → 漢字） ---------- */
+.dict-add { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+.dict-add input { min-width: 0; }
+.dict-arrow { color: var(--faint); font-weight: 700; }
+.dict-add .chip-btn { grid-column: 1 / -1; justify-self: start; }
+.word-dict { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.word-dict li {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 8px 10px;
+}
+.word-dict input {
+  flex: 1 1 130px; min-width: 0; font-size: 13.5px;
+  padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface); color: var(--text);
+}
+.word-dict input.d-to { color: var(--brand1); font-weight: 700; }
+.word-dict input:focus { outline: none; border-color: var(--brand1); }
+.word-dict .d-arrow { color: var(--faint); flex: none; }
+.word-dict .d-del { background: none; border: none; cursor: pointer; color: var(--danger); font-size: 12.5px; font-weight: 600; flex: none; }
+.word-dict-empty { color: var(--faint); font-size: 12.5px; }
 
 /* =========================================================
  * デスクトップ（PC）表示: メニューを常時左に展開、議事録は2カラム
