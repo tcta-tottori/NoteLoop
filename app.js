@@ -47,9 +47,7 @@ const audioWrap      = $('audioWrap');
 const player         = $('player');
 const audioSize      = $('audioSize');
 const audioWarn      = $('audioWarn');
-const downloadAudio  = $('downloadAudio');
 const liveTranscript = $('liveTranscript');
-const clearTranscript= $('clearTranscript');
 // 録音中のリアルタイム表示
 const liveNowPanel   = $('liveNowPanel');
 const liveNowText    = $('liveNowText');
@@ -144,7 +142,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.5';
+const APP_VERSION = 'Ver.8.6';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -347,7 +345,7 @@ function refreshAudioPanel() { setAudioAvailable(!!recordedBlob); }
  *   ・状態はメモリのみ。ページ再読込では復元されず、録音待機画面に戻る。
  * =======================================================*/
 const audioFlowCard  = $('audioPanel');
-const aiTextCard     = $('aiTextCard');
+const summaryCard    = $('summaryCard');
 const minutesFlowCard= $('minutesFlowCard');
 const mailFlowCard   = $('mailPanel');
 
@@ -361,8 +359,8 @@ function hasVal(id) { const el = document.getElementById(id); return !!(el && el
 function flowSteps() {
   return [
     { el: audioFlowCard,   ready: () => !!recordedBlob },
+    { el: summaryCard,     ready: () => hasSummary() },
     { el: transcriptPanel, ready: () => !recording && hasVal('liveTranscript') },
-    { el: aiTextCard,      ready: () => hasVal('aiText') },
     { el: minutesFlowCard, ready: () => hasVal('aiResult') },
     { el: mailFlowCard,    ready: () => hasVal('mailBody') || hasVal('mailSubject') },
   ].filter((st) => st.el);
@@ -1422,9 +1420,7 @@ async function stopRecording() {
       : formatBytes(recordedBlob.size);
     showAudioShortfallWarning(wallSec, recordedDurationSec);
     setAudioAvailable(true);
-    downloadAudio.disabled = false;
     // 保存ボタンに実際の拡張子を表示
-    downloadAudio.innerHTML = `${ICO_DOWNLOAD} ${extFromMime(recordedBlob.type)}で保存`;
   }
   teardownAudio();
 
@@ -2013,6 +2009,7 @@ async function startNativeLiveTranscribe() {
   liveWhisperOn = true;
   liveWhisperFailed = false;
   liveBusy = false;
+  liveTailAudio = null;
   pendingChunks = [];
   workerBusy = false;
   liveEngine = loadGeminiKey() ? 'gemini' : 'whisper';
@@ -2077,6 +2074,29 @@ function hasSpeech(audio) {
   return true;
 }
 
+/**
+ * 直前のかたまりの終わり LIVE_OVERLAP_SEC 秒ぶん。
+ * 7秒で切ると語の途中で切れて誤変換が増えるため、次のかたまりの頭に重ねて渡し、
+ * 重なった部分は「すでに書いた分」としてAI側に捨ててもらう。
+ */
+const LIVE_OVERLAP_SEC = 2.5;
+let liveTailAudio = null;
+
+/** 送るかたまりの末尾を、次回の重なり用に控える */
+function keepLiveTail(chunk) {
+  const n = Math.min(chunk.length, Math.floor(SAMPLE_RATE * LIVE_OVERLAP_SEC));
+  liveTailAudio = n > 0 ? chunk.slice(chunk.length - n) : null;
+}
+
+/** 前回の末尾を頭に付けたかたまりを作る */
+function withLiveOverlap(chunk) {
+  if (!liveTailAudio || !liveTailAudio.length) return chunk;
+  const out = new Float32Array(liveTailAudio.length + chunk.length);
+  out.set(liveTailAudio, 0);
+  out.set(chunk, liveTailAudio.length);
+  return out;
+}
+
 function maybeSendChunk() {
   if (!liveWhisperOn) return;
   if (liveEngine === 'gemini') {
@@ -2084,8 +2104,10 @@ function maybeSendChunk() {
     if (totalSamples(pendingChunks) < SAMPLE_RATE * LIVE_GEMINI_SEC) return;
     markLiveWindow();
     const chunk = drainPending();
-    if (!hasSpeech(chunk)) return;   // 無音は送らない（勝手に文字が出るのを防ぐ）
-    sendLiveToGemini(chunk);
+    if (!hasSpeech(chunk)) { keepLiveTail(chunk); return; }  // 無音は送らない（勝手に文字が出るのを防ぐ）
+    const send = withLiveOverlap(chunk);
+    keepLiveTail(chunk);
+    sendLiveToGemini(send);
     return;
   }
   if (workerBusy) return;
@@ -2125,14 +2147,19 @@ async function sendLiveToGemini(audio) {
   try {
     // 手がかりに渡す直前のテキストからは、こちらで付けた話者ラベルを外す
     const tail = stripSpeakers(liveTranscript.value).trim().slice(-160);
+    // 用語辞書はライブのプロンプトには入れない。
+    // 数秒の切れ端に「この語を使って」と指示すると、関係ない場所へ社名などが
+    // 差し込まれてしまうため。辞書は停止後の高精度版とAI議事録だけで効かせる。
     const prompt =
       'この音声を日本語で文字起こししてください。会議の途中を切り出した音声です。\n'
       + '・聞こえたことばだけを出力し、前置き・説明・記号・話者名は付けないでください。\n'
-      + '・聞き取れない部分は無理に補わず、飛ばしてください。\n'
-      + dictPromptLine()   // 登録した用語は指定の表記で書いてもらう
+      + '・聞き取れない部分は無理に補わず、飛ばしてください。空耳で言葉を作らないでください。\n'
+      + '・音声の冒頭は前回と重なっています。すでに書いた続きだけを出力してください。\n'
       + (tail ? `・直前までの文字起こし（重複して書かないでください）:「${tail}」\n` : '');
     const text = await geminiAudioRequest(audio ? wavFromFloat32(audio) : null, prompt, { live: true });
-    if (text) appendTranscript(cleanupTranscript(text));
+    // 数秒の音声から出るには長すぎる出力は、ほぼ作り話なので捨てる（1秒あたり12文字を上限）
+    const limit = Math.max(40, Math.round((audio ? audio.length / SAMPLE_RATE : LIVE_GEMINI_SEC) * 12));
+    if (text && text.length <= limit) appendTranscript(cleanupTranscript(text));
   } catch (err) {
     // ライブは失敗しても録音・停止後の文字起こしに影響しない。案内だけ切り替える。
     liveWhisperFailed = true;
@@ -2321,6 +2348,7 @@ function isGhostChunk(text) {
  * 話者が前のかたまりから変わったときだけ改行して「A：」を付ける。
  */
 function appendTranscript(text) {
+  setTranscriptStage('live');
   if (isJunkChunk(text)) return; // 記号だけの誤認識は表示しない（実語のみ表示）
   if (isGhostChunk(text)) return; // 話していないのに出る決まり文句・直前と同じ文言は捨てる
   lastLiveChunk = (text || '').trim();
@@ -2337,15 +2365,6 @@ function appendTranscript(text) {
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
   if (recording) renderLiveNow();   // 録音中のリアルタイム表示へ反映
 }
-clearTranscript.addEventListener('click', () => {
-  liveTranscript.value = '';
-  legacyMinutes = { summary: [], decisions: [], todos: [] };
-  recordedBlob = null; recordedDurationSec = 0; setAudioAvailable(false);
-  clearAudioWarning();
-  resetFlowCards();
-  updateHomeUI();
-});
-
 /* =========================================================
  * セッションのリセット（履歴はそのまま残す）
  *   画面だけを録音待機の状態へ戻し、すぐ次の録音を始められるようにする。
@@ -2370,6 +2389,9 @@ function resetSession(opts) {
   if (aiResult) aiResult.value = '';
   if (aiResultWrap) aiResultWrap.hidden = true;
   if (aiAutoStatus) { aiAutoStatus.hidden = true; aiAutoStatus.innerHTML = ''; }
+  fillSummaryCard({ title: '', summary: [], decisions: [], todos: [] });   // 要約カードを空に
+  setTranscriptStage('');
+  liveTranscriptAuto = '';
 
   // メール（自動で入れた件名・本文も戻す）
   if (mailSubject) mailSubject.value = '';
@@ -2384,7 +2406,6 @@ function resetSession(opts) {
   activeRecordingId = null;
   if (player) { try { player.pause(); } catch (_) {} player.removeAttribute('src'); player.load(); }
   if (audioSize) audioSize.textContent = '';
-  if (downloadAudio) downloadAudio.disabled = true;
   setAudioAvailable(false);
   clearAudioWarning();
 
@@ -2826,13 +2847,26 @@ function fillMinutesUI(m) {
 }
 
 /** 文字起こしの内容から短い会議タイトルを作る */
+const TITLE_MAX = 12;   // 一覧・議事録で使うタイトルの長さ（5〜12文字程度）
+
+/** タイトルとして使えるよう、記号・話者ラベルを外して 12 文字までに整える */
+function tidyTitle(text) {
+  let s = String(text || '')
+    .replace(/^[\s>*#・\-–—•]+/, '')
+    .replace(/^[A-Zａ-ｚA-Ｚ]\s*[：:]\s*/, '')     // 行頭の話者ラベル（A：）を外す
+    .replace(/[「」『』【】\[\]]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return '';
+  if (s.length > TITLE_MAX) s = s.slice(0, TITLE_MAX) + '…';
+  return s;
+}
+
 function autoTitleFromTranscript(text) {
   const t = (text || '').replace(/\s+/g, ' ').trim();
   if (!t) return '';
-  let s = (t.split(/[。．.!！?？\n]/)[0] || t).trim();
-  if (!s) s = t;
-  if (s.length > 24) s = s.slice(0, 24) + '…';
-  return s;
+  const s = (t.split(/[。．.!！?？\n]/)[0] || t).trim();
+  return tidyTitle(s || t);
 }
 /**
  * AI議事録の本文から会議名らしい1行を拾う。
@@ -2846,7 +2880,7 @@ function autoTitleFromAiText(text) {
     if (/^[【\[(（]?(議事録|要点|見出し|決定事項|ToDo|やること|メール文面|件名)/i.test(line)) {
       // 「件名: 〇〇」は中身がタイトルとして使える
       const m = line.match(/^[【\[(（]?件名[】\])）]?\s*[:：]?\s*(.+)$/);
-      if (m && m[1].trim()) return autoTitleFromTranscript(m[1]);
+      if (m && m[1].trim()) return tidyTitle(m[1].replace(/^【議事録】\s*/, ''));
       continue;
     }
     return autoTitleFromTranscript(line);
@@ -2855,6 +2889,21 @@ function autoTitleFromAiText(text) {
 }
 /** タイトルが未入力なら、文字起こし（無ければAI議事録）から自動生成してフィールドへ反映 */
 let autoTitleApplied = '';   // 自動で付けたタイトル（リセット時にこれだけ消す）
+
+/**
+ * AIが付けた短いタイトル（5〜12文字）を会議名に反映する。
+ * 利用者が自分で入れたタイトルは上書きしない（自動で入れた分だけ差し替える）。
+ */
+function applyAiTitle(title) {
+  const t = tidyTitle(title);
+  if (!t) return;
+  const cur = meetingName.value.trim();
+  if (cur && cur !== autoTitleApplied) return;   // 手入力を尊重
+  meetingName.value = t;
+  autoTitleApplied = t;
+  updateMeetingSummary();
+}
+
 function ensureAutoTitle() {
   if (meetingName.value.trim()) return;
   // 音声をそのままAIに送る運用では文字起こしが空になるため、AIの結果からも拾う
@@ -3263,12 +3312,6 @@ function extFromMime(mime) {
   if (mime.includes('wav')) return 'wav';
   return 'webm';
 }
-downloadAudio.addEventListener('click', () => {
-  if (!recordedBlob) { showError('保存できる音声がありません。先に録音してください。'); return; }
-  hideError();
-  const m = currentMinutes();
-  download(`${safeFileName(m)}.${extFromMime(recordedBlob.type)}`, recordedBlob, recordedBlob.type || 'audio/webm');
-});
 /* =========================================================
  * 参加者（部署・氏名）
  * =======================================================*/
@@ -3763,6 +3806,11 @@ function historySummaryText(item) {
   const PRIORITY = [/要旨|要点|概要|議論|内容/, /決定/, /To-?Do|ToDo|やること|宿題|課題/];
 
   let lines = [];
+  // AIが出した要約（1行1件）があれば、それを3行だけ使う
+  if (item.sumLines && item.sumLines.length) {
+    const picked3 = item.sumLines.map(clean).filter(Boolean).slice(0, 3);
+    if (picked3.length) return picked3.map((l) => l.replace(/[。．]$/, '')).join('。') + '。';
+  }
   if (item.aiText) {
     const sections = [];
     let cur = { head: '', lines: [] };
@@ -3799,8 +3847,18 @@ async function openMinutes(item) {
   // 録音の実時間（開始時刻・長さ）も戻して、議事録に実時間を出せるようにする
   recStartedAt = item.startedAt || 0;
   recordedDurationSec = (item.audio && item.audio.sec) || 0;
-  // AI文字起こし（議事録とは別）も復元する
+  // AIの高精度な文字起こしがあれば、そちらを「文字起こし」に出す（速報より読みやすい）
   if (aiTextEl) aiTextEl.value = item.aiTranscript || '';
+  if (item.aiTranscript) {
+    liveTranscript.value = item.aiTranscript;
+    liveTranscriptAuto = item.aiTranscript;
+    setTranscriptStage('hi');
+  } else {
+    liveTranscriptAuto = '';
+    setTranscriptStage(item.transcript ? 'live' : '');
+  }
+  // 要約カードは、この履歴に AI議事録が無ければ空にしておく
+  if (!item.aiText) fillSummaryCard({ title: '', summary: [], decisions: [], todos: [] });
   // AIが作った議事録＋メール文面も復元する（自動生成分を含む）
   // 保存してあるのは生成された全文なので、議事録／メール件名／本文に分けて戻す。
   if (aiResult) {
@@ -3815,7 +3873,6 @@ async function openMinutes(item) {
   recordedDurationSec = 0;
   setAudioAvailable(false);
   clearAudioWarning();
-  downloadAudio.disabled = true;
   if (item.audio) {
     try {
       const blob = await idbGet(item.id);
@@ -3827,9 +3884,7 @@ async function openMinutes(item) {
           ? `${formatDurationJp(recordedDurationSec)} ・ ${formatBytes(blob.size)}`
           : formatBytes(blob.size);
         setAudioAvailable(true);
-        downloadAudio.disabled = false;
-        downloadAudio.innerHTML = `${ICO_DOWNLOAD} ${extFromMime(blob.type)}で保存`;
-      }
+          }
     } catch (_) { /* 音声が取り出せなくても議事録の閲覧・編集は継続 */ }
   }
 
@@ -3892,10 +3947,29 @@ function loadGeminiInstruction() {
   return localStorage.getItem(GEMINI_INSTR_KEY) || DEFAULT_GEMINI_INSTRUCTION;
 }
 
-/** 音声と一緒に渡す指示文（指示 ＋ 会議情報）。文字起こしは音声側が担うので付けない。 */
+/**
+ * 出力の先頭に必ず付けてもらう「要約」ブロックの指示。
+ * 設定で指示文を書き換えている人にも効くよう、指示文とは別に固定で足す。
+ */
+const SUMMARY_BLOCK_INSTRUCTION =
+`【0. 要約】まず最初に、必ず次の形式・順序で出力してください。
+
+タイトル：録音の内容が一目で分かる題（5〜12文字。体言止め。日付や「議事録」の語は入れない）
+要約：
+- （録音内容の要点。5行以内の箇条書き。1行は40文字程度まで）
+決定事項：
+- （決まったこと。無ければ「なし」）
+ToDo：
+- （やること。担当・期限が分かれば併記。無ければ「なし」）
+
+このあとに、以下の内容を続けてください。
+
+`;
+
+/** 音声と一緒に渡す指示文（要約の指示 ＋ 指示 ＋ 会議情報）。 */
 function buildAudioPrompt() {
   const m = currentMinutes();
-  const instr = (geminiInstruction.value || DEFAULT_GEMINI_INSTRUCTION).trim();
+  const instr = SUMMARY_BLOCK_INSTRUCTION + (geminiInstruction.value || DEFAULT_GEMINI_INSTRUCTION).trim();
   const partLine = (m.participants && m.participants.length) ? `\n参加者: ${participantsText(m.participants)}` : '';
   const timeLine = m.time ? `\n時間: ${m.time}（録音の実時間。■日時にはこの時間を書いてください）` : '';
   return `${instr}
@@ -4274,10 +4348,15 @@ function saveAiTextToHistory(text) {
     let idx = activeRecordingId ? list.findIndex((e) => e.id === activeRecordingId) : -1;
     if (idx < 0) idx = list.length - 1;
     list[idx].aiText = text;
+    // 一覧に出す要約（3行以内）とタイトルは、AIが出した要約ブロックから取る
+    const parts = splitAiOutput(text);
+    if (parts.summary && parts.summary.length) list[idx].sumLines = parts.summary.slice(0, 3);
+    if (parts.decisions && parts.decisions.length) list[idx].sumDecisions = parts.decisions;
+    if (parts.todos && parts.todos.length) list[idx].sumTodos = parts.todos;
     // 履歴は自動生成より前に保存されるため、既定名（録音 7/31 03:05）のままなら
     // AIの結果から付け直す。画面側のタイトルも同時に合わせる。
     if (/^録音 \d+\/\d+ \d+:\d+$/.test(list[idx].name || '')) {
-      const t = autoTitleFromAiText(text);
+      const t = tidyTitle(parts.title) || autoTitleFromAiText(text);
       if (t) {
         list[idx].name = t;
         if (meetingName && /^録音 \d+\/\d+ \d+:\d+$/.test(meetingName.value.trim())) {
@@ -4337,8 +4416,9 @@ async function runAiTranscribe(opts) {
     const text = autoConvert(await geminiTranscribeAll((st) => { txtStage = st; setAiFlowStage(st); }));
     if (aiTextEl) aiTextEl.value = text;
     saveAiTranscriptToHistory(text);
+    applyHighAccuracyTranscript(text);   // 録音中の速報を高精度版へ置き換える
     if (ownFlow) endAiFlowProgress(true);
-    updateHomeUI();   // 出力ができたので「高精度文字起こし」カードを表示
+    updateHomeUI();
     return true;
   } catch (err) {
     if (ownFlow) endAiFlowProgress(false);
@@ -4350,6 +4430,33 @@ async function runAiTranscribe(opts) {
     aiTextRunning = false;
     updateFabState();
   }
+}
+
+/**
+ * 文字起こしの段階表示。
+ * 録音中は速報（低精度・すぐ出る）、停止後にAIの高精度版へ置き換える。
+ */
+function setTranscriptStage(kind) {
+  const el = $('transcriptStage');
+  if (!el) return;
+  const label = { live: '速報', hi: 'AIで高精度化済み' }[kind] || '';
+  el.textContent = label;
+  el.hidden = !label;
+  el.className = 'stage-badge' + (kind === 'hi' ? ' hi' : '');
+}
+
+/**
+ * AIの高精度な文字起こしを、画面の「文字起こし」へ反映する。
+ * 利用者が手で直していたら上書きしない。
+ */
+let liveTranscriptAuto = '';   // 自動で入れた文字起こし（手直しの判定に使う）
+function applyHighAccuracyTranscript(text) {
+  if (!text || !liveTranscript) return;
+  const cur = liveTranscript.value.trim();
+  if (cur && liveTranscriptAuto && cur !== liveTranscriptAuto.trim()) return; // 手直しは尊重
+  liveTranscript.value = text;
+  liveTranscriptAuto = text;
+  setTranscriptStage('hi');
 }
 
 /** AI文字起こしを履歴にも残す */
@@ -4395,17 +4502,71 @@ function stripMinutesHeader(t) {
  * 「メール文面」または「件名：」の行から後ろをメールとして扱い、
  * それより前を議事録とする。見つからないときは全文を議事録にする。
  */
+/**
+ * 出力の先頭に付く「要約」ブロック（タイトル・要約・決定事項・ToDo）を切り出す。
+ * 見つからなければ空を返し、残り全部を本文として扱う。
+ */
+function splitSummaryBlock(src) {
+  const empty = { title: '', summary: [], decisions: [], todos: [], rest: src };
+  const lines = src.split('\n');
+  const KEY = {
+    title: /^[【\[(（]?\s*(?:0\s*[.．、]?\s*)?(?:タイトル|題名|件名候補)\s*[】\])）]?\s*[:：]\s*(.*)$/,
+    summary: /^[【\[(（]?\s*(?:要約|概要)\s*[】\])）]?\s*[:：]?\s*(.*)$/,
+    decisions: /^[【\[(（]?\s*決定事項\s*[】\])）]?\s*[:：]?\s*(.*)$/,
+    todos: /^[【\[(（]?\s*(?:To-?Do|ToDo|やること|宿題)\s*[】\])）]?\s*[:：]?\s*(.*)$/i,
+  };
+  const out = { title: '', summary: [], decisions: [], todos: [] };
+  let cur = null, last = -1, started = false;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const l = raw.replace(/^[\s>*#]+/, '').replace(/\*\*/g, '').trim();
+    if (!l) continue;
+    // 【1. 議事録】まで来たら要約ブロックは終わり
+    if (/^[【\[(（]?\s*(?:[1１]\s*[.．、]?\s*)?議事録/.test(l)) { last = i; break; }
+    let matched = false;
+    for (const k of Object.keys(KEY)) {
+      const m = KEY[k].exec(l);
+      if (!m) continue;
+      started = true;
+      if (k === 'title') { out.title = (m[1] || '').trim(); cur = null; }
+      else { cur = k; if (m[1] && m[1].trim()) out[k].push(m[1].trim()); }
+      matched = true; last = i;
+      break;
+    }
+    if (matched) continue;
+    if (!started) continue;                 // 要約ブロックが始まる前の行は無視
+    if (!cur) continue;
+    const item = l.replace(/^[・\-–—•*]\s*/, '').trim();
+    if (!item) continue;
+    out[cur].push(item);
+    last = i;
+  }
+  if (!started && !out.title) return empty;
+  const clean = (arr) => arr
+    .map((x) => x.replace(/^[・\-–—•*]\s*/, '').trim())
+    .filter((x) => x && !/^(なし|特になし|無し|—|-)$/.test(x));
+  return {
+    title: out.title.replace(/^[「『【\[]|[」』】\]]$/g, '').trim(),
+    summary: clean(out.summary).slice(0, 5),
+    decisions: clean(out.decisions),
+    todos: clean(out.todos),
+    rest: lines.slice(last + 1).join('\n').trim() || src,
+  };
+}
 function splitAiOutput(text) {
   const src = String(text || '').replace(/\r\n/g, '\n').trim();
-  if (!src) return { minutes: '', subject: '', body: '' };
-  const lines = src.split('\n');
+  if (!src) return { title: '', summary: [], decisions: [], todos: [], minutes: '', subject: '', body: '' };
+  const head = splitSummaryBlock(src);
+  const rest = head.rest;
+  const base = { title: head.title, summary: head.summary, decisions: head.decisions, todos: head.todos };
+  const lines = rest.split('\n');
   let mailStart = -1;
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i].replace(/^[\s>*#・\-–—]+/, '').trim();
     if (/^[【\[(（]?[ \t]*(?:[2２][ \t]*[.．、]?[ \t]*)?メール(文面|文|案|ドラフト)/.test(l)) { mailStart = i; break; }
     if (/^[【\[(（]?[ \t]*件名[ \t]*[】\])）]?[ \t]*[:：]/.test(l)) { mailStart = i; break; }
   }
-  if (mailStart < 0) return { minutes: stripMinutesHeader(src), subject: '', body: '' };
+  if (mailStart < 0) return { ...base, minutes: stripMinutesHeader(rest), subject: '', body: '' };
 
   const minutes = stripMinutesHeader(lines.slice(0, mailStart).join('\n').trim());
   const mailPart = lines.slice(mailStart).join('\n');
@@ -4423,20 +4584,46 @@ function splitAiOutput(text) {
   } else {
     body = mailPart.replace(/^[^\n]*\n?/, '').trim(); // 見出し行だけ落とす
   }
-  return { minutes, subject, body };
+  return { ...base, minutes, subject, body };
 }
 
 // 自動で入れた件名・本文（利用者が手で直した内容を上書きしないための控え）
 let mailAuto = { subject: '', body: '' };
 
+/** 要約カード（タイトル・要約・決定事項・ToDo）を描く */
+function fillSummaryCard(parts) {
+  const put = (ul, arr) => {
+    if (!ul) return;
+    ul.innerHTML = '';
+    (arr || []).forEach((x) => { const li = document.createElement('li'); li.textContent = x; ul.appendChild(li); });
+  };
+  const t = $('sumTitle');
+  if (t) { t.textContent = parts.title || ''; t.hidden = !parts.title; }
+  put($('sumBody'), parts.summary);
+  put($('sumDecisions'), parts.decisions);
+  put($('sumTodos'), parts.todos);
+  const db = $('sumDecisionsBlock'), tb = $('sumTodosBlock');
+  if (db) db.hidden = !(parts.decisions && parts.decisions.length);
+  if (tb) tb.hidden = !(parts.todos && parts.todos.length);
+}
+
+/** 要約カードに出す中身があるか */
+function hasSummary() {
+  const t = $('sumTitle'), b = $('sumBody');
+  return !!((t && t.textContent.trim()) || (b && b.children.length));
+}
+
 /**
  * AIの生成結果を各枠へ出力する。
- * 議事録枠には議事録のみ、メール枠には件名と貼り付け用の本文をそれぞれ入れる。
+ * 要約カード・議事録枠・メール枠（件名と貼り付け用の本文）へそれぞれ入れる。
  */
 function applyAiOutput(text) {
   // AIの出力にも変換辞書を適用し、社名・固有名詞を登録した表記に揃える
   text = autoConvert(text);
   const parts = splitAiOutput(text);
+  fillSummaryCard(parts);
+  // AIが付けた短いタイトルを会議名に使う（利用者が入れたタイトルは上書きしない）
+  applyAiTitle(parts.title);
   if (aiResult) aiResult.value = parts.minutes || text;
   if (mailSubject && parts.subject
       && (!mailSubject.value.trim() || mailSubject.value === mailAuto.subject)) {
@@ -4865,7 +5052,6 @@ function isSettingsSectionOpen(name) {
 }
 
 meetingDate.value = todayStr();
-downloadAudio.disabled = true;
 setAudioAvailable(false);
 if (keepAwake) { const kw = localStorage.getItem(WAKE_KEY); if (kw === '0') keepAwake.checked = false; }
 geminiInstruction.value = loadGeminiInstruction();
