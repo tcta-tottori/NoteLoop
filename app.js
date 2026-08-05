@@ -144,7 +144,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.4';
+const APP_VERSION = 'Ver.8.5';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -360,7 +360,6 @@ function hasVal(id) { const el = document.getElementById(id); return !!(el && el
  */
 function flowSteps() {
   return [
-    { el: liveNowPanel,    ready: () => recording && hasVal('liveTranscript') },
     { el: audioFlowCard,   ready: () => !!recordedBlob },
     { el: transcriptPanel, ready: () => !recording && hasVal('liveTranscript') },
     { el: aiTextCard,      ready: () => hasVal('aiText') },
@@ -419,7 +418,9 @@ function updateHomeUI() {
   idlePrompt.hidden = recording || homeProcessing || hasText || hasAudio;
   // マイク選択・編集バー: 録音中、または待機（結果なし）のときに表示
   if (homeActions) homeActions.hidden = !(recording || (!homeProcessing && !hasText && !hasAudio));
-  // 各カードは中身（出力）ができてから、できた順に出す
+  // 録音中のリアルタイム表示は、これまでどおり録音中はそのまま出す（カードにしない）
+  if (liveNowPanel) liveNowPanel.hidden = !recording;
+  // カードは中身（出力）ができてから、できた順に出す
   syncFlowCards();
   transcriptPanel.classList.toggle('fade-old', homeProcessing); // 文字起こし中は上側を薄く
   if (recording) renderLiveNow();
@@ -441,7 +442,6 @@ function updateRecFrame() {
  */
 function renderLiveNow() {
   if (!liveNowText) return;
-  syncFlowCards();   // 最初の出力が出た時点でカードを表示する
   const raw = liveTranscript.value.trim();
   if (!raw) {
     // 準備中は「点滅する文字＋3点アニメーション」で、動いていることが見て分かるようにする
@@ -494,15 +494,16 @@ function updateFabState() {
   const away = done && !atPageBottom();
   recordBtn.classList.toggle('fab-away', away);
 
-  // ボタンの下の案内文。録音後はボタンが消えるので、戻し方をここで伝える。
+  // ボタンの下の案内文。録音ボタンが見えているときだけ、その真下に出す。
+  // （ボタンが隠れているときの案内バッジは、内容に重なって読みにくいので出さない）
   let hint = '';
   if (state === 'recording') hint = paused ? '一時停止中… タップで録音完了' : '録音中… タップで停止';
-  else if (done) hint = away ? '引き下げてリセット\n下までスクロールで録音ボタン' : 'タップで新しい録音（今の内容は履歴に残ります）';
+  else if (done && !away) hint = 'タップで新しい録音（今の内容は履歴に残ります）';
   const hintText = document.getElementById('recHintText') || recHint;
   if (hintText.textContent !== hint) hintText.textContent = hint;
   recHint.hidden = !hint;
   recHint.classList.toggle('steady', done);
-  recHint.classList.toggle('low', away);   // ボタンが無いぶん下げる
+  recHint.classList.remove('low');
   updatePauseUI();
 }
 

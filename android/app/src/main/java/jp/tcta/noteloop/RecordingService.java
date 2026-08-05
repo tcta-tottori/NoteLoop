@@ -52,7 +52,7 @@ public class RecordingService extends Service {
     /** 音量を読む間隔。短いほど声への反応が早い。 */
     private static final long LEVEL_TICK_MS = 50L;
     /** 通知のゲージを描き替える間隔（音量の読み取り何回ぶんか）。 */
-    private static final int NOTIF_EVERY_AWAKE = 5;   // 画面が点いている: 0.25秒ごと
+    private static final int NOTIF_EVERY_AWAKE = 4;   // 画面が点いている: 0.2秒ごと（通知の更新レート上限）
     private static final int NOTIF_EVERY_ASLEEP = 20; // 画面が消えている: 1秒ごと（誰も見ていないので粗く）
     private static final int NOTIF_EVERY_PAUSED = 40; // 一時停止中: 2秒ごと（何も動かないので更に粗く）
 
@@ -62,10 +62,13 @@ public class RecordingService extends Service {
     private static final int GAUGE_H = 80;
     /** ゲージのバーの本数（位置は固定で、音量に応じて上下に伸びる） */
     private static final int BARS = 5;
+    /* 50ms ごとに動かす幅。大きいほど機敏に、まっすぐ伸び縮みして見える。 */
+    private static final float RISE_PER_TICK = 0.34f;
+    private static final float FALL_PER_TICK = 0.20f;
     /** これ以下の音は「無音」として扱う（振幅の全体に対する割合＝約 650/32767） */
     private static final float LEVEL_GATE = 0.02f;
     /** ここで振り切れる（＝約 11500/32767。会議の声で上まで届く高さ） */
-    private static final float LEVEL_FULL = 0.35f;
+    private static final float LEVEL_FULL = 0.26f;
     /** バーの色（アプリのブランド色。明るい通知でも暗い通知でも見える中間の明度） */
     /* 通知カードのゲージは白。通知の文字色と同じ白でそろえ、地の色に負けないようにする。 */
     private static final int GAUGE_COLOR = 0xFFFFFFFF;
@@ -123,7 +126,6 @@ public class RecordingService extends Service {
     private final float[] barGain = new float[BARS];
     private final float[] barSpeed = new float[BARS];
     private final float[] barPhase = new float[BARS];
-    private final float[] barLo = new float[BARS];
     private final float[] barStep = new float[BARS];
     private boolean barsReady = false;
     private Paint gaugePaint;
@@ -384,19 +386,18 @@ public class RecordingService extends Service {
     private void ensureBars() {
         if (barsReady) return;
         for (int i = 0; i < BARS; i++) {
-            barGain[i] = 0.55f + gaugeNoise(i * 3.9) * 1.15f;   // 伸びやすさ
+            barGain[i] = 0.85f + gaugeNoise(i * 3.9) * 0.55f;   // 伸びやすさ（どの本もよく伸びる）
             barSpeed[i] = 1.6f + gaugeNoise(i * 1.3) * 5.2f;    // 揺れの速さ
             barPhase[i] = gaugeNoise(i * 2.7) * (float) Math.PI * 2f;
-            barLo[i] = 0.04f + gaugeNoise(i * 8.7) * 0.34f;     // 揺れ幅の下限
-            barStep[i] = 0.085f + gaugeNoise(i * 4.4) * 0.115f; // 乱数の切り替わる間隔（秒）
+            barStep[i] = 0.07f + gaugeNoise(i * 4.4) * 0.07f;   // 乱数の切り替わる間隔（秒）
         }
         barsReady = true;
     }
 
     /**
-     * バーの高さを一段進める。アプリ画面のゲージ（app.js drawWaveFrame）と同じ計算で、
-     * 本ごとに違う乱数を主役にし、sin の揺れを少し混ぜる。
-     * 伸びるのは即座に、戻るのも速め（声にきびきび追従する）。
+     * バーの高さを一段進める。
+     * 声の大きさをそのまま高さにし、本ごとの違いは軽い揺らぎだけにする。
+     * 高さは毎回おなじ幅ずつ動かす（直線的）ので、伸び縮みがはっきり見える。
      */
     private void stepBars() {
         ensureBars();
@@ -404,13 +405,17 @@ public class RecordingService extends Service {
         final float lv = paused ? 0f : level;
         for (int i = 0; i < BARS; i++) {
             float t = BARS > 1 ? (float) i / (BARS - 1) : 0.5f;
-            // 中央ほど大きく振れる（両端は控えめ）
-            float env = (float) (0.55 + 0.45 * Math.pow(Math.sin(Math.PI * t), 0.5));
+            // 中央ほど大きく振れる（両端も十分に動かす）
+            float env = (float) (0.72 + 0.28 * Math.sin(Math.PI * t));
             float rnd = barRandom(i, now / barStep[i]);
             float s1 = (float) Math.sin(now * barSpeed[i] + barPhase[i]);
-            float wobble = barLo[i] + (1f - barLo[i]) * (0.72f * rnd + 0.28f * (0.5f + 0.5f * s1));
+            // 本ごとの揺らぎ。ここを広く取るぶん、1本1本がはっきり伸び縮みする
+            float wobble = 0.55f + 0.45f * (0.7f * rnd + 0.3f * (0.5f + 0.5f * s1));
             float target = Math.min(1f, lv * barGain[i] * env * wobble);
-            barV[i] += (target - barV[i]) * (target > barV[i] ? 1f : 0.5f);
+            // イージングを使わず、1目盛りずつ一定の速さで目標へ寄せる（＝リニアな動き）
+            float d = target - barV[i];
+            float step = d > 0 ? RISE_PER_TICK : FALL_PER_TICK;
+            barV[i] += Math.max(-step, Math.min(step, d));
         }
     }
 
@@ -438,7 +443,7 @@ public class RecordingService extends Service {
         ensureBars();
         final float pitch = (float) GAUGE_W / (BARS + 1);  // 左右に余白を残して等間隔に並べる
         final float barW = pitch * 0.34f;                  // 太さは5点とも同じ
-        final float maxH = GAUGE_H * 0.92f;                // いちばん大きい声のときの高さ
+        final float maxH = GAUGE_H * 0.97f;                // いちばん大きい声のときの高さ
         final float minH = barW;                           // 無音は「点」になる
         final float mid = GAUGE_H / 2f;
         final float left = (GAUGE_W - (BARS - 1) * pitch) / 2f;
