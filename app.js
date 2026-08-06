@@ -143,7 +143,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.8.9';
+const APP_VERSION = 'Ver.9.0';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -298,22 +298,33 @@ function scrollToEl(id) {
  *   録音画面と履歴の詳細で同じUIを使い回すため、DOMごと移動させる。
  *   複製しないので、既存のイベント・状態はそのまま引き継がれる。
  * =======================================================*/
+/* 一緒に動かす要素。履歴の詳細で作り直すときも、進捗バーとエラー表示が
+ * その場（見ている画面）に出るようにするため、カード群と同じ場所へ移す。
+ * 並び順はこの配列のとおりになる。 */
+const FLOW_MOVE_IDS = ['errorBox', 'aiFlowProgress', 'homeFlow'];
+
 /** カード群を履歴の詳細内へ移す */
 function moveFlowToHistory() {
-  const flow = $('homeFlow'), slot = $('historyDetailSlot');
-  if (flow && slot && flow.parentElement !== slot) slot.appendChild(flow);
+  const slot = $('historyDetailSlot');
+  if (!slot) return;
+  FLOW_MOVE_IDS.forEach((id) => { const el = $(id); if (el && el.parentElement !== slot) slot.appendChild(el); });
 }
 /** カード群を録音画面へ戻す（履歴を離れるとき・新しい録音を始めるとき） */
 function moveFlowToHome() {
-  const flow = $('homeFlow'), home = $('screen-home'), anchor = $('idlePrompt');
-  if (!flow || !home || flow.parentElement === home) return;
-  if (anchor && anchor.parentElement === home) home.insertBefore(flow, anchor);
-  else home.appendChild(flow);
+  const home = $('screen-home'), anchor = $('idlePrompt');
+  if (!home) return;
+  FLOW_MOVE_IDS.forEach((id) => {
+    const el = $(id);
+    if (!el || el.parentElement === home) return;
+    if (anchor && anchor.parentElement === home) home.insertBefore(el, anchor);
+    else home.appendChild(el);
+  });
 }
 /** 履歴：一覧に戻る（詳細を閉じ、カード群を録音画面へ返す） */
 function closeHistoryDetail() {
-  const listView = $('historyListView'), detail = $('historyDetail');
+  const listView = $('historyListView'), detail = $('historyDetail'), redo = $('historyRedo');
   moveFlowToHome();
+  if (redo) redo.hidden = true;
   if (detail) detail.hidden = true;
   if (listView) listView.hidden = false;
 }
@@ -735,6 +746,7 @@ let wakeLock = null;
 const WAKE_KEY = 'noteloop_keep_awake';
 /** 設定がONなら録音中に画面が消えないようロックを取得（対応ブラウザのみ） */
 async function acquireWakeLock() {
+  if (wakeLock) return;   // すでに持っている（取り直すと前のロックを手放せなくなる）
   if (!keepAwake || !keepAwake.checked) return;
   if (!('wakeLock' in navigator)) return;
   try {
@@ -747,14 +759,17 @@ async function releaseWakeLock() {
   wakeLock = null;
 }
 
-/* ===== バックグラウンド録音の維持（無音再生 + MediaSession） =====
- * スマホでは画面を消すとページが凍結され、録音（MediaRecorder / 音声認識）が
- * 止まってしまう。これを防ぐため、録音中は「ほぼ無音」の音声をループ再生して
+/* ===== バックグラウンド動作の維持（無音再生 + MediaSession） =====
+ * スマホでは画面を消すとページが凍結され、録音（MediaRecorder / 音声認識）も
+ * 録音後のAI処理（文字起こし・議事録づくり）も止まってしまう。
+ * これを防ぐため、その間は「ほぼ無音」の音声をループ再生して
  * メディアセッションを「再生中」に保つ。ブラウザはメディアを再生している
- * タブを凍結しないため、画面を消しても録音が継続する。
+ * タブを凍結しないため、画面を消しても処理が続く。
  * （Wake Lock は画面を点けたままにするだけで、電源ボタンで消すと解放される） */
 let silentAudioEl = null;
 let silentAudioUrl = null;
+/** いま何のために無音再生を続けているか: '' / 'recording' / 'processing' */
+let keepAliveMode = '';
 /** ほぼ無音（-90dBFS 相当・実質的に聞こえない）の WAV を生成して再生用URLを返す。
  *  完全な無音（全サンプル0）は一部ブラウザで「再生していない」と判定されるため、
  *  極小振幅の信号を入れて確実に再生中と認識させる。 */
@@ -775,51 +790,58 @@ function makeSilentWavUrl(seconds, sampleRate) {
   return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
 }
 
-/** MediaSession をセットして、ロック画面等に録音中の表示と停止操作を出す */
+/** MediaSession をセットして、ロック画面等に状態の表示と停止操作を出す */
 function setupMediaSession() {
   if (!('mediaSession' in navigator)) return;
+  const proc = keepAliveMode === 'processing';
   try {
     if (typeof MediaMetadata !== 'undefined') {
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: '● 録音中 — NOTELOOP',
-        artist: '画面を消しても録音は続きます',
+        title: proc ? '議事録を作成中 — NOTELOOP' : '● 録音中 — NOTELOOP',
+        artist: proc ? '画面を消しても作成は続きます' : '画面を消しても録音は続きます',
         album: 'NOTELOOP',
       });
     }
     navigator.mediaSession.playbackState = 'playing';
+    // 作成中は「止める操作」を持たせない（誤操作で生成が消えるのを防ぐ）
     const stop = () => { if (recording) stopRecording(); };
-    navigator.mediaSession.setActionHandler('stop', stop);
-    navigator.mediaSession.setActionHandler('pause', stop);
+    navigator.mediaSession.setActionHandler('stop', proc ? null : stop);
+    navigator.mediaSession.setActionHandler('pause', proc ? null : stop);
     navigator.mediaSession.setActionHandler('play', () => { resumeBackgroundKeepAlive(); });
-  } catch (_) { /* 非対応でも録音は継続 */ }
+  } catch (_) { /* 非対応でも処理は継続 */ }
 }
 
-/** 録音開始時に呼ぶ（ユーザー操作直後に再生を開始する必要がある） */
-function startBackgroundKeepAlive() {
+/**
+ * 録音開始時・AI処理の開始時に呼ぶ（ユーザー操作直後に再生を開始する必要がある）。
+ * @param {'recording'|'processing'} [mode] 何のために維持するか（表示の切り替えに使う）
+ */
+function startBackgroundKeepAlive(mode) {
+  keepAliveMode = mode || 'recording';
   try {
     if (!silentAudioEl) {
       silentAudioUrl = makeSilentWavUrl();
       silentAudioEl = new Audio(silentAudioUrl);
       silentAudioEl.loop = true;
       silentAudioEl.setAttribute('playsinline', '');
-      // バックグラウンドで一時停止されたら（録音中なら）すぐ再生し直す
-      silentAudioEl.addEventListener('pause', () => { if (recording) resumeBackgroundKeepAlive(); });
+      // バックグラウンドで一時停止されたら、まだ維持が必要ならすぐ再生し直す
+      silentAudioEl.addEventListener('pause', () => { if (keepAliveMode) resumeBackgroundKeepAlive(); });
     }
     const p = silentAudioEl.play();
-    if (p && p.catch) p.catch(() => {}); // 自動再生拒否でも録音自体は継続
+    if (p && p.catch) p.catch(() => {}); // 自動再生拒否でも録音・生成自体は継続
   } catch (_) {}
   setupMediaSession();
 }
 
 /** 画面復帰時などに、無音再生が止まっていたら再開する */
 function resumeBackgroundKeepAlive() {
-  if (!recording || !silentAudioEl) return;
+  if (!keepAliveMode || !silentAudioEl) return;
   try { if (silentAudioEl.paused) { const p = silentAudioEl.play(); if (p && p.catch) p.catch(() => {}); } } catch (_) {}
   try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; } catch (_) {}
 }
 
-/** 録音停止時に呼ぶ */
+/** 録音停止・AI処理の終了時に呼ぶ */
 function stopBackgroundKeepAlive() {
+  keepAliveMode = '';
   try { if (silentAudioEl) silentAudioEl.pause(); } catch (_) {}
   try {
     if ('mediaSession' in navigator) {
@@ -827,6 +849,74 @@ function stopBackgroundKeepAlive() {
       ['stop', 'pause', 'play'].forEach((a) => { try { navigator.mediaSession.setActionHandler(a, null); } catch (_) {} });
     }
   } catch (_) {}
+}
+
+/* =========================================================
+ * AI処理（文字起こし・議事録づくり）を画面オフでも続ける
+ *   録音を止めた時点で録音サービスは終わるため、そのまま画面を消すと
+ *   ページ（WebView）が凍結され、生成が途中で止まってしまう。
+ *   生成の間だけ、次の2つでアプリを動かし続ける。
+ *     ・ブラウザ / PWA: 無音のループ再生（メディア再生中のタブは凍結されない）
+ *     ・アプリ版:       フォアグラウンドサービス＋CPUの保持（ProcessingService）
+ *   終わったら必ず解除する（電池を使い続けないため）。
+ * =======================================================*/
+let processingKeepAlive = false;
+
+/** AI処理の開始時に呼ぶ。text は通知に出す段階名。 */
+async function startProcessingKeepAlive(text) {
+  processingKeepAlive = true;
+  startBackgroundKeepAlive('processing');
+  acquireWakeLock();   // 設定がONなら、画面が点いている間は消えないようにする
+  if (!NATIVE) return;
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.startProcessing !== 'function') return;   // 旧アプリ版では無音再生だけで動く
+  try { await rec.startProcessing({ text: text || 'AIが議事録を作成中…' }); } catch (_) {}
+}
+
+/** 段階名（文字起こし中 / 議事録を作成中）を通知にも反映する */
+let lastProcessingText = '';
+function updateProcessingKeepAlive(text) {
+  if (!processingKeepAlive || !text || text === lastProcessingText) return;
+  lastProcessingText = text;
+  if (!NATIVE) return;
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.updateProcessing !== 'function') return;
+  try { rec.updateProcessing({ text }); } catch (_) {}
+}
+
+/**
+ * AI処理の終了時に呼ぶ。
+ * 画面を消したまま待っていても分かるよう、完了（または失敗）を通知で知らせる。
+ * @param {boolean} ok 議事録まで作れたか
+ * @param {boolean} [quiet] true なら通知を出さずに解除だけする
+ */
+async function stopProcessingKeepAlive(ok, quiet) {
+  if (!processingKeepAlive) return;
+  processingKeepAlive = false;
+  lastProcessingText = '';
+  stopBackgroundKeepAlive();
+  releaseWakeLock();
+  const doneTitle = quiet ? '' : (ok ? '議事録ができました' : '議事録を作成できませんでした');
+  const doneText = ok ? 'タップして内容を確認できます' : 'アプリを開いて、履歴から作り直せます';
+  if (NATIVE) {
+    const rec = nativeRecorder();
+    if (rec && typeof rec.stopProcessing === 'function') {
+      try { await rec.stopProcessing({ doneTitle, doneText }); } catch (_) {}
+    }
+    return;
+  }
+  if (quiet) return;
+  // ブラウザ / PWA: 画面を見ていないときだけ通知で知らせる
+  if (document.visibilityState === 'visible') return;
+  try {
+    if (!('serviceWorker' in navigator)) return;
+    if (!(await ensureNotifyPermission())) return;
+    const reg = await navigator.serviceWorker.ready;
+    await reg.showNotification(doneTitle, {
+      body: doneText, tag: 'noteloop-ai-done', silent: false,
+      icon: './icons/icon-192.png', badge: './icons/favicon-48.png',
+    });
+  } catch (_) { /* 通知が出せなくても生成結果はアプリに残っている */ }
 }
 
 /* =========================================================
@@ -1273,7 +1363,7 @@ async function startRecording() {
   if (typeof homeMicMeter !== 'undefined') homeMicMeter.stop();
   if (typeof settingsMicMeter !== 'undefined') settingsMicMeter.stop();
   acquireWakeLock(); // 設定がONなら画面を常時オンに（ユーザー操作の直後に要求）
-  startBackgroundKeepAlive(); // 画面を消してもページが凍結されないよう無音を再生（ユーザー操作直後に開始）
+  startBackgroundKeepAlive('recording'); // 画面を消してもページが凍結されないよう無音を再生（ユーザー操作直後に開始）
   ensureNotifyPermission(); // 画面オフ中の常駐通知に備えて通知許可を先に取得
 
   confirmMode = (engineSelect.value === 'whisper') ? 'whisper' : 'none';
@@ -1404,8 +1494,10 @@ async function stopRecording() {
   clearInterval(liveTimer); liveTimer = null;
   stopRecordWatchdog();
   clearRecordingNotification();
-  releaseWakeLock();
-  stopBackgroundKeepAlive();
+  // 凍結防止（無音再生・アプリ版はフォアグラウンドサービス）はここでは止めない。
+  // 録音の保存 → 文字起こし → 議事録づくりまで、画面を消しても続くように
+  // そのまま「作成中」の維持へ切り替える。最後に必ず解除する。
+  startProcessingKeepAlive('録音を保存中…');
 
   if (liveMode === 'webspeech') stopWebSpeech();
   if (liveWhisperOn) stopNativeLiveTranscribe();   // アプリ版のライブ文字起こしを終える
@@ -1472,18 +1564,13 @@ async function stopRecording() {
   if (willAutoAi) {
     // 完了バッジは出さず、画面上部の進捗バー（＋完了までの目安時間）と
     // 録音ボタン位置の読込アニメーションだけで進み具合を伝える。
-    startAiFlowProgress();
-    try {
-      // 先に「文字起こしだけ」を作る（録音中の表示と読み比べられるように）。
-      setAiFlowStage('AIが文字起こし中…');
-      await runAiTranscribe({ auto: true });
-      setAiFlowStage('AIが議事録を作成中…');
-      const ok = await runAiAutoMinutes({ auto: true });
-      endAiFlowProgress(ok);
-    } catch (_) {
-      endAiFlowProgress(false);
-    }
+    // 画面を消しても最後まで走るよう、この中でバックグラウンド維持も行う。
+    await runAiFlow({ auto: true });
     updateHomeUI();
+  } else {
+    // AIに投げない設定・キー未設定などで、ここで終わるとき。
+    // 凍結防止の維持だけ外す（完了の通知は出さない）。
+    await stopProcessingKeepAlive(false, true);
   }
 }
 
@@ -1514,6 +1601,7 @@ function startAiFlowProgress() {
 
 function setAiFlowStage(text) {
   aiFlowStage = text || aiFlowStage;
+  updateProcessingKeepAlive(aiFlowStage);   // 画面オフ中は通知の文言も進める
   tickAiFlowProgress();
 }
 
@@ -1555,6 +1643,129 @@ function resetAiFlowProgress() {
   aiFlowRunning = false;
   if (aiFlowProgress) aiFlowProgress.hidden = true;
   if (aiFlowBar) aiFlowBar.style.width = '0%';
+}
+
+/* =========================================================
+ * AI処理の本体（文字起こし → 議事録）
+ *   録音停止後の自動実行と、履歴からの作り直し・再開で共通に使う。
+ *   ・画面を消しても止まらないよう、実行中はバックグラウンド維持を掛ける
+ *   ・どこまで進んだかを履歴へ書き残し、途中で切れても再開できるようにする
+ * =======================================================*/
+
+/**
+ * @param {{auto?:boolean, needText?:boolean, needMinutes?:boolean}} [opts]
+ *   needText/needMinutes を false にすると、その工程を飛ばす（再開・作り直し用）。
+ * @returns {Promise<boolean>} 議事録まで作れたら true
+ */
+async function runAiFlow(opts) {
+  const o = opts || {};
+  const needText = o.needText !== false;
+  const needMinutes = o.needMinutes !== false;
+  if (aiFlowRunning || recording) return false;
+
+  startAiFlowProgress();
+  setAiFlowStage(needText ? 'AIが文字起こし中…' : 'AIが議事録を作成中…');
+  await startProcessingKeepAlive(aiFlowStage);
+  markAiPending(needText ? 'transcribe' : 'minutes');
+
+  let ok = false;
+  try {
+    // 先に「文字起こしだけ」を作る（録音中の表示と読み比べられるように）
+    if (needText) {
+      setAiFlowStage('AIが文字起こし中…');
+      await runAiTranscribe({ auto: true });
+    }
+    if (needMinutes) {
+      markAiPending('minutes');
+      setAiFlowStage('AIが議事録を作成中…');
+      ok = await runAiAutoMinutes({ auto: !!o.auto });
+    } else {
+      ok = true;
+    }
+    endAiFlowProgress(ok);
+  } catch (_) {
+    endAiFlowProgress(false);
+  } finally {
+    clearAiPending();
+    await stopProcessingKeepAlive(ok);
+    renderHistory();   // 履歴カードの状態表示（作成中 / 中断 / 未作成）を更新
+  }
+  return ok;
+}
+
+/* ---- 「どこまで進んだか」を履歴に書き残す ----
+ * 画面を消してアプリが落とされた・再読み込みされたときでも、
+ * 履歴側に「途中で止まった」と分かる印が残るようにする。 */
+
+/** いま処理中のエントリに、進行中の工程を記録する */
+function markAiPending(stage) {
+  if (!activeRecordingId) return;
+  try {
+    const list = loadStore();
+    const i = list.findIndex((e) => e.id === activeRecordingId);
+    if (i < 0) return;
+    list[i].aiPending = stage;          // 'transcribe' | 'minutes'
+    list[i].aiPendingAt = Date.now();
+    delete list[i].aiInterrupted;
+    saveStore(list);
+  } catch (_) {}
+}
+
+/** 処理が終わったので印を外す（失敗したときは「未作成」として残る） */
+function clearAiPending() {
+  if (!activeRecordingId) return;
+  try {
+    const list = loadStore();
+    const i = list.findIndex((e) => e.id === activeRecordingId);
+    if (i < 0) return;
+    delete list[i].aiPending;
+    delete list[i].aiPendingAt;
+    delete list[i].aiInterrupted;
+    saveStore(list);
+  } catch (_) {}
+}
+
+/**
+ * 起動時の後片付け。
+ * 「処理中」の印が付いたまま残っているエントリは、前回どこかで中断されたもの。
+ * 中断の印に付け替えて、履歴から作り直せるようにする。
+ */
+function sweepStaleAiPending() {
+  try {
+    const list = loadStore();
+    let changed = false;
+    for (const e of list) {
+      if (!e || !e.aiPending) continue;
+      delete e.aiPending;
+      delete e.aiPendingAt;
+      e.aiInterrupted = true;
+      changed = true;
+    }
+    if (changed) saveStore(list);
+  } catch (_) {}
+}
+
+/**
+ * 履歴エントリの作成状態を返す。
+ *   'running'     いま作成中
+ *   'done'        議事録まで作れている
+ *   'partial'     文字起こしはあるが議事録が無い（＋中断した印）
+ *   'none'        音声はあるが、AIの結果がまだ無い
+ *   'text-only'   音声が無く、文字起こしだけ（作り直しはできない）
+ */
+function entryAiState(item) {
+  if (!item || item._sample) return 'done';
+  if (item.aiPending) return 'running';
+  if (item.aiText) return 'done';
+  if (!item.audio) return 'text-only';
+  if (item.aiTranscript || item.aiInterrupted) return 'partial';
+  return 'none';
+}
+
+/** 履歴から作り直せるか（保存された音声が要る） */
+function canRegenerate(item) {
+  const st = entryAiState(item);
+  return !!(item && item.audio) && (st === 'partial' || st === 'none');
 }
 
 /* =========================================================
@@ -3890,15 +4101,39 @@ function renderHistory() {
     const range = historyTimeRange(item);   // 録音した時間帯（10:05〜10:52）
     const sec = (item.audio && item.audio.sec) || 0;
     const size = (item.audio && item.audio.size) || 0;
-    li.innerHTML = `<h3></h3><span class="meta"></span><p class="excerpt"></p>
+    const state = entryAiState(item);       // done / partial / none / text-only
+    li.innerHTML = `<h3></h3><span class="meta"></span>
+      <span class="ai-state" hidden></span>
+      <p class="excerpt"></p>
       <div class="history-foot">
         <span class="history-stats">
           <span class="stat stat-time" hidden>${ICO_CLOCK}<span></span></span>
           <span class="stat stat-size" hidden>${ICO_DISC}<span></span></span>
         </span>
-        <button class="del icon-btn" type="button" aria-label="削除">${ICO_TRASH}</button>
+        <span class="history-acts">
+          <button class="redo chip-btn" type="button" hidden></button>
+          <button class="del icon-btn" type="button" aria-label="削除">${ICO_TRASH}</button>
+        </span>
       </div>`;
     li.querySelector('h3').textContent = item.name + (item._sample ? '（サンプル）' : '');
+    // 作成中・議事録ができていない・途中で止まったものは、状態を出す。
+    // 作り直せるもの（録音が残っているもの）には、その場で作成できるボタンを付ける。
+    if (state === 'running' || state === 'partial' || state === 'none') {
+      const badge = li.querySelector('.ai-state');
+      badge.hidden = false;
+      badge.className = 'ai-state' + (state === 'partial' ? ' warn' : '');
+      badge.textContent = state === 'running'
+        ? 'AIが作成中…'
+        : (item.aiInterrupted
+            ? '作成が途中で止まりました'
+            : (state === 'partial' ? '議事録が未作成（文字起こしのみ）' : '議事録が未作成'));
+      const redo = li.querySelector('.redo');
+      if (canRegenerate(item)) {
+        redo.hidden = false;
+        redo.textContent = item.aiTranscript ? '議事録を作成' : '録音から作成';
+        redo.addEventListener('click', (e) => { e.stopPropagation(); regenerateFromHistory(item); });
+      }
+    }
     // 日時（＋録音した時間帯）
     li.querySelector('.meta').textContent = formatDateJp(item.date) + (range ? ' ・ ' + range : '');
     // 議事録を2〜3行に要約した内容
@@ -3992,6 +4227,10 @@ function historySummaryText(item) {
   return text;
 }
 async function openMinutes(item) {
+  // これ以降のAIの結果（文字起こし・議事録）は、この履歴エントリへ書き戻す。
+  // 設定しないと、作り直しの結果が一覧の最新エントリに紛れ込んでしまう。
+  activeRecordingId = item.id || null;
+  audioShortfall = null;
   meetingName.value = item.name || '';
   meetingDate.value = item.date || '';
   participants = (item.participants || []).map((p) => ({ dept: p.dept || '', name: p.name || '' }));
@@ -4057,8 +4296,55 @@ async function openMinutes(item) {
       + (item.audio ? ' ・ 音声あり' : '');
   }
   revealFlowCards(false); // 履歴表示は一括で出現
+  updateHistoryRedoBar(item);
   updateHomeUI();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+/**
+ * 履歴の詳細に「議事録を作成（作り直す）」の案内を出す。
+ * 議事録ができていないもの（画面オフで途中で止まったもの等）は、
+ * 議事録カード自体が出ないため、ここに入口を置く。
+ */
+function updateHistoryRedoBar(item) {
+  const bar = $('historyRedo'), btn = $('historyRedoBtn'), note = $('historyRedoNote');
+  if (!bar || !btn) return;
+  const show = !!item && canRegenerate(item) && !aiFlowRunning;
+  bar.hidden = !show;
+  if (!show) return;
+  note.textContent = item.aiInterrupted
+    ? '議事録の作成が途中で止まっています。保存された録音から続きを作成できます。'
+    : (item.aiTranscript
+        ? '文字起こしはありますが、議事録がまだありません。'
+        : 'この録音からは、まだ議事録を作成していません。');
+  btn.textContent = item.aiTranscript ? '議事録を作成' : '録音から作成';
+  btn.onclick = () => regenerateFromHistory(item);
+}
+
+/**
+ * 履歴の項目を開いて、足りない工程だけをやり直す。
+ * 画面を消したせいで途中で止まったもの（文字起こしだけ・議事録が空）を、
+ * 保存してある録音音声から作り直すための入口。
+ */
+async function regenerateFromHistory(item) {
+  if (recording) { showToast('録音中は作成できません'); return; }
+  if (aiFlowRunning || aiAutoRunning || aiTextRunning) { showToast('いま別の作成を実行中です'); return; }
+  await openMinutes(item);          // 音声を読み込み、履歴の詳細を開く
+  if (!recordedBlob) {
+    showError('保存された録音音声が見つかりませんでした（古い履歴は音声が消えている場合があります）。');
+    return;
+  }
+  if (!loadGeminiKey()) {
+    showError('Gemini APIキーが未設定です。設定 → AI連携 でキーを入力してから作成してください。');
+    return;
+  }
+  hideError();
+  const bar = $('historyRedo');
+  if (bar) bar.hidden = true;       // 作成中は入口を隠す（二重押しを防ぐ）
+  const ok = await runAiFlow({ needText: !item.aiTranscript, auto: true });
+  // 作れなかったときは、もう一度押せるように出し直す
+  const fresh = loadStore().find((e) => e.id === item.id);
+  if (!ok && fresh) updateHistoryRedoBar(fresh);
 }
 function deleteMinutes(id) {
   const item = loadStore().find((x) => x.id === id);
@@ -4319,7 +4605,7 @@ async function toWav16kMono(blob) {
 /** Files API（大きい音声）へレジューム可能アップロードして fileUri を得る */
 async function geminiUploadFile(blob, key) {
   const size = blob.size, mime = blob.type || 'audio/wav';
-  const startRes = await fetch(`${GENAI_BASE}/upload/v1beta/files?key=${encodeURIComponent(key)}`, {
+  const startRes = await fetchWithTimeout(`${GENAI_BASE}/upload/v1beta/files?key=${encodeURIComponent(key)}`, {
     method: 'POST',
     headers: {
       'X-Goog-Upload-Protocol': 'resumable',
@@ -4333,7 +4619,7 @@ async function geminiUploadFile(blob, key) {
   if (!startRes.ok) throw new Error('音声アップロードの開始に失敗しました（' + startRes.status + '）');
   const uploadUrl = startRes.headers.get('X-Goog-Upload-URL');
   if (!uploadUrl) throw new Error('アップロードURLを取得できませんでした（ブラウザ制限の可能性）');
-  const upRes = await fetch(uploadUrl, {
+  const upRes = await fetchWithTimeout(uploadUrl, {
     method: 'POST',
     headers: { 'X-Goog-Upload-Command': 'upload, finalize', 'X-Goog-Upload-Offset': '0' },
     body: blob,
@@ -4381,6 +4667,30 @@ function geminiHttpError(status, msg, model) {
 // 代替モデルで生成できたときに、実際に使ったモデル名を控えて画面に知らせる。
 let lastGeminiFallbackModel = '';
 
+/* 応答が返らないまま固まるのを防ぐ上限。
+ * 画面を消している間に通信が切られると、fetch が永久に返らないことがある。
+ * そのままだと「作成中」の表示のまま終わらないので、必ず失敗として返し、
+ * 履歴から作り直せる状態（＝未作成）に落とす。 */
+const GEMINI_TIMEOUT_MS = 10 * 60 * 1000;
+const GEMINI_LIVE_TIMEOUT_MS = 60 * 1000;
+
+async function fetchWithTimeout(url, options, ms) {
+  if (typeof AbortController === 'undefined') return fetch(url, options);
+  const ac = new AbortController();
+  const timer = setTimeout(() => { try { ac.abort(); } catch (_) {} }, ms || GEMINI_TIMEOUT_MS);
+  try {
+    return await fetch(url, Object.assign({}, options, { signal: ac.signal }));
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error('Gemini から応答がありませんでした（通信が切れた可能性があります）。'
+        + '録音音声は保存されているので、履歴から作り直せます。');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** 録音音声を Gemini に送り、議事録＋メール文面テキストを返す */
 /**
  * 音声＋指示を Gemini に送り、返ってきた文章を返す共通処理。
@@ -4427,11 +4737,11 @@ async function geminiAudioRequest(blob, prompt, opts) {
 
     // 一時的な混雑（503など）は待てば通ることが多いので、同じモデルで数回粘る。
     for (let attempt = 0; ; attempt++) {
-      const res = await fetch(`${GENAI_BASE}/v1beta/models/${encodeURIComponent(m)}:generateContent`, {
+      const res = await fetchWithTimeout(`${GENAI_BASE}/v1beta/models/${encodeURIComponent(m)}:generateContent`, {
         method: 'POST',
         headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
+      }, o.live ? GEMINI_LIVE_TIMEOUT_MS : GEMINI_TIMEOUT_MS);
       if (res.ok) { data = await res.json(); usedModel = m; break outer; }
 
       let msg = String(res.status);
@@ -5481,9 +5791,11 @@ function setupOutTools(tools) {
       case 'download': if (menu) menu.classList.toggle('show'); break;
       case 'use': useAiTranscript(); break;
       case 'redo': {
-        // 自動生成が失敗したとき等のやり直し（普段は録音停止後に自動で走る）
-        if (tools.dataset.out === 'aitext') { hideError(); runAiTranscribe(); }
-        else { hideError(); runAiAutoMinutes(); }
+        // 自動生成が失敗したとき等のやり直し（普段は録音停止後に自動で走る）。
+        // 画面を消しても止まらないよう、録音停止後と同じ流れ（runAiFlow）で走らせる。
+        hideError();
+        if (tools.dataset.out === 'aitext') runAiFlow({ needMinutes: false });
+        else runAiFlow({ needText: false });
         setOpen(false);
         break;
       }
@@ -5511,6 +5823,9 @@ const manVer = $('manVer'); if (manVer) manVer.textContent = `${APP_VERSION} ・
 document.querySelectorAll('.man-toc button[data-goto]').forEach((b) => {
   b.addEventListener('click', () => scrollToEl(b.dataset.goto));
 });
+// 前回、画面オフ等で作成が途中で止まったものに「中断」の印を付け直す
+// （履歴からその場で作り直せるようにするため）
+sweepStaleAiPending();
 seedIfEmpty();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
@@ -5541,9 +5856,14 @@ if ('serviceWorker' in navigator && !NATIVE && !window.NOTELOOP_NATIVE_BUILD) {
   });
 }
 
-// 画面復帰時: 録音中なら音声処理を再開し、通知を出し直す（バックグラウンド対策）
+// 画面復帰時: 録音中・AI処理中なら、止まりかけていた処理を動かし直す（バックグラウンド対策）
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible' || !recording) return;
+  if (document.visibilityState !== 'visible') return;
+  if (aiFlowRunning) {
+    resumeBackgroundKeepAlive();   // 無音再生が止められていたら再開（凍結防止）
+    tickAiFlowProgress();          // 表示の時計を今の時刻に合わせる
+  }
+  if (!recording) return;
   try { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); } catch (_) {}
   resumeBackgroundKeepAlive(); // 無音再生が止まっていたら再開
   if (NATIVE) warnIfNotificationsBlocked(); // 設定で通知を許可して戻ってきた場合に消す

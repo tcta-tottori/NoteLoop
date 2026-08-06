@@ -402,6 +402,41 @@ public class RecorderPlugin extends Plugin {
         call.resolve();
     }
 
+    /* ===== 録音後のAI処理を画面オフ中も続ける =====
+     * 録音が終わるとフォアグラウンドサービス（録音）は終了し、そこで画面を消すと
+     * WebView が凍結されて文字起こし・議事録の作成が途中で止まってしまう。
+     * 生成の間だけ別のフォアグラウンドサービスを立てて、プロセスを守る。 */
+
+    @PluginMethod
+    public void startProcessing(PluginCall call) {
+        String text = call.getString("text");
+        ProcessingService.start(getContext(), text != null ? text : "AIが議事録を作成中…");
+        // 何かの拍子に WebView のタイマーが止められていても動き続けるようにする
+        // （resumeTimers はプロセス全体に効く。UI スレッドから呼ぶ必要がある）
+        runOnMain(() -> {
+            try { getBridge().getWebView().resumeTimers(); } catch (Exception ignored) {}
+        });
+        call.resolve();
+    }
+
+    /** 進み具合（段階名）を通知にも反映する */
+    @PluginMethod
+    public void updateProcessing(PluginCall call) {
+        String text = call.getString("text");
+        if (text != null && !text.isEmpty()) ProcessingService.update(getContext(), text);
+        call.resolve();
+    }
+
+    /**
+     * AI処理の終了。doneTitle を渡すと完了通知を出す
+     * （画面を消したまま待っていた人が、できたことに気づけるようにするため）。
+     */
+    @PluginMethod
+    public void stopProcessing(PluginCall call) {
+        ProcessingService.stop(getContext(), call.getString("doneTitle"), call.getString("doneText"));
+        call.resolve();
+    }
+
     @PluginMethod
     public void getStatus(PluginCall call) {
         JSObject r = new JSObject();

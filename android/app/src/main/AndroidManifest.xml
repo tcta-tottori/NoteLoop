@@ -31,6 +31,15 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- 録音停止後のAI処理（文字起こし・議事録づくり）を、画面を消しても
+             最後まで走らせるためのフォアグラウンドサービス。
+             これが無いと、画面を消した時点で WebView が凍結され、
+             文字起こしが速報のまま・議事録が空のまま止まってしまう。 -->
+        <service
+            android:name=".ProcessingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -49,6 +58,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- Android 14 以降はサービス種別ごとの権限が必要 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- 録音後のAI処理を画面オフ中も続けるため（dataSync のサービス＋CPUの保持） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Android 13 以降、録音中の常駐通知を出すために必要 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- アプリ内更新: ダウンロードしたAPKのインストーラを開くために必要 -->
