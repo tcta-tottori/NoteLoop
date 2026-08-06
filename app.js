@@ -2471,7 +2471,8 @@ async function sendLiveToGemini(audio) {
       + '・聞き取れない部分は無理に補わず、飛ばしてください。空耳で言葉を作らないでください。\n'
       + '・音声の冒頭は前回と重なっています。すでに書いた続きだけを出力してください。\n'
       + (tail ? `・直前までの文字起こし（重複して書かないでください）:「${tail}」\n` : '');
-    const text = await geminiAudioRequest(audio ? wavFromFloat32(audio) : null, prompt, { live: true });
+    const text = await geminiAudioRequest(audio ? wavFromFloat32(audio) : null, prompt,
+      { live: true, model: GEMINI_LIVE_MODEL });
     // 数秒の音声から出るには長すぎる出力は、ほぼ作り話なので捨てる（1秒あたり12文字を上限）
     const limit = Math.max(40, Math.round((audio ? audio.length / SAMPLE_RATE : LIVE_GEMINI_SEC) * 12));
     if (text && text.length <= limit) appendTranscript(cleanupTranscript(text));
@@ -4576,6 +4577,13 @@ function loadGeminiKey() { return (localStorage.getItem(GEMINI_KEY_KEY) || '').t
 // gemini-3.6-flash / gemini-flash-latest は無料枠に割り当てが無く、
 // 請求先未設定のプロジェクトでは 429（RESOURCE_EXHAUSTED）で必ず失敗する。
 const GEMINI_DEFAULT_MODEL = 'gemini-3.5-flash';
+/* 録音中のライブ字幕だけに使う軽量モデル。
+ * ライブは数秒ごとに1リクエスト送る（30分の会議で約270回）ため、
+ * 選択モデルのまま流すと、無料枠の「1分あたりの回数」に張り付いて 429 になり、
+ * 肝心の停止後の文字起こし・議事録まで代替モデルへ落ちてしまっていた。
+ * ライブは数秒の切れ端を文字にするだけで賢さより速さが要るので、
+ * ここは軽量モデルに固定し、確定版（文字起こし・議事録）に枠を残す。 */
+const GEMINI_LIVE_MODEL = 'gemini-3.1-flash-lite';
 // 選択モデルが 404（提供終了）や 429（無料枠なし）で使えないときに順に試す代替。
 const GEMINI_FALLBACK_MODELS = ['gemini-3.5-flash', 'gemini-3.1-flash-lite'];
 // サーバ側の一時的な事情。待てば通ることが多いので、同じモデルで粘ってから代替へ移る。
@@ -4762,7 +4770,8 @@ async function fetchWithTimeout(url, options, ms) {
  * 議事録づくり・全体の文字起こし・録音中のライブ文字起こしで共通に使う。
  * @param {Blob} blob 送る音声（WAV 以外は 16kHz モノラル WAV に変換する）
  * @param {string} prompt 指示文
- * @param {{onStage?:Function, stage?:string, live?:boolean}} [opts]
+ * @param {{onStage?:Function, stage?:string, live?:boolean, model?:string}} [opts]
+ *   model を渡すとそのモデルで送る（省略時は設定で選んだモデル）。
  */
 async function geminiAudioRequest(blob, prompt, opts) {
   const o = opts || {};
@@ -4770,7 +4779,7 @@ async function geminiAudioRequest(blob, prompt, opts) {
   const key = loadGeminiKey();
   if (!key) { const e = new Error('APIキー未設定'); e.noKey = true; throw e; }
   if (!blob) throw new Error('録音音声がありません。');
-  const model = loadGeminiModel();
+  const model = o.model || loadGeminiModel();
 
   if (!o.live) onStage && onStage('音声を準備中…');
   // 形式の問題を避けるため WAV 16kHz mono に統一（すでに WAV ならそのまま）
@@ -4791,11 +4800,15 @@ async function geminiAudioRequest(blob, prompt, opts) {
 
   // 選択モデルが使えない（提供終了 / 無料枠なし）ときは代替モデルで自動的に再試行する。
   // 録音中のライブは待たせたくないので、粘る回数を減らす。
+  // ライブは代替モデルへ移らない。ここで選択モデル（＝確定版で使うモデル）へ
+  // 流れると、守りたいはずの枠をライブが食いつぶしてしまうため。
+  // ライブの1回くらい落ちても、停止後の確定版で全部やり直す。
   const maxRetry = o.live ? 1 : GEMINI_MAX_RETRY;
+  const candidates = o.live ? [model] : [model, ...GEMINI_FALLBACK_MODELS];
   const tried = [];
   let data = null, lastErr = null, usedModel = model;
   outer:
-  for (const m of [model, ...GEMINI_FALLBACK_MODELS]) {
+  for (const m of candidates) {
     if (tried.includes(m)) continue;
     tried.push(m);
     if (tried.length > 1 && !o.live) onStage && onStage(`${m} で作成し直しています…`);
