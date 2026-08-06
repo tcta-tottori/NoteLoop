@@ -143,7 +143,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.9.1';
+const APP_VERSION = 'Ver.9.2';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -4430,6 +4430,45 @@ if (historyBack) historyBack.addEventListener('click', () => {
 const GEMINI_URL = 'https://gemini.google.com/app';
 const GEMINI_INSTR_KEY = 'noteloop_gemini_instruction';
 const DEFAULT_GEMINI_INSTRUCTION =
+`添付した会議の音声を日本語で文字起こしし、その会議に出ていない人が読んでも中身が分かる「議事録」と、そのまま送れる「メール文面」を作成してください。要約しすぎず、話された内容を細かく残すことを最優先にしてください。
+
+【1. 議事録】次の見出しの順で作成してください。
+■日時
+■場所
+■参加者
+■決定事項
+- 決まったことを1件ずつ。「何を・いつまでに・誰が」まで書き、そう決めた理由や前提が話されていれば続けて1行添える。
+■To-Do
+- これからやること・宿題を1件ずつ。担当と期限が分かれば「― 担当/期限」の形で併記する。
+■保留・懸念事項
+- 結論が出なかったこと、条件付きの話、挙がったリスクや懸念、次回への持ち越しを1件ずつ。
+■議論の内容
+- ここがこの議事録の本体です。いちばん詳しく書いてください。
+- 話題ごとに「◆話題名」の小見出しを立て、会議で出てきた順に並べる。
+- その下に、やり取りの流れが追えるように箇条書きで残す。誰が何を言ったか（分かる範囲で「（氏名）」を付ける）、挙がった数値・日付・型番・金額・会社名・部署名、そう判断した理由、反対意見や条件、確認された事実を落とさずに書く。
+
+【2. メール文面】次の形式で作成してください。
+件名：【議事録】[会議名]
+本文：
+関係各位
+お疲れ様です。[氏名]です。
+[会議名]の議事録を共有致します。
+（上記の議事録を ■日時／■場所／■参加者／■決定事項／■To-Do／■保留・懸念事項／■議論の内容 の順で本文に展開）
+上記内容になります。よろしくお願い致します。
+
+【作成の指示】
+- 短くまとめすぎないでください。省いてよいのは相槌・言い直し・雑談だけで、業務に関する発言は必ずどこかに残してください。
+- 分量の目安: ■議論の内容は、録音10分あたり12項目以上（30分の会議なら36項目以上）。話が続いている限り項目数に上限はありません。会議が長いほど議事録も長くしてください。
+- 1項目は1〜2文。長い発言は複数の項目に分けてください。同じ内容を別の見出しで繰り返す必要はありません。
+- 聞き取りにくい箇所や誤変換は文脈から自然に補正してください。
+- 重要な数値・固有名詞・日付・金額・型番は、聞こえたとおりに必ず残してください。
+- 決定事項（決まったこと）とTo-Do（これからやること）は明確に区別してください。
+- 判断できない箇所は「（要確認）」と明記し、推測で埋めないでください。`;
+
+/* 旧版の既定の指示文。設定を触っていない利用者にも新しい指示が届くよう、
+ * 保存されている内容がこれと同じなら、新しい既定へ入れ替える。
+ * （自分で書き換えた指示文は、そのまま尊重する） */
+const OLD_GEMINI_INSTRUCTIONS = [
 `添付した会議の音声を日本語で文字起こしし、正確で読みやすい「議事録」と、そのまま送れる「メール文面」を作成してください。
 
 【1. 議事録】次の見出しで、箇条書き中心にまとめてください。
@@ -4448,10 +4487,18 @@ const DEFAULT_GEMINI_INSTRUCTION =
 - 聞き取りにくい箇所や誤変換は文脈から自然に補正してください。
 - 重要な数値・固有名詞・日付・金額・型番は必ず保持してください。
 - 相槌・言い直し・雑談は省き簡潔に。決定事項とTo-Do（未確定の宿題）は明確に区別してください。
-- 判断できない箇所は「（要確認）」と明記してください。`;
+- 判断できない箇所は「（要確認）」と明記してください。`,
+];
 
 function loadGeminiInstruction() {
-  return localStorage.getItem(GEMINI_INSTR_KEY) || DEFAULT_GEMINI_INSTRUCTION;
+  const saved = localStorage.getItem(GEMINI_INSTR_KEY);
+  if (!saved) return DEFAULT_GEMINI_INSTRUCTION;
+  // 旧版の既定のままなら、新しい既定へ入れ替える（保存し直して次回以降も新しい方を使う）
+  if (OLD_GEMINI_INSTRUCTIONS.some((old) => saved.trim() === old.trim())) {
+    localStorage.setItem(GEMINI_INSTR_KEY, DEFAULT_GEMINI_INSTRUCTION);
+    return DEFAULT_GEMINI_INSTRUCTION;
+  }
+  return saved;
 }
 
 /**
@@ -4473,17 +4520,40 @@ ToDo：
 
 `;
 
-/** 音声と一緒に渡す指示文（要約の指示 ＋ 指示 ＋ 会議情報）。 */
-function buildAudioPrompt() {
+/**
+ * AIが作った文字起こし（全文）を、議事録づくりの手がかりとして添える。
+ * 音声だけを渡すと細部（数値・固有名詞・誰の発言か）が落ちやすいが、
+ * 直前に作った文字起こしを一緒に渡すと、拾える情報がはっきり増える。
+ * 速報（録音中の低精度なもの）は誤りが多いので使わない。
+ */
+const PROMPT_TRANSCRIPT_MAX = 60000;   // 長すぎる文字起こしは末尾を切る（送信量の上限）
+function transcriptForPrompt() {
+  let t = (aiTextEl && aiTextEl.value ? aiTextEl.value : '').trim();
+  if (!t) return '';
+  if (t.length > PROMPT_TRANSCRIPT_MAX) t = t.slice(0, PROMPT_TRANSCRIPT_MAX) + '\n…（以下は音声で確認してください）';
+  return `
+
+【参考: この録音の文字起こし】
+音声と同じ内容を先に文字にしたものです。数値・固有名詞・発言の順序を落とさないための手がかりに使ってください。
+聞き分けは音声を優先し、ここに無い内容を作らないでください。
+${t}`;
+}
+
+/**
+ * 音声と一緒に渡す指示文（要約の指示 ＋ 指示 ＋ 会議情報）。
+ * @param {{withTranscript?: boolean}} [opts] 文字起こしを添えるか（APIで作るときだけ）
+ */
+function buildAudioPrompt(opts) {
   const m = currentMinutes();
   const instr = SUMMARY_BLOCK_INSTRUCTION + (geminiInstruction.value || DEFAULT_GEMINI_INSTRUCTION).trim();
   const partLine = (m.participants && m.participants.length) ? `\n参加者: ${participantsText(m.participants)}` : '';
   const timeLine = m.time ? `\n時間: ${m.time}（録音の実時間。■日時にはこの時間を書いてください）` : '';
+  const script = (opts && opts.withTranscript) ? transcriptForPrompt() : '';
   return `${instr}
 
 【会議情報】
 会議名: ${m.name}
-日付: ${formatDateJp(m.date)}${timeLine}${partLine}${dictPromptBlock()}`;
+日付: ${formatDateJp(m.date)}${timeLine}${partLine}${dictPromptBlock()}${script}`;
 }
 
 function setAiAudioStatus(kind, html) {
@@ -4739,6 +4809,8 @@ function geminiHttpError(status, msg, model) {
 
 // 代替モデルで生成できたときに、実際に使ったモデル名を控えて画面に知らせる。
 let lastGeminiFallbackModel = '';
+// 出力が上限に達して途中で切れたか（長い会議の詳しい議事録で起こり得る）。
+let lastGeminiTruncated = false;
 
 /* 応答が返らないまま固まるのを防ぐ上限。
  * 画面を消している間に通信が切られると、fetch が永久に返らないことがある。
@@ -4849,6 +4921,9 @@ async function geminiAudioRequest(blob, prompt, opts) {
   const cand = (data.candidates || [])[0] || {};
   const parts = (cand.content && cand.content.parts) || [];
   const text = parts.map((p) => p.text || '').join('').trim();
+  // 出力の上限に達して途中で切れた場合。詳しい議事録ほど起こり得るので、
+  // 気づかずに「これで全部」と思い込まないよう控えておき、結果と一緒に知らせる。
+  if (!o.live) lastGeminiTruncated = cand.finishReason === 'MAX_TOKENS';
   // 使用状況（推定）を記録：応答の usageMetadata からトークン数を加算
   recordUsage((data.usageMetadata && data.usageMetadata.totalTokenCount) || 0);
   if (!text && !o.live) throw new Error('生成結果が空でした（安全性ブロックや指示文が原因の場合があります）。');
@@ -4858,7 +4933,9 @@ async function geminiAudioRequest(blob, prompt, opts) {
 /** 録音音声から議事録＋メール文面を作る */
 async function geminiGenerateMinutes(onStage) {
   if (!recordedBlob) throw new Error('録音音声がありません。設定で「録音中のライブ文字起こし」を切り替えても録音はできます。');
-  return geminiAudioRequest(recordedBlob, buildAudioPrompt(), { onStage, stage: 'Geminiが議事録を作成中…' });
+  // 直前に作った文字起こしも一緒に渡す（細部の取りこぼしを減らすため）
+  return geminiAudioRequest(recordedBlob, buildAudioPrompt({ withTranscript: true }),
+    { onStage, stage: 'Geminiが議事録を作成中…' });
 }
 
 /** 録音音声の全体を、議事録とは別に「文字起こしだけ」する（読み比べ用） */
@@ -5077,6 +5154,12 @@ function splitSummaryBlock(src) {
     if (!l) continue;
     // 【1. 議事録】まで来たら要約ブロックは終わり
     if (/^[【\[(（]?\s*(?:[1１]\s*[.．、]?\s*)?議事録/.test(l)) { last = i; break; }
+    // 「【1. 議事録】」の行を省いて、いきなり本体（■日時／◆話題）や
+    // メール文面から書き始めるモデルもある。その場合もここで区切り、
+    // 続きは議事録の本文として扱う（要約に本文が流れ込むのを防ぐ）。
+    if (/^[■◆]/.test(l)
+        || /^[【\[(（]?\s*(?:[2２]\s*[.．、]?\s*)?メール(文面|文|案|ドラフト)/.test(l)
+        || /^[【\[(（]?\s*件名\s*[】\])）]?\s*[:：]/.test(l)) { last = i - 1; break; }
     let matched = false;
     for (const k of Object.keys(KEY)) {
       const m = KEY[k].exec(l);
@@ -5220,6 +5303,12 @@ async function runAiAutoMinutes(opts) {
     let note = lastGeminiFallbackModel
       ? `<br>※選択中のモデルが使えなかったため <strong>${lastGeminiFallbackModel}</strong> で作成しました。設定→AI連携 でモデルを変更できます。`
       : '';
+    // 長い会議では、詳しく書くほど出力の上限に当たることがある。
+    // 末尾が切れたまま「これで全部」と思われないよう必ず知らせる。
+    if (lastGeminiTruncated) {
+      note += '<br>⚠ <strong>出力が上限に達したため、議事録の末尾が切れている可能性があります。</strong>'
+        + '枠の右下「＜」→「作り直す」でやり直すか、設定→AI連携 の指示文で分量を減らしてください。';
+    }
     // 音声が途中までしか残っていない場合、議事録もその範囲しか含まない。
     // 完全な議事録だと思い込むと危ないので、結果と一緒に必ず知らせる。
     if (audioShortfall) {
