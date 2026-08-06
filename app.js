@@ -143,7 +143,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.9.0';
+const APP_VERSION = 'Ver.9.1';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -873,15 +873,43 @@ async function startProcessingKeepAlive(text) {
   try { await rec.startProcessing({ text: text || 'AIが議事録を作成中…' }); } catch (_) {}
 }
 
-/** 段階名（文字起こし中 / 議事録を作成中）を通知にも反映する */
-let lastProcessingText = '';
-function updateProcessingKeepAlive(text) {
-  if (!processingKeepAlive || !text || text === lastProcessingText) return;
+/**
+ * 作成中の表示（段階名・進捗率・残り時間）を通知にも反映する。
+ * 通知は連続で書き替えると OS に間引かれるので、2秒に1回までにする。
+ * @param {string} text  段階名（AIが文字起こし中… など）
+ * @param {number} [percent] 進捗率 0〜100（省略時は不定形のバー）
+ * @param {string} [eta] 「完了まで約 3分20秒」などの残り時間
+ * @param {boolean} [force] 段階が変わったときなど、すぐ反映したいとき
+ */
+let lastProcessingText = '', lastProcessingPct = -1, lastProcessingAt = 0;
+const PROC_NOTIF_MIN_MS = 2000;
+function updateProcessingKeepAlive(text, percent, eta, force) {
+  if (!processingKeepAlive || !text) return;
+  const pct = typeof percent === 'number' ? Math.max(0, Math.min(100, Math.round(percent))) : -1;
+  const now = Date.now();
+  const changed = text !== lastProcessingText || pct !== lastProcessingPct;
+  if (!changed) return;
+  if (!force && now - lastProcessingAt < PROC_NOTIF_MIN_MS) return;
   lastProcessingText = text;
-  if (!NATIVE) return;
-  const rec = nativeRecorder();
-  if (!rec || typeof rec.updateProcessing !== 'function') return;
-  try { rec.updateProcessing({ text }); } catch (_) {}
+  lastProcessingPct = pct;
+  lastProcessingAt = now;
+
+  if (NATIVE) {
+    const rec = nativeRecorder();
+    if (!rec || typeof rec.updateProcessing !== 'function') return;
+    try { rec.updateProcessing({ text, percent: pct, detail: eta || '' }); } catch (_) {}
+    return;
+  }
+  // ブラウザ / PWA: ロック画面のメディア表示に進み具合を出す（通知には進捗バーが無いため）
+  try {
+    if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: pct >= 0 ? `${text}　${pct}%` : text,
+        artist: eta || '画面を消しても作成は続きます',
+        album: 'NOTELOOP',
+      });
+    }
+  } catch (_) {}
 }
 
 /**
@@ -893,7 +921,7 @@ function updateProcessingKeepAlive(text) {
 async function stopProcessingKeepAlive(ok, quiet) {
   if (!processingKeepAlive) return;
   processingKeepAlive = false;
-  lastProcessingText = '';
+  lastProcessingText = ''; lastProcessingPct = -1; lastProcessingAt = 0;
   stopBackgroundKeepAlive();
   releaseWakeLock();
   const doneTitle = quiet ? '' : (ok ? '議事録ができました' : '議事録を作成できませんでした');
@@ -1580,6 +1608,10 @@ async function stopRecording() {
  *   ・同時に録音ボタンを白い読込アニメーションへ切り替え、完了で消す。
  * =======================================================*/
 let aiFlowTimer = null, aiFlowStart = 0, aiFlowEst = 0, aiFlowStage = '';
+/* 段階（文字起こし → 議事録）ごとの進み具合の割り当て。
+ * 全体を 0〜1 とし、いまの段階が受け持つ範囲を base〜base+span で表す。
+ * 段階が切り替わったところでバーが必ず進むので、止まって見えない。 */
+let aiFlowStageStart = 0, aiFlowBase = 0, aiFlowSpan = 1;
 
 /** 録音の長さから、文字起こし＋議事録の完了までの目安（秒）を見積もる */
 function estimateAiFlowSeconds() {
@@ -1590,33 +1622,63 @@ function estimateAiFlowSeconds() {
 function startAiFlowProgress() {
   aiFlowRunning = true;
   aiFlowStart = Date.now();
+  aiFlowStageStart = aiFlowStart;
+  aiFlowBase = 0; aiFlowSpan = 1;
   aiFlowEst = estimateAiFlowSeconds();
   aiFlowStage = 'AIが議事録を作成中…';
   if (aiFlowProgress) aiFlowProgress.hidden = false;
   clearInterval(aiFlowTimer);
-  tickAiFlowProgress();
+  tickAiFlowProgress(true);
   aiFlowTimer = setInterval(tickAiFlowProgress, 250);
   updateFabState();
 }
 
-function setAiFlowStage(text) {
+/**
+ * 段階名を切り替える。
+ * base / span を渡すと「この段階が全体のどこからどこまでか」を決め直す
+ * （渡さない場合は、同じ段階の中の細かい表示だけを変える）。
+ */
+function setAiFlowStage(text, base, span) {
   aiFlowStage = text || aiFlowStage;
-  updateProcessingKeepAlive(aiFlowStage);   // 画面オフ中は通知の文言も進める
-  tickAiFlowProgress();
+  if (typeof base === 'number') {
+    aiFlowBase = base;
+    aiFlowSpan = typeof span === 'number' ? span : Math.max(0.05, 1 - base);
+    aiFlowStageStart = Date.now();
+  }
+  tickAiFlowProgress(true);   // 通知にもすぐ反映する
 }
 
-function tickAiFlowProgress() {
-  if (!aiFlowProgress || aiFlowProgress.hidden) return;
-  const el = (Date.now() - aiFlowStart) / 1000;
-  // 見積もりを超えても止まって見えないよう、95%へゆっくり漸近させる
-  let p = el < aiFlowEst ? (el / aiFlowEst) * 0.95 : 0.95 + 0.04 * (1 - Math.exp(-(el - aiFlowEst) / 60));
-  p = Math.min(0.99, p);
+/** いまの進み具合（0〜1）と残り時間（秒）を求める */
+function aiFlowProgressNow() {
+  const now = Date.now();
+  const elAll = (now - aiFlowStart) / 1000;
+  const estStage = Math.max(3, aiFlowEst * aiFlowSpan);
+  const elStage = (now - aiFlowStageStart) / 1000;
+  // 見積もりの時間で 90%、それを過ぎても止まって見えないよう 99% へゆっくり漸近させる
+  const inner = elStage < estStage
+    ? 0.9 * (elStage / estStage)
+    : 0.9 + 0.09 * (1 - Math.exp(-(elStage - estStage) / 60));
+  const p = Math.min(0.99, aiFlowBase + aiFlowSpan * inner);
+  // 残り時間は見積もりから引く。見積もりを過ぎたあとは、
+  // ここまでの実績（どれだけの時間で何％進んだか）から計算し直す。
+  let remain = Math.ceil(aiFlowEst - elAll);
+  if (remain <= 0) remain = Math.ceil(elAll * (1 - p) / Math.max(0.05, p));
+  return { p, remain };
+}
+
+function tickAiFlowProgress(force) {
+  if (!aiFlowRunning) return;
+  const { p, remain } = aiFlowProgressNow();
   const pct = Math.round(p * 100);
-  aiFlowBar.style.width = pct + '%';
-  aiFlowPct.textContent = pct + '%';
-  aiFlowLabel.textContent = aiFlowStage;
-  const remain = Math.ceil(aiFlowEst - el);
-  aiFlowEta.textContent = remain > 0 ? `完了まで約 ${formatDurationJp(remain)}` : 'まもなく完了します…';
+  const eta = remain > 0 ? `完了まで約 ${formatDurationJp(remain)}` : 'まもなく完了します…';
+  if (aiFlowProgress && !aiFlowProgress.hidden) {
+    aiFlowBar.style.width = pct + '%';
+    aiFlowPct.textContent = pct + '%';
+    aiFlowLabel.textContent = aiFlowStage;
+    aiFlowEta.textContent = eta;
+  }
+  // 画面を消していても分かるよう、通知にも同じ内容（段階・％・残り時間）を出す
+  updateProcessingKeepAlive(aiFlowStage, pct, eta, force);
 }
 
 /** AI処理の終了。読込アニメーションを消し、録音ボタンも消す（最下部で再表示） */
@@ -1663,8 +1725,11 @@ async function runAiFlow(opts) {
   const needMinutes = o.needMinutes !== false;
   if (aiFlowRunning || recording) return false;
 
+  // 2工程あるときは、進捗バーを前半（文字起こし）と後半（議事録）で分け合う
+  const textSpan = needText && needMinutes ? 0.55 : 1;
+
   startAiFlowProgress();
-  setAiFlowStage(needText ? 'AIが文字起こし中…' : 'AIが議事録を作成中…');
+  setAiFlowStage(needText ? 'AIが文字起こし中…' : 'AIが議事録を作成中…', 0, needText ? textSpan : 1);
   await startProcessingKeepAlive(aiFlowStage);
   markAiPending(needText ? 'transcribe' : 'minutes');
 
@@ -1672,12 +1737,12 @@ async function runAiFlow(opts) {
   try {
     // 先に「文字起こしだけ」を作る（録音中の表示と読み比べられるように）
     if (needText) {
-      setAiFlowStage('AIが文字起こし中…');
+      setAiFlowStage('AIが文字起こし中…', 0, textSpan);
       await runAiTranscribe({ auto: true });
     }
     if (needMinutes) {
       markAiPending('minutes');
-      setAiFlowStage('AIが議事録を作成中…');
+      setAiFlowStage('AIが議事録を作成中…', needText ? textSpan : 0, needText ? 1 - textSpan : 1);
       ok = await runAiAutoMinutes({ auto: !!o.auto });
     } else {
       ok = true;

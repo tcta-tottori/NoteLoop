@@ -419,11 +419,14 @@ public class RecorderPlugin extends Plugin {
         call.resolve();
     }
 
-    /** 進み具合（段階名）を通知にも反映する */
+    /** 進み具合（段階名・進捗率・残り時間）を通知にも反映する */
     @PluginMethod
     public void updateProcessing(PluginCall call) {
         String text = call.getString("text");
-        if (text != null && !text.isEmpty()) ProcessingService.update(getContext(), text);
+        if (text == null || text.isEmpty()) { call.resolve(); return; }
+        Integer percent = call.getInt("percent", -1);
+        ProcessingService.update(getContext(), text,
+                percent != null ? percent : -1, call.getString("detail", ""));
         call.resolve();
     }
 
