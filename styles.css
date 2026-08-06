@@ -490,6 +490,29 @@ select:focus, input:focus, textarea:focus {
 .history-detail-head h2 { margin: 0; font-size: 19px; font-weight: 800; line-height: 1.35; }
 .history-detail-head .meta { margin: 4px 0 0; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
 
+/* 議事録が未作成 / 途中で止まったときの表示（一覧のバッジ・詳細の作成ボタン） */
+.history-item .ai-state {
+  align-self: flex-start; margin-top: 2px;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+  padding: 3px 9px; border-radius: 999px;
+  color: var(--muted); background: var(--surface-3); border: 1px solid var(--border);
+}
+.history-item .ai-state.warn {
+  color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  border-color: color-mix(in srgb, var(--amber) 34%, transparent);
+}
+.history-acts { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.history-acts .redo { white-space: nowrap; }
+.history-redo {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 0 2px 14px; padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand1) 32%, var(--border));
+  border-radius: var(--radius-sm); background: color-mix(in srgb, var(--brand1) 7%, var(--surface));
+}
+.history-redo-note { margin: 0; flex: 1 1 220px; font-size: 12.5px; font-weight: 600; color: var(--muted); line-height: 1.5; }
+.history-redo .primary-btn { flex: none; }
+
 .history-empty { color: var(--muted); font-size: 13px; padding: 4px 2px; }
 
 /* ---------- Settings ---------- */
