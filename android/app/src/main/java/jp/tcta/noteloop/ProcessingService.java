@@ -36,6 +36,10 @@ public class ProcessingService extends Service {
     public static final String ACTION_UPDATE = "jp.tcta.noteloop.PROC_UPDATE";
     public static final String ACTION_STOP = "jp.tcta.noteloop.PROC_STOP";
     public static final String EXTRA_TEXT = "text";
+    /** 進捗率（0〜100）。-1 なら終わりの見えない（不定形の）バーにする。 */
+    public static final String EXTRA_PERCENT = "percent";
+    /** 「完了まで約 3分20秒」など、バーの下に出す説明 */
+    public static final String EXTRA_DETAIL = "detail";
     public static final String EXTRA_DONE_TITLE = "doneTitle";
     public static final String EXTRA_DONE_TEXT = "doneText";
 
@@ -54,6 +58,10 @@ public class ProcessingService extends Service {
 
     private PowerManager.WakeLock wakeLock;
     private String statusText = "AIが議事録を作成中…";
+    /** 進捗率（0〜100）。-1 は不定形（進み具合がまだ分からない）。 */
+    private int percent = -1;
+    /** 残り時間などの説明文 */
+    private String detailText = "画面を消しても作成は続きます";
 
     public static boolean isRunning() { return running; }
 
@@ -77,6 +85,9 @@ public class ProcessingService extends Service {
 
         String text = intent != null ? intent.getStringExtra(EXTRA_TEXT) : null;
         if (text != null && !text.isEmpty()) statusText = text;
+        if (intent != null && intent.hasExtra(EXTRA_PERCENT)) percent = intent.getIntExtra(EXTRA_PERCENT, -1);
+        String detail = intent != null ? intent.getStringExtra(EXTRA_DETAIL) : null;
+        if (detail != null && !detail.isEmpty()) detailText = detail;
 
         if (ACTION_UPDATE.equals(action)) {
             if (running) notifyStatus();
@@ -120,20 +131,31 @@ public class ProcessingService extends Service {
                 | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
         PendingIntent contentPi = PendingIntent.getActivity(this, 0, open, piFlags);
 
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
+        // 進捗率が分かっているときは「45% ・ 完了まで約 3分20秒」の形で出し、
+        // バーもその位置まで伸ばす（分からないうちは不定形のバー）。
+        final boolean known = percent >= 0;
+        String line = known
+                ? percent + "%" + (detailText.isEmpty() ? "" : "　・　" + detailText)
+                : detailText;
+
+        NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(statusText)
-                .setContentText("画面を消しても作成は続きます")
+                .setContentText(line)
+                .setSubText(known ? percent + "%" : null)   // たたんだ状態でも％が見える
                 .setSmallIcon(R.drawable.ic_stat_doc)
                 .setContentIntent(contentPi)
                 .setOngoing(true)
                 .setSilent(true)
                 .setOnlyAlertOnce(true)
                 .setShowWhen(false)
-                .setProgress(0, 0, true)   // 終わりの見えない処理なので不定形のバー
+                .setProgress(known ? 100 : 0, known ? percent : 0, !known)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-                .build();
+                .setStyle(new NotificationCompat.BigTextStyle()
+                        .setBigContentTitle(statusText)
+                        .bigText(line + "\n画面を消しても作成は続きます"));
+        return b.build();
     }
 
     /** 生成が終わったことを知らせる（画面を消したまま待っていても分かるように） */
@@ -226,12 +248,15 @@ public class ProcessingService extends Service {
         else ctx.startService(i);
     }
 
-    public static void update(Context ctx, String text) {
+    /** 段階名・進捗率（0〜100 / -1 は不定形）・残り時間を通知へ反映する */
+    public static void update(Context ctx, String text, int percent, String detail) {
         if (!running) return;
         try {
             ctx.startService(new Intent(ctx, ProcessingService.class)
                     .setAction(ACTION_UPDATE)
-                    .putExtra(EXTRA_TEXT, text));
+                    .putExtra(EXTRA_TEXT, text)
+                    .putExtra(EXTRA_PERCENT, percent)
+                    .putExtra(EXTRA_DETAIL, detail == null ? "" : detail));
         } catch (Exception ignored) { /* 背面からの起動が拒否されても表示が古くなるだけ */ }
     }
 
