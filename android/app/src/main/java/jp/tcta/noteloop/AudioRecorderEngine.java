@@ -48,6 +48,20 @@ public class AudioRecorderEngine {
     private final java.io.ByteArrayOutputStream pcmBuf = new java.io.ByteArrayOutputStream();
     private static final int PCM_MAX = SAMPLE_RATE * 2 * 30; // 約30秒ぶん
 
+    /* --- 保険ファイル（ADTS） ---------------------------------------------
+     * MediaMuxer が作る m4a は、最後に muxer.stop() が走って初めて再生できる。
+     * 画面オフの長時間録音で OS にアプリを終了させられると stop() が走らず、
+     * ファイルは残っているのに一切再生できない＝録音が丸ごと失われる。
+     * そこで、エンコード済みの AAC フレームを ADTS ヘッダ付きで別ファイルにも
+     * 書き足しておく。ADTS は 1 フレームごとに自己完結しているので、
+     * どの時点で終了させられても、そこまでを再生・文字起こしできる。
+     * 正常に停止できたときは不要なので RecorderPlugin.stop() が消す。
+     * -------------------------------------------------------------------- */
+    public static final String RECOVERY_SUFFIX = ".rec.aac";
+    private static final int ADTS_FREQ_IDX = 8;   // 16000Hz
+    private java.io.FileOutputStream recoveryOut = null;
+    private String recoveryPath = null;
+
     private int trackIndex = -1;
     private boolean muxerStarted = false;
     private long totalSamples = 0;
@@ -108,6 +122,7 @@ public class AudioRecorderEngine {
             codec.start();
 
             muxer = new MediaMuxer(path, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            openRecovery(path);   // 途中で終了させられたときの保険（失敗しても録音は続ける）
 
             record.startRecording();
             if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
@@ -260,11 +275,20 @@ public class AudioRecorderEngine {
             ByteBuffer ob = codec.getOutputBuffer(idx);
             // 先頭に来る設定情報はファイルには書かない（addTrack 側で扱われる）
             if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) info.size = 0;
-            if (info.size > 0 && muxerStarted && ob != null) {
+            if (info.size > 0 && ob != null) {
+                // 保険ファイルへ先に控える。writeSampleData はバッファを読み進めるので、
+                // 中身を byte[] に取ってから両方へ書く。
+                byte[] frame = new byte[info.size];
                 ob.position(info.offset);
                 ob.limit(info.offset + info.size);
-                muxer.writeSampleData(trackIndex, ob, info);
-                wroteAny = true;
+                ob.get(frame);
+                writeRecovery(frame, info.size);
+                if (muxerStarted) {
+                    ob.position(info.offset);
+                    ob.limit(info.offset + info.size);
+                    muxer.writeSampleData(trackIndex, ob, info);
+                    wroteAny = true;
+                }
             }
             codec.releaseOutputBuffer(idx, false);
             if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) return;
@@ -284,7 +308,56 @@ public class AudioRecorderEngine {
         }
     }
 
+    /** 保険ファイル（ADTS）の書き出し先を開く */
+    private void openRecovery(String path) {
+        try {
+            recoveryPath = path + RECOVERY_SUFFIX;
+            recoveryOut = new java.io.FileOutputStream(recoveryPath);
+        } catch (Exception e) {
+            Log.w(TAG, "保険ファイルを作れませんでした", e);
+            recoveryOut = null;
+            recoveryPath = null;
+        }
+    }
+
+    /** AAC フレームを ADTS ヘッダ付きで保険ファイルへ書き足す */
+    private void writeRecovery(byte[] frame, int len) {
+        java.io.FileOutputStream out = recoveryOut;
+        if (out == null || len <= 0) return;
+        try {
+            out.write(adtsHeader(len));
+            out.write(frame, 0, len);
+        } catch (Exception e) {
+            // 書けなくなっても録音そのものは続ける（保険が無くなるだけ）
+            Log.w(TAG, "保険ファイルへ書けませんでした", e);
+            closeRecovery();
+        }
+    }
+
+    /** ADTS の 7 バイトヘッダ（AAC-LC / 16kHz / モノラル） */
+    private static byte[] adtsHeader(int payloadLen) {
+        int len = payloadLen + 7;
+        byte[] h = new byte[7];
+        h[0] = (byte) 0xFF;                                   // syncword
+        h[1] = (byte) 0xF1;                                   // MPEG-4, Layer 0, CRC なし
+        h[2] = (byte) ((1 << 6) | (ADTS_FREQ_IDX << 2) | 0);  // profile(AAC-LC)=1, 周波数, ch上位ビット
+        h[3] = (byte) ((1 << 6) | ((len >> 11) & 0x03));      // ch=1, 長さ上位2ビット
+        h[4] = (byte) ((len >> 3) & 0xFF);
+        h[5] = (byte) (((len & 0x07) << 5) | 0x1F);
+        h[6] = (byte) 0xFC;
+        return h;
+    }
+
+    private void closeRecovery() {
+        try { if (recoveryOut != null) recoveryOut.close(); } catch (Exception ignored) {}
+        recoveryOut = null;
+    }
+
+    /** 保険ファイルの場所（正常に停止できたら呼び出し側が消す） */
+    public String getRecoveryPath() { return recoveryPath; }
+
     private void release() {
+        closeRecovery();
         try { if (record != null) { if (record.getState() == AudioRecord.STATE_INITIALIZED) record.stop(); record.release(); } }
         catch (Exception ignored) {}
         record = null;

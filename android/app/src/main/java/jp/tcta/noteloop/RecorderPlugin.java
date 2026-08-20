@@ -187,6 +187,8 @@ public class RecorderPlugin extends Plugin {
                     call.reject("録音ファイルが作られませんでした");
                     return;
                 }
+                // 正常に書き切れたので、途中終了に備えた保険ファイルはもう要らない
+                deleteQuietly(new File(path + AudioRecorderEngine.RECOVERY_SUFFIX));
                 JSObject r = new JSObject();
                 r.put("path", path);
                 r.put("size", size);
@@ -197,6 +199,88 @@ public class RecorderPlugin extends Plugin {
                 call.resolve(r);
             });
         }).start();
+    }
+
+    /* ===== 中断した録音の拾い直し =====
+     * 画面オフの長時間録音では、OS がアプリを終了させることがある。
+     * その場合 stop() が呼ばれないため m4a は再生できないが、
+     * 録音エンジンが書いていた保険ファイル（ADTS の .aac）はそのまま使える。
+     * ここでは録音フォルダに取り残されたファイルを探して Web 側へ渡す。 */
+
+    @PluginMethod
+    public void recoverLast(PluginCall call) {
+        Context ctx = getContext();
+        File dir = new File(ctx.getFilesDir(), "recordings");
+        String current = RecordingService.isRecording() ? RecordingService.getCurrentPath() : null;
+        File[] files = dir.listFiles();
+        JSObject r = new JSObject();
+        if (files == null || files.length == 0) { r.put("found", false); call.resolve(r); return; }
+
+        // 正常に停止できた録音では保険ファイルが消えている＝残っていれば「中断された録音」。
+        // m4a は過去の録音の分も残っているので、Web 側が中断と分かっている
+        // パス（call の "path"）が指すものだけを候補にする。
+        final String want = call.getString("path", "");
+        File best = null;
+        boolean bestIsRecovery = false;
+        for (File f : files) {
+            if (f == null || !f.isFile() || f.length() <= 0) continue;
+            String abs = f.getAbsolutePath();
+            // 録音中のファイル（とその保険）は触らない
+            if (current != null && (current.equals(abs)
+                    || (current + AudioRecorderEngine.RECOVERY_SUFFIX).equals(abs))) continue;
+
+            if (abs.endsWith(AudioRecorderEngine.RECOVERY_SUFFIX)) {
+                // 中断が分かっているパスの保険を最優先、それ以外は新しいものを選ぶ
+                boolean wanted = want != null && !want.isEmpty()
+                        && abs.equals(want + AudioRecorderEngine.RECOVERY_SUFFIX);
+                if (best == null || !bestIsRecovery || wanted
+                        || f.lastModified() > best.lastModified()) {
+                    best = f;
+                    bestIsRecovery = true;
+                    if (wanted) break;
+                }
+            } else if (!bestIsRecovery && want != null && !want.isEmpty() && abs.equals(want)) {
+                // 保険が無い機種（MediaRecorder で録った場合）は、そのファイル自体を渡す。
+                // 途中終了だと再生できないことがあるので、Web 側で確かめてから使う。
+                best = f;
+            }
+        }
+        if (best == null) { r.put("found", false); call.resolve(r); return; }
+
+        r.put("found", true);
+        r.put("path", best.getAbsolutePath());
+        r.put("size", best.length());
+        r.put("modifiedAt", best.lastModified());
+        r.put("kind", bestIsRecovery ? "recovery" : "file");
+        r.put("mimeType", bestIsRecovery ? "audio/aac" : "audio/mp4");
+        r.put("url", com.getcapacitor.FileUtils.getPortablePath(
+                getContext(), getBridge().getLocalUrl(), android.net.Uri.fromFile(best)));
+        call.resolve(r);
+    }
+
+    /** 拾い直しが済んだ（または不要と分かった）ファイルを片付ける */
+    @PluginMethod
+    public void discardRecovered(PluginCall call) {
+        Context ctx = getContext();
+        File dir = new File(ctx.getFilesDir(), "recordings");
+        String current = RecordingService.isRecording() ? RecordingService.getCurrentPath() : null;
+        File[] files = dir.listFiles();
+        int removed = 0;
+        if (files != null) {
+            for (File f : files) {
+                if (f == null || !f.isFile()) continue;
+                if (current != null && (current.equals(f.getAbsolutePath())
+                        || (current + AudioRecorderEngine.RECOVERY_SUFFIX).equals(f.getAbsolutePath()))) continue;
+                if (deleteQuietly(f)) removed++;
+            }
+        }
+        JSObject r = new JSObject();
+        r.put("removed", removed);
+        call.resolve(r);
+    }
+
+    private static boolean deleteQuietly(File f) {
+        try { return f != null && f.exists() && f.delete(); } catch (Exception e) { return false; }
     }
 
     /* ===== 一時停止 / 再開 =====

@@ -311,6 +311,19 @@ select:focus, input:focus, textarea:focus {
   color: var(--danger); border-radius: var(--radius-sm);
   padding: 11px 14px; font-size: 13.5px; margin-top: 12px;
 }
+/* 中断された録音を復元したときの案内 */
+.recover-box {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  background: color-mix(in srgb, var(--brand1) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brand1) 35%, var(--border));
+  border-radius: var(--radius-sm);
+  padding: 12px 14px; margin-top: 12px;
+}
+.recover-box .recover-text { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text); }
+.recover-box .recover-text strong { font-size: 13.5px; font-weight: 800; color: var(--brand1); }
+.recover-box .recover-text span { color: var(--muted); font-size: 12.5px; }
+.recover-box .recover-actions { display: flex; gap: 8px; flex: none; }
+
 /* 通知が切られているときの案内（エラーではないので警告色にする） */
 .notify-warn {
   background: color-mix(in srgb, var(--amber) 10%, var(--surface));
