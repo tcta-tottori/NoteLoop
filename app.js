@@ -40,6 +40,7 @@ const progressWrap   = $('progressWrap');
 const progressBar    = $('progressBar');
 const cancelProcBtn  = $('cancelProcBtn');
 const errorBox       = $('errorBox');
+const recoverBox     = $('recoverBox');
 const notifyWarn     = $('notifyWarn');
 const notifyWarnText = $('notifyWarnText');
 const notifyWarnBtn  = $('notifyWarnBtn');
@@ -143,7 +144,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.9.2';
+const APP_VERSION = 'Ver.9.3';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -981,6 +982,7 @@ function startSegmentRecorder(stream) {
       // 端末に録音を止められていた時間は加算されない（＝経過時間との差が欠落）。
       if (recordChunkAt) capturedMs += Math.min(now - recordChunkAt, REC_TIMESLICE_MS * 2);
       chunks.push(e.data);
+      persistRecChunk(e.data);   // アプリが終了させられても残るよう端末へ書き出す
       recordChunkAt = now;
     }
   };
@@ -1057,6 +1059,7 @@ async function restartRecordSegment(reacquireMic) {
   try {
     await sealCurrentSegment();
     if (!recording) return false;
+    beginRecSegment();   // 保存済みチャンクも新しいセグメントとして分ける
 
     if (reacquireMic) {
       const old = mediaStream;
@@ -1225,6 +1228,254 @@ function showAudioShortfallWarning(wallSec, audioSec) {
     `録音中は他のアプリに切り替えないようにすると安定します。` +
     `長い会議では、端末を充電しながら画面を点けたままにすると確実です。`;
   audioWarn.hidden = false;
+}
+
+/* =========================================================
+ * 録音セッションの永続化（アプリが終了させられても録音を残す）
+ *   画面を消したまま長い会議を録っていると、OS がメモリ確保のために
+ *   アプリ／タブを終了させることがある。停止時にまとめて保存する作りでは
+ *   その瞬間に録音が丸ごと消えるため、録音中から端末へ書き出しておく。
+ *     ・音声   : ブラウザ版は届いたチャンクを IndexedDB へ追記。
+ *                アプリ版は録音サービスがファイルへ書き続けている。
+ *     ・文字起こし・会議情報: localStorage へ定期スナップショット。
+ *   次回起動時に recoverInterruptedSession() が拾い、履歴へ保存する。
+ * =======================================================*/
+const ACTIVE_KEY = 'noteloop_active_rec_v1';
+const SNAPSHOT_INTERVAL_MS = 5000;
+
+let recSessionId = null;      // 進行中の録音セッションID
+let recSegIdx = 0;            // セグメント番号（録り直しのたびに増える）
+let recChunkSeq = 0;          // 現在のセグメント内の連番
+let recChunkWrites = Promise.resolve();   // IndexedDB への書き込み順を保つキュー
+let recPersisted = true;      // チャンクを IndexedDB に保存できているか
+let snapshotTimer = null;
+let lastSnapshotAt = 0;
+
+function loadActiveSession() {
+  try { return JSON.parse(localStorage.getItem(ACTIVE_KEY)) || null; } catch (_) { return null; }
+}
+/** セッション情報を部分更新して保存（失敗しても録音は続ける） */
+function saveActiveSession(patch) {
+  if (!recSessionId) return;
+  try {
+    const cur = loadActiveSession() || {};
+    localStorage.setItem(ACTIVE_KEY, JSON.stringify(
+      Object.assign({}, cur, patch, { id: recSessionId, updatedAt: Date.now() })));
+  } catch (_) { /* 容量超過など。録音自体は続行する */ }
+}
+function clearActiveSession() { try { localStorage.removeItem(ACTIVE_KEY); } catch (_) {} }
+
+/**
+ * 録音セッションを開始する。
+ * kind: 'web'（MediaRecorder）/ 'native'（アプリ版の録音サービス）
+ */
+function beginRecSession(kind, extra) {
+  recSessionId = 'rec-' + Date.now() + '-' + Math.floor(performance.now());
+  recSegIdx = 0;
+  recChunkSeq = 0;
+  recPersisted = true;
+  recChunkWrites = Promise.resolve();
+  // 保存領域を永続化してもらう（バックグラウンドでの自動削除を避ける）。
+  // 録音開始を遅らせないよう結果は待たない。
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) {}
+  if (kind === 'web') idbPruneChunks(recSessionId);   // 前回の残骸を掃除（裏で実行）
+  saveActiveSession(Object.assign({ kind, startedAt: Date.now(), chunks: 0, mime: '', transcript: '' }, extra || {}));
+  snapshotRecSession();
+  clearInterval(snapshotTimer);
+  snapshotTimer = setInterval(snapshotRecSession, SNAPSHOT_INTERVAL_MS);
+}
+
+/** 録音中の文字起こし・会議情報をスナップショット保存 */
+function snapshotRecSession() {
+  lastSnapshotAt = Date.now();
+  if (!recSessionId) return;
+  saveActiveSession({
+    transcript: liveTranscript.value || '',
+    name: meetingName.value || '',
+    date: meetingDate.value || '',
+    participants: participants.slice(),
+    chunks: recChunkSeq,
+    segments: recSegIdx + 1,
+    durationMs: elapsedMs(),
+  });
+}
+
+/**
+ * 文字起こしが更新されたときのスナップショット（5秒に1回まで）。
+ * バックグラウンドではタイマーが強く間引かれるため、
+ * 認識結果のイベント側からも書き出しておく。
+ */
+function maybeSnapshot() {
+  if (!recSessionId) return;
+  if (Date.now() - lastSnapshotAt < SNAPSHOT_INTERVAL_MS) return;
+  snapshotRecSession();
+}
+
+/** 録り直し（新しいセグメント）に入ったことを記録する */
+function beginRecSegment() {
+  if (!recSessionId) return;
+  recSegIdx++;
+  recChunkSeq = 0;
+}
+
+/** MediaRecorder から届いたチャンクを保存（IndexedDB 優先・失敗時はメモリのみ） */
+function persistRecChunk(blob) {
+  if (!recSessionId || !recPersisted) return;
+  const seg = recSegIdx, seq = recChunkSeq++;
+  recChunkWrites = recChunkWrites
+    .then(() => idbPutChunk(recSessionId, seg, seq, blob))
+    .then(() => { saveActiveSession({ chunks: recChunkSeq, segments: recSegIdx + 1, mime: blob.type || '' }); })
+    .catch(() => { recPersisted = false; });   // 以後はメモリ（recordedBlobs）だけが頼り
+}
+
+/**
+ * 履歴へ保存できたので、進行中セッションの一時データを片付ける。
+ * 保存を確認できていない場合（dropChunks=false）はチャンクを残し、
+ * 次回起動時の復元にまわす。
+ */
+async function finishRecSession(dropChunks) {
+  clearInterval(snapshotTimer); snapshotTimer = null;
+  const sid = recSessionId;
+  recSessionId = null;
+  if (dropChunks === false) return;   // 復元用に残す（active セッションもそのまま）
+  clearActiveSession();
+  await idbDelChunks(sid);
+}
+
+/** バックグラウンドへ回る／終了させられる直前に、確実に書き出す */
+function flushRecording() {
+  if (!recording) return;
+  try { if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.requestData(); } catch (_) {}
+  snapshotRecSession();
+}
+
+/* ===== 中断された録音の復元 ===== */
+
+/**
+ * 前回の録音が中断されていたら復元する（起動時に1回）。
+ * 復元した内容はそのまま履歴へ保存し、案内バナーで知らせる。
+ */
+async function recoverInterruptedSession() {
+  let meta = loadActiveSession();
+  // アプリ版は、記録が残っていなくても保険ファイルが残っていれば拾い直す
+  // （最初のスナップショットより前に終了させられた場合など）。
+  if ((!meta || !meta.id) && NATIVE) {
+    meta = { id: 'rec-' + Date.now() + '-0', kind: 'native', nativePath: '' };
+  }
+  if (!meta || !meta.id) { idbPruneChunks(null); return; }
+  clearActiveSession();   // 二重復元を防ぐため先に消す
+
+  let blob = null;
+  try {
+    blob = meta.kind === 'native' ? await recoverNativeAudio(meta) : await recoverWebAudio(meta);
+  } catch (_) { blob = null; }
+
+  const transcript = (meta.transcript || '').trim();
+  if ((!blob || !blob.size) && !transcript) { await idbDelChunks(meta.id); return; }
+  // 音声が取り込めていないのに文字起こしだけある場合も、そのまま履歴に残す
+
+  const id = meta.id;
+  let audio = null;
+  let sec = 0;
+  if (blob && blob.size) {
+    try { sec = await probeDurationSec(blob); } catch (_) { sec = 0; }
+    try {
+      await idbPut(id, blob);
+      audio = { ext: extFromMime(blob.type), size: blob.size, sec: Math.round(sec || 0) };
+    } catch (_) { audio = null; }
+  }
+  const entry = {
+    id,
+    name: (meta.name || '').trim() || autoTitleFromTranscript(transcript) || recoveredTitle(meta),
+    date: meta.date || todayStr(),
+    participants: meta.participants || [],
+    transcript, summary: [], decisions: [], todos: [],
+    audio, ts: meta.updatedAt || Date.now(), auto: true, recovered: true,
+    startedAt: meta.startedAt || null,
+  };
+  const list = loadStore();
+  const i = list.findIndex((x) => x && x.id === id);
+  if (i >= 0) list[i] = Object.assign({}, list[i], entry); else list.push(entry);
+  while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
+  saveStore(list);
+  renderHistory();
+
+  await idbDelChunks(id);
+  if (meta.kind === 'native' && blob && blob.size) await discardNativeRecovered();
+  showRecoverBanner(entry, meta);
+}
+
+/** 中断録音の既定タイトル（録音を始めた日時から作る） */
+function recoveredTitle(meta) {
+  const d = new Date(meta.startedAt || meta.updatedAt || Date.now());
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `録音 ${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
+}
+
+/**
+ * アプリ版: 録音サービスが書いていたファイルを拾い直す。
+ * 正常に停止できた録音では保険ファイル（.rec.aac）が消えているので、
+ * 残っていれば「中断された録音」。ADTS なので途中で切れていても再生できる。
+ */
+async function recoverNativeAudio(meta) {
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.recoverLast !== 'function') return null;   // 未対応の版のアプリ
+  let info = null;
+  try { info = await rec.recoverLast({ path: meta.nativePath || '' }); } catch (_) { return null; }
+  if (!info || !info.found || !info.url || !info.size) return null;
+  try {
+    const res = await fetch(info.url);
+    const blob = await res.blob();
+    if (!blob || !blob.size) return null;
+    return new Blob([blob], { type: info.mimeType || 'audio/aac' });
+  } catch (_) { return null; }
+}
+
+/** 拾い直しが済んだ録音ファイルをアプリ側から片付ける */
+async function discardNativeRecovered() {
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.discardRecovered !== 'function') return;
+  try { await rec.discardRecovered(); } catch (_) {}
+}
+
+/** ブラウザ版: IndexedDB に残ったチャンクから音声を組み立てる */
+async function recoverWebAudio(meta) {
+  const segs = await idbGetSegments(meta.id);
+  if (!segs.length) return null;
+  // セグメントごとに1本の音声にする（チャンクは同じ MediaRecorder のものだけを繋ぐ）
+  const blobs = segs
+    .map((parts) => new Blob(parts, { type: meta.mime || parts[0].type || 'audio/webm' }))
+    .filter((b) => b.size > 0);
+  if (!blobs.length) return null;
+  if (blobs.length === 1) return blobs[0];
+  // 複数セグメントは既存の結合処理で1本の WAV にまとめる
+  try { return await mergeSegmentsToWav(blobs); }
+  catch (_) { return blobs.reduce((a, b) => (b.size > a.size ? b : a), blobs[0]); }
+}
+
+/** 復元したことを知らせるバナー（そのまま開ける） */
+function showRecoverBanner(entry, meta) {
+  if (!recoverBox) return;
+  const mins = Math.round(((meta && meta.durationMs) || 0) / 60000);
+  const detail = [
+    mins ? `約${mins}分` : '',
+    entry.audio ? `音声あり（${formatBytes(entry.audio.size)}）` : '音声なし',
+    entry.transcript ? '文字起こしあり' : '',
+  ].filter(Boolean).join(' ・ ');
+  recoverBox.innerHTML = `<div class="recover-text"><strong>前回の録音を復元しました</strong><span></span></div>
+    <div class="recover-actions">
+      <button type="button" class="chip-btn" id="recoverOpen">開く</button>
+      <button type="button" class="chip-btn" id="recoverClose">閉じる</button>
+    </div>`;
+  recoverBox.querySelector('.recover-text span').textContent =
+    `アプリが終了したため保存できていなかった録音（${detail}）を履歴に保存しました。`;
+  recoverBox.hidden = false;
+  recoverBox.querySelector('#recoverOpen').addEventListener('click', () => {
+    recoverBox.hidden = true;
+    openMinutes(entry);
+  });
+  recoverBox.querySelector('#recoverClose').addEventListener('click', () => { recoverBox.hidden = true; });
 }
 
 /* =========================================================
@@ -1418,6 +1669,8 @@ async function startRecording() {
   // （同時に掴むと機種によっては録音が失敗するため）。波形表示も行わない。
   if (NATIVE) {
     if (!(await startNativeRecording())) return;
+    // 中断時に録音ファイルを拾い直せるよう、セッションを記録する
+    beginRecSession('native', { nativePath: nativeRecordingPath || '' });
     liveMode = 'off';
     activeEngine = 'whisper';
     recording = true;
@@ -1441,6 +1694,7 @@ async function startRecording() {
   // AudioContext は認識を阻害しうるため使わず、MediaRecorder で直接録音する
   // （軽量にして Web Speech と共存させる）。録音に失敗しても字幕は継続する。
   if (liveMode === 'webspeech') {
+    beginRecSession('web');   // 中断復元用のセッションを先に用意
     try {
       mediaStream = await getMicStream();
       recordedBlobs = [];
@@ -1477,6 +1731,8 @@ async function startRecording() {
     }
     return;
   }
+
+  beginRecSession('web');   // 中断復元用のセッションを用意
 
   // 確定に Whisper を使う場合のバックエンドを確定
   activeDevice = await resolveDevice(backendSelect ? backendSelect.value : 'auto');
@@ -1520,7 +1776,9 @@ async function stopRecording() {
 
   clearInterval(timerInterval);
   clearInterval(liveTimer); liveTimer = null;
+  clearInterval(snapshotTimer); snapshotTimer = null;
   stopRecordWatchdog();
+  snapshotRecSession();   // 停止時点の文字起こしも書き出しておく
   clearRecordingNotification();
   // 凍結防止（無音再生・アプリ版はフォアグラウンドサービス）はここでは止めない。
   // 録音の保存 → 文字起こし → 議事録づくりまで、画面を消しても続くように
@@ -1552,6 +1810,11 @@ async function stopRecording() {
   activeRecordingId = null;
   finalCanceled = false;
   if (recordedBlob) await saveRecordingNow();
+  // 履歴に音声が入ったので、復元用の一時データを片付ける。
+  // 保存できていなければ残しておき、次回起動時の復元にまわす
+  // （アプリ版で音声を取り込めなかった場合も、録音ファイルは端末に残っている）。
+  const audioSaved = !!(activeRecordingId && historyHasAudio(activeRecordingId));
+  await finishRecSession(audioSaved || (!recordedBlob && !NATIVE));
 
   const gotLiveText = liveTranscript.value.trim().length > 0;
   // このあと Gemini へ自動で投げるか（Whisper のフォールバックを省く判断に使う）
@@ -1928,6 +2191,7 @@ function onSpeechResult(e) {
   liveTranscript.value = composeSpeech(interim);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
   if (recording) renderLiveNow();   // 録音中のリアルタイム表示へ反映
+  maybeSnapshot();                  // 中断復元用に書き出しておく
   lastSttTs = Date.now();
   sttActivity = 0.9; // 発話に反応して波を動かす
 }
@@ -2680,6 +2944,7 @@ function appendTranscript(text) {
   liveTranscript.value = formatTranscript(next);
   liveTranscript.scrollTop = liveTranscript.scrollHeight;
   if (recording) renderLiveNow();   // 録音中のリアルタイム表示へ反映
+  maybeSnapshot();                  // 中断復元用に書き出しておく
 }
 /* =========================================================
  * セッションのリセット（履歴はそのまま残す）
@@ -4024,12 +4289,16 @@ if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener ===
 /* =========================================================
  * IndexedDB（録音音声の保存）
  * =======================================================*/
-const IDB_NAME = 'noteloop', IDB_STORE = 'audio';
+const IDB_NAME = 'noteloop', IDB_STORE = 'audio', IDB_LIVE = 'live';
 function idbOpen() {
   return new Promise((res, rej) => {
     let r;
-    try { r = indexedDB.open(IDB_NAME, 1); } catch (e) { return rej(e); }
-    r.onupgradeneeded = () => { try { r.result.createObjectStore(IDB_STORE); } catch (_) {} };
+    try { r = indexedDB.open(IDB_NAME, 2); } catch (e) { return rej(e); }
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      try { if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE); } catch (_) {}
+      try { if (!db.objectStoreNames.contains(IDB_LIVE)) db.createObjectStore(IDB_LIVE); } catch (_) {}
+    };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
   });
@@ -4037,6 +4306,88 @@ function idbOpen() {
 function idbPut(key, val) { return idbOpen().then((db) => new Promise((res, rej) => { const tx = db.transaction(IDB_STORE, 'readwrite'); tx.objectStore(IDB_STORE).put(val, key); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); })); }
 function idbGet(key) { return idbOpen().then((db) => new Promise((res, rej) => { const tx = db.transaction(IDB_STORE, 'readonly'); const rq = tx.objectStore(IDB_STORE).get(key); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error); })); }
 function idbDel(key) { return idbOpen().then((db) => new Promise((res) => { const tx = db.transaction(IDB_STORE, 'readwrite'); tx.objectStore(IDB_STORE).delete(key); tx.oncomplete = () => res(); tx.onerror = () => res(); })).catch(() => {}); }
+
+/* ---- 録音中のチャンク（'live' ストア） ----------------------------------
+ * 録音を止めるまでメモリに抱えたままだと、画面オフの長い会議で
+ * OS にアプリを終了させられた瞬間に全部消える。届いたそばから
+ * ここへ書き出しておき、次回起動時に拾い直す。
+ * キーは `<セッションID>#<セグメント3桁>#<連番6桁>`。
+ * セグメント（録り直しの区切り）ごとに1本の音声になるので、
+ * 復元時はセグメント単位で Blob にして mergeSegmentsToWav で1本へ繋ぐ。
+ * ---------------------------------------------------------------------- */
+function liveKey(sid, seg, seq) {
+  return sid + '#' + String(seg).padStart(3, '0') + '#' + String(seq).padStart(6, '0');
+}
+function liveRange(sid) { return IDBKeyRange.bound(sid + '#', sid + '#\uffff'); }
+
+/** 録音チャンクを1つ保存（順序は呼び出し側のキューで担保） */
+function idbPutChunk(sid, seg, seq, blob) {
+  return idbOpen().then((db) => new Promise((res, rej) => {
+    const tx = db.transaction(IDB_LIVE, 'readwrite');
+    tx.objectStore(IDB_LIVE).put(blob, liveKey(sid, seg, seq));
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+    tx.onabort = () => rej(tx.error);
+  }));
+}
+
+/** セッションのチャンクをセグメントごとにまとめて返す（[[blob,...], ...]） */
+function idbGetSegments(sid) {
+  return idbOpen().then((db) => new Promise((res, rej) => {
+    const segs = [];
+    let curSeg = null, cur = null;
+    const tx = db.transaction(IDB_LIVE, 'readonly');
+    const rq = tx.objectStore(IDB_LIVE).openCursor(liveRange(sid));   // キー順＝録音順
+    rq.onsuccess = () => {
+      const c = rq.result;
+      if (!c) return;
+      const seg = String(c.key).split('#')[1] || '000';
+      if (seg !== curSeg) { curSeg = seg; cur = []; segs.push(cur); }
+      cur.push(c.value);
+      c.continue();
+    };
+    tx.oncomplete = () => res(segs);
+    tx.onerror = () => rej(tx.error);
+  })).catch(() => []);
+}
+
+/** セッションのチャンクを全消去（履歴に保存できた後の後片付け） */
+function idbDelChunks(sid) {
+  if (!sid) return Promise.resolve();
+  return idbOpen().then((db) => new Promise((res) => {
+    const tx = db.transaction(IDB_LIVE, 'readwrite');
+    tx.objectStore(IDB_LIVE).delete(liveRange(sid));
+    tx.oncomplete = () => res();
+    tx.onerror = () => res();
+  })).catch(() => {});
+}
+
+/**
+ * 迷子のチャンク（復元済み・破棄済みセッションの残骸）を掃除する。
+ * 別のタブで録音中のデータを巻き込まないよう、古いもの（12時間以上前）だけ消す。
+ */
+const PRUNE_AGE_MS = 12 * 60 * 60 * 1000;
+function sessionStartedAt(sid) {
+  const m = /^rec-(\d+)/.exec(sid || '');
+  return m ? Number(m[1]) : 0;
+}
+function idbPruneChunks(keepId) {
+  return idbOpen().then((db) => new Promise((res) => {
+    const now = Date.now();
+    const tx = db.transaction(IDB_LIVE, 'readwrite');
+    const rq = tx.objectStore(IDB_LIVE).openCursor();
+    rq.onsuccess = () => {
+      const c = rq.result;
+      if (!c) return;
+      const sid = String(c.key).split('#')[0];
+      const started = sessionStartedAt(sid);
+      if (sid !== keepId && (!started || now - started > PRUNE_AGE_MS)) c.delete();
+      c.continue();
+    };
+    tx.oncomplete = () => res();
+    tx.onerror = () => res();
+  })).catch(() => {});
+}
 
 /* =========================================================
  * 録音終了時の自動保存（文字起こし＋音声、最大10件）
@@ -4077,6 +4428,12 @@ async function saveRecordingNow() {
   while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
   saveStore(list);
   renderHistory();
+}
+
+/** 履歴の該当エントリに音声が保存されているか（復元用データを消してよいかの判断） */
+function historyHasAudio(id) {
+  const e = loadStore().find((x) => x && x.id === id);
+  return !!(e && e.audio);
 }
 
 /**
@@ -5994,6 +6351,8 @@ document.querySelectorAll('.man-toc button[data-goto]').forEach((b) => {
 // （履歴からその場で作り直せるようにするため）
 sweepStaleAiPending();
 seedIfEmpty();
+// 前回の録音がアプリの終了などで中断していたら、拾い直して履歴へ保存する
+recoverInterruptedSession().catch(() => {});
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
 // 新しい版が出たら自動で反映されるよう、更新検出→再読み込みまで行う。
@@ -6022,6 +6381,14 @@ if ('serviceWorker' in navigator && !NATIVE && !window.NOTELOOP_NATIVE_BUILD) {
     });
   });
 }
+
+// バックグラウンドへ回る／終了させられる直前に、録音データを確実に書き出す
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushRecording();
+});
+window.addEventListener('pagehide', flushRecording);
+window.addEventListener('freeze', flushRecording);        // タブ凍結（Chrome）
+window.addEventListener('beforeunload', flushRecording);
 
 // 画面復帰時: 録音中・AI処理中なら、止まりかけていた処理を動かし直す（バックグラウンド対策）
 document.addEventListener('visibilitychange', () => {
