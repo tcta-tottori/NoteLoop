@@ -154,6 +154,8 @@ npx serve .
 | `manifest.webmanifest` | PWA マニフェスト（アプリ名・アイコン・表示形式） |
 | `sw.js` | Service Worker（アプリシェルをキャッシュし、インストール可能＆起動高速化） |
 | `icons/` | アプリアイコン（192 / 512、通常＋maskable） |
+| `docs/pc-ui-design-spec.md` | **UIデザイン仕様書（PC / ダーク / 左固定メニュー）**。Claude Code にそのまま渡してPC用HTMLを作らせるためのデータ |
+| `docs/pc-ui-starter.html` | 上記仕様を実装した**PC用ひな形HTML**（1ファイル完結・外部依存なし） |
 | `.nojekyll` | GitHub Pages の Jekyll 処理を無効化 |
 
 ### 議事録化は Claude に一本化
@@ -167,6 +169,24 @@ npx serve .
 そのままメール作成や `.txt` / `.md` / Word の書き出しに使えます。
 
 文字起こしは `worker.js` に分離しているため、将来サーバ側 `faster-whisper` + WebSocket へ移行しやすい構成です。
+
+---
+
+## このUIを他のPC用HTMLに流用する
+
+NOTELOOP の見た目（マットな黒ベースの配色・パネル・ボタン・タイポグラフィ）を、
+**PCのブラウザで開く単体HTMLファイル**に流用するためのデザインデータを `docs/` に用意しています。
+本体アプリも 1024px 以上では**左固定サイドバー**になるため、内容は本体の実装をそのまま写したものです。
+
+- `docs/pc-ui-design-spec.md` — トークン・レイアウト・全コンポーネントのCSSをまとめた仕様書
+- `docs/pc-ui-starter.html` — 仕様どおりに実装した動くひな形（ブラウザで直接開けます）
+
+Claude Code への渡し方：
+
+```
+docs/pc-ui-design-spec.md のデザイン仕様に従って、◯◯（作りたい画面）の単体HTMLファイルを作ってください。
+外部ファイルに依存せず、1ファイルで完結させてください。
+```
 
 ---
 
