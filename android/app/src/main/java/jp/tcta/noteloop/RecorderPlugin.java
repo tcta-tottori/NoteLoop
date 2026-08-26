@@ -3,6 +3,7 @@ package jp.tcta.noteloop;
 import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioFormat;
@@ -12,9 +13,12 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.provider.Settings;
+import android.util.Base64;
 
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.FileProvider;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -25,6 +29,9 @@ import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
+import java.util.HashMap;
 
 /**
  * Web 側（app.js）から呼ぶネイティブ録音の入口。
@@ -550,5 +557,155 @@ public class RecorderPlugin extends Plugin {
             if (f.exists()) f.delete();
         }
         call.resolve();
+    }
+
+    /* ===== 録音データの保存（端末の「ダウンロード」フォルダへ） =====
+     * アプリ版は WebView なので、ブラウザのように <a download> やプレーヤーの
+     * 「ダウンロード」ではファイルを保存できない（押しても何も起きない）。
+     * そこで Web 側から音声を分割して受け取り、ここでファイルとして書き出す。
+     * 長時間録音は数十MBになるため、一度に base64 で渡すとメモリが足りなくなる。
+     * saveStart →（数MBずつ）saveChunk → saveFinish の順に呼ぶこと。 */
+
+    private static final class SaveJob {
+        OutputStream out;
+        Uri uri;          // Android 10 以降: MediaStore の「ダウンロード」
+        File file;        // Android 9 以前: アプリのキャッシュ（最後に共有シートで渡す）
+        String name;
+        String mimeType;
+        long bytes;
+    }
+
+    private final HashMap<String, SaveJob> saveJobs = new HashMap<>();
+    private int saveSeq = 0;
+
+    /** ファイル名から保存に使えない文字を取り除く */
+    private static String sanitizeName(String name, String fallback) {
+        if (name == null) return fallback;
+        String s = name.replaceAll("[\\\\/:*?\"<>|\\r\\n]", "_").trim();
+        if (s.startsWith(".")) s = "_" + s;
+        if (s.length() > 120) s = s.substring(0, 120);
+        return s.isEmpty() ? fallback : s;
+    }
+
+    @PluginMethod
+    public void saveStart(PluginCall call) {
+        String name = sanitizeName(call.getString("name"), "recording.m4a");
+        String mime = call.getString("mimeType", "audio/mp4");
+        if (mime == null || mime.isEmpty()) mime = "audio/mp4";
+        SaveJob job = new SaveJob();
+        job.name = name;
+        job.mimeType = mime;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10 以降は権限なしで「ダウンロード」へ書ける。
+                // 書き終わるまで IS_PENDING を立て、途中のファイルを他アプリに見せない。
+                ContentValues v = new ContentValues();
+                v.put(MediaStore.Downloads.DISPLAY_NAME, name);
+                v.put(MediaStore.Downloads.MIME_TYPE, mime);
+                v.put(MediaStore.Downloads.IS_PENDING, 1);
+                job.uri = getContext().getContentResolver()
+                        .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                if (job.uri == null) { call.reject("保存先を作れませんでした"); return; }
+                job.out = getContext().getContentResolver().openOutputStream(job.uri);
+            } else {
+                // Android 9 以前は「ダウンロード」へ直接書くと権限が要るため、
+                // 自分のキャッシュに書いてから共有シートで渡す。
+                File dir = new File(getContext().getCacheDir(), "exports");
+                if (!dir.exists()) dir.mkdirs();
+                job.file = new File(dir, name);
+                deleteQuietly(job.file);
+                job.out = new FileOutputStream(job.file);
+            }
+            if (job.out == null) { call.reject("保存先を開けませんでした"); return; }
+        } catch (Exception e) {
+            call.reject("保存を始められませんでした: " + e.getMessage());
+            return;
+        }
+        String token = "save-" + (++saveSeq);
+        saveJobs.put(token, job);
+        JSObject r = new JSObject();
+        r.put("token", token);
+        call.resolve(r);
+    }
+
+    @PluginMethod
+    public void saveChunk(PluginCall call) {
+        SaveJob job = saveJobs.get(call.getString("token", ""));
+        if (job == null) { call.reject("保存が始まっていません"); return; }
+        String data = call.getString("data", "");
+        try {
+            byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+            job.out.write(bytes);
+            job.bytes += bytes.length;
+        } catch (Exception e) {
+            call.reject("書き込みに失敗しました: " + e.getMessage());
+            return;
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void saveFinish(PluginCall call) {
+        final String token = call.getString("token", "");
+        final SaveJob job = saveJobs.remove(token);
+        if (job == null) { call.reject("保存が始まっていません"); return; }
+        try {
+            job.out.flush();
+            job.out.close();
+        } catch (Exception ignored) { }
+        if (job.bytes <= 0) {
+            abandon(job);
+            call.reject("保存できる音声がありませんでした");
+            return;
+        }
+        JSObject r = new JSObject();
+        r.put("name", job.name);
+        r.put("size", job.bytes);
+        if (job.uri != null) {
+            try {
+                ContentValues v = new ContentValues();
+                v.put(MediaStore.Downloads.IS_PENDING, 0);
+                getContext().getContentResolver().update(job.uri, v, null, null);
+            } catch (Exception e) {
+                call.reject("保存を仕上げられませんでした: " + e.getMessage());
+                return;
+            }
+            r.put("location", "downloads");
+            call.resolve(r);
+            return;
+        }
+        // Android 9 以前: 保存先を選べるよう共有シートを出す
+        try {
+            Uri shared = FileProvider.getUriForFile(
+                    getContext(), getContext().getPackageName() + ".fileprovider", job.file);
+            final Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType(job.mimeType);
+            send.putExtra(Intent.EXTRA_STREAM, shared);
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            final Intent chooser = Intent.createChooser(send, "録音データの保存先");
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            runOnMain(() -> getContext().startActivity(chooser));
+            r.put("location", "share");
+        } catch (Exception e) {
+            call.reject("保存先アプリへ渡せませんでした: " + e.getMessage());
+            return;
+        }
+        call.resolve(r);
+    }
+
+    /** 途中でやめたときの後始末（書きかけを残さない） */
+    @PluginMethod
+    public void saveCancel(PluginCall call) {
+        SaveJob job = saveJobs.remove(call.getString("token", ""));
+        if (job != null) abandon(job);
+        call.resolve();
+    }
+
+    private void abandon(SaveJob job) {
+        try { if (job.out != null) job.out.close(); } catch (Exception ignored) { }
+        if (job.uri != null) {
+            try { getContext().getContentResolver().delete(job.uri, null, null); } catch (Exception ignored) { }
+        }
+        if (job.file != null) deleteQuietly(job.file);
     }
 }

@@ -351,6 +351,7 @@ select:focus, input:focus, textarea:focus {
 .audio-card audio { width: 100%; margin: 8px 0 10px; }
 .audio-size { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .audio-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+#audioSaveHint { margin-top: 8px; }
 .chip-btn {
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text);

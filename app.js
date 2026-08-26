@@ -48,6 +48,9 @@ const audioWrap      = $('audioWrap');
 const player         = $('player');
 const audioSize      = $('audioSize');
 const audioWarn      = $('audioWarn');
+const saveAudioBtn   = $('saveAudioBtn');
+const shareAudioBtn  = $('shareAudioBtn');
+const audioSaveHint  = $('audioSaveHint');
 const liveTranscript = $('liveTranscript');
 // 録音中のリアルタイム表示
 const liveNowPanel   = $('liveNowPanel');
@@ -144,7 +147,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.9.3';
+const APP_VERSION = 'Ver.9.4';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -351,6 +354,8 @@ function showScreen(id, title) {
 /** 録音音声の再生カードを表示／非表示（音声ができてから表示する） */
 function setAudioAvailable(has) {
   if (audioWrap) audioWrap.hidden = !has;
+  clearAudioSaveHint();
+  refreshAudioSaveButtons();
 }
 function refreshAudioPanel() { setAudioAvailable(!!recordedBlob); }
 
@@ -1229,6 +1234,156 @@ function showAudioShortfallWarning(wallSec, audioSec) {
     `長い会議では、端末を充電しながら画面を点けたままにすると確実です。`;
   audioWarn.hidden = false;
 }
+
+/* =========================================================
+ * 録音データの保存（音声ファイルの書き出し）
+ *   プレーヤー右端の「︙」→「ダウンロード」は、音声が blob（端末内の一時データ）の
+ *   ため端末によっては何も起きない。アプリ側に保存ボタンを用意して確実に保存できるようにし、
+ *   ブラウザ標準メニューのダウンロードは controlsList="nodownload" で隠している。
+ * =======================================================*/
+
+/** 保存ボタンの下に結果を表示する（成功も失敗も必ず何か出す） */
+function setAudioSaveHint(kind, html) {
+  if (!audioSaveHint) return;
+  if (!html) { audioSaveHint.hidden = true; audioSaveHint.innerHTML = ''; audioSaveHint.className = 'field-hint'; return; }
+  audioSaveHint.className = 'field-hint' + (kind ? ' ' + kind : '');
+  audioSaveHint.innerHTML = html;
+  audioSaveHint.hidden = false;
+}
+function clearAudioSaveHint() { setAudioSaveHint('', ''); }
+
+/** 録音音声を File にする（共有シートに渡すため） */
+function recordedAudioFile() {
+  if (!recordedBlob) return null;
+  return new File([recordedBlob], audioShareName(), { type: recordedBlob.type || 'audio/mp4' });
+}
+
+/** この端末が音声ファイルの共有（OSの共有シート）に対応しているか */
+function canShareAudio() {
+  const file = recordedAudioFile();
+  if (!file) return false;
+  try { return !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] })); }
+  catch (_) { return false; }
+}
+
+/** 共有できる端末では「別のアプリへ送る」も出す（保存先を選びたいとき用） */
+function refreshAudioSaveButtons() {
+  if (saveAudioBtn) saveAudioBtn.disabled = !recordedBlob;
+  if (shareAudioBtn) shareAudioBtn.hidden = !canShareAudio();
+}
+
+/** OSの共有シートへ音声を渡す。保存できたら true */
+async function shareAudioNow(quiet) {
+  const file = recordedAudioFile();
+  if (!file) { setAudioSaveHint('warn', '⚠ 保存できる録音データがありません。'); return false; }
+  if (!canShareAudio()) {
+    if (!quiet) setAudioSaveHint('warn', '⚠ この端末は音声の共有に対応していません。上の「音声を保存」をお使いください。');
+    return false;
+  }
+  try {
+    await navigator.share({ files: [file], title: file.name });
+    setAudioSaveHint('ok', `✓ 「${escapeHtml(file.name)}」を送りました。保存先のアプリ（ファイル／ドライブなど）でご確認ください。`);
+    return true;
+  } catch (err) {
+    if (err && err.name === 'AbortError') { setAudioSaveHint('', '共有をキャンセルしました。'); return false; }
+    if (!quiet) setAudioSaveHint('warn', '⚠ 共有できませんでした。上の「音声を保存」をお試しください。');
+    return false;
+  }
+}
+
+/** Blob の一部を base64 にする（ブリッジへ渡すため） */
+function blobPartToBase64(part) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => { const s = String(fr.result || ''); const i = s.indexOf(','); resolve(i >= 0 ? s.slice(i + 1) : ''); };
+    fr.onerror = () => reject(fr.error || new Error('読み込みに失敗しました'));
+    fr.readAsDataURL(part);
+  });
+}
+
+/**
+ * アプリ版（Capacitor）で音声を端末の「ダウンロード」フォルダへ書き出す。
+ * WebView ではリンクからのダウンロードも共有シートも使えないため、
+ * 音声を数MBずつネイティブへ渡して保存してもらう。
+ * 保存できたら結果を返し、対応していない版では null を返す（呼び元がフォールバックする）。
+ */
+async function saveAudioNative(name) {
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.saveStart !== 'function') return null; // 古いアプリ版
+  const mime = recordedBlob.type || 'audio/mp4';
+  const started = await rec.saveStart({ name, mimeType: mime });
+  const token = started && started.token;
+  if (!token) return null;
+  try {
+    const CHUNK = 1048575; // 約1MBずつ（base64 で約1.4MB）。3の倍数にして、途中のチャンクに詰め物（=）が入らないようにする
+    const total = recordedBlob.size;
+    for (let pos = 0; pos < total; pos += CHUNK) {
+      const data = await blobPartToBase64(recordedBlob.slice(pos, Math.min(pos + CHUNK, total)));
+      await rec.saveChunk({ token, data });
+      setAudioSaveHint('', `音声を保存しています… ${Math.min(100, Math.round(((pos + CHUNK) / total) * 100))}%`);
+    }
+    return (await rec.saveFinish({ token })) || { name };
+  } catch (err) {
+    try { await rec.saveCancel({ token }); } catch (_) { /* 後始末なので失敗しても進む */ }
+    throw err;
+  }
+}
+
+/** 音声ファイルとして端末へ保存する（アプリ内の保存ボタン） */
+async function saveAudioNow() {
+  hideError();
+  if (!recordedBlob) { setAudioSaveHint('warn', '⚠ 保存できる録音データがありません。'); return; }
+  const name = audioShareName();
+  setAudioSaveHint('', '保存の準備をしています…');
+  if (saveAudioBtn) saveAudioBtn.disabled = true;
+  try {
+    await saveAudioTo(name);
+  } finally {
+    if (saveAudioBtn) saveAudioBtn.disabled = !recordedBlob;
+  }
+}
+
+async function saveAudioTo(name) {
+  // 保存に対応していない古いアプリ版か（このときはブラウザ向けの方法を試したうえで更新を案内する）
+  let oldApp = false;
+  // アプリ版（Capacitor の WebView）はリンクからのダウンロードが効かないため、ネイティブへ渡す
+  if (NATIVE) {
+    try {
+      const done = await saveAudioNative(name);
+      if (done) {
+        const savedName = escapeHtml(done.name || name);
+        setAudioSaveHint('ok', done.location === 'share'
+          ? `✓ 「${savedName}」の保存先を選んでください。`
+          : `✓ 「${savedName}」を保存しました（端末の「ダウンロード」フォルダ）。`);
+        showToast('音声を保存しました');
+        return;
+      }
+    } catch (err) {
+      const msg = (err && (err.message || err.errorMessage)) || '';
+      setAudioSaveHint('warn', `⚠ 音声を保存できませんでした。${msg ? '（' + escapeHtml(msg) + '）' : ''}端末の空き容量をご確認のうえ、もう一度お試しください。`);
+      return;
+    }
+    // ここに来るのは保存に対応していない古いアプリ版。以下のブラウザ向けの方法を試す。
+    oldApp = true;
+    if (await shareAudioNow(true)) return;
+  }
+
+  try {
+    download(name, recordedBlob, recordedBlob.type || 'audio/mp4');
+    const alt = oldApp
+      ? '保存されていないときは、設定 →「アプリの更新」から最新版にしてお試しください。'
+      : (canShareAudio() ? '見つからないときは「別のアプリへ送る」から保存先を選べます。' : '');
+    setAudioSaveHint('ok', `✓ 「${escapeHtml(name)}」を保存しました（端末の「ダウンロード」フォルダ）。${alt}`);
+    showToast('音声を保存しました');
+    return;
+  } catch (_) { /* 共有へフォールバック */ }
+
+  if (await shareAudioNow(true)) return;
+  setAudioSaveHint('warn', '⚠ 音声を保存できませんでした。端末の空き容量をご確認のうえ、もう一度お試しください。');
+}
+
+if (saveAudioBtn) saveAudioBtn.addEventListener('click', () => { saveAudioNow(); });
+if (shareAudioBtn) shareAudioBtn.addEventListener('click', () => { shareAudioNow(); });
 
 /* =========================================================
  * 録音セッションの永続化（アプリが終了させられても録音を残す）
