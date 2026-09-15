@@ -95,6 +95,9 @@ jobs:
 
       - name: Android SDK を用意
         uses: android-actions/setup-android@v3
+        with:
+          # 既定の "tools platform-tools" は廃止済みの tools を含み sdkmanager が失敗するので明示する
+          packages: platform-tools
 
       - name: 依存関係をインストール
         run: npm ci
