@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- スマホ側が CapabilityClient で時計を見つけるための名前（shared の SyncPaths.CAPABILITY_WATCH と一致） -->
+    <string-array name="android_wear_capabilities">
+        <item>noteloop_watch</item>
+    </string-array>
+</resources>

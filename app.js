@@ -147,7 +147,7 @@ const meetingModalDone  = $('meetingModalDone');
 const meetingSummary = $('meetingSummary');
 
 // バージョン / 更新日（メニュー上部に表示）
-const APP_VERSION = 'Ver.9.4';
+const APP_VERSION = 'Ver.9.5';
 // 更新時間は手動指定せず、配信ファイルの最終更新（document.lastModified）から自動算出する。
 // （手動だと実時刻より先の時間になり得るため）
 function computeUpdatedString() {
@@ -1631,6 +1631,148 @@ function showRecoverBanner(entry, meta) {
     openMinutes(entry);
   });
   recoverBox.querySelector('#recoverClose').addEventListener('click', () => { recoverBox.hidden = true; });
+}
+
+/* =========================================================
+ * ウォッチ（Pixel Watch）連携 — アプリ版のみ
+ *   時計（watch/ の Wear OS アプリ）から「ダブル録音」「スマホのみ録音」を指示すると、
+ *   ネイティブの録音サービスが watch-recordings/ に録る。時計で録った音声も
+ *   同じ場所へ転送されてくる。ここでは
+ *     ・起動時と、ネイティブからの通知（watch イベント）で、それらを履歴へ取り込む
+ *     ・時計の指示で録音中のあいだは、その旨のバナー（停止ボタン付き）を出す
+ * =======================================================*/
+let watchImporting = false;
+let watchBannerTimer = null;
+
+/** watch-recordings/ に残っているウォッチ関連の音声を履歴へ取り込む */
+async function importWatchRecordings() {
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.listWatchRecordings !== 'function' || watchImporting) return;
+  watchImporting = true;
+  let imported = null;
+  try {
+    const res = await rec.listWatchRecordings();
+    const items = (res && res.items) || [];
+    for (const it of items) {
+      if (!it || !it.url || !it.size) continue;
+      let blob = null;
+      try { blob = new Blob([await (await fetch(it.url)).blob()], { type: it.mimeType || 'audio/mp4' }); } catch (_) { blob = null; }
+      if (!blob || !blob.size) continue;
+      const startedAt = watchFileTime(it.name) || it.modifiedAt || Date.now();
+      const id = 'watch-' + startedAt + '-' + Math.random().toString(36).slice(2, 6);
+      let sec = 0;
+      try { sec = await probeDurationSec(blob); } catch (_) { sec = 0; }
+      let audio = null;
+      try {
+        await idbPut(id, blob);
+        audio = { ext: extFromMime(blob.type), size: blob.size, sec: Math.round(sec || 0) };
+      } catch (_) { continue; }   // 保存できなければファイルは残し、次回に回す
+      const d = new Date(startedAt);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      const entry = {
+        id,
+        name: `${it.source === 'watch' ? 'ウォッチ録音' : 'スマホ録音（ウォッチ操作）'} ${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`,
+        date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        participants: [],
+        transcript: '', summary: [], decisions: [], todos: [],
+        audio, ts: Date.now(), auto: true, watch: true, watchSource: it.source || 'phone',
+        startedAt,
+      };
+      const list = loadStore();
+      list.push(entry);
+      while (list.length > 10) { const removed = list.shift(); if (removed && removed.audio) idbDel(removed.id); }
+      saveStore(list);
+      renderHistory();
+      try { await rec.discardWatchRecording({ name: it.name }); } catch (_) {}
+      imported = entry;
+    }
+  } catch (_) { /* 未対応の版のアプリなど */ }
+  watchImporting = false;
+  if (imported) showWatchImportedBanner(imported);
+}
+
+/** `noteloop_20260915_101500_watch.m4a` → その日時（ms）。規則外なら 0 */
+function watchFileTime(name) {
+  const m = /^noteloop_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(name || '');
+  if (!m) return 0;
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+}
+
+/** 取り込んだことを知らせるバナー（そのまま開ける。音声は「AIに送る」で議事録にできる） */
+function showWatchImportedBanner(entry) {
+  if (!recoverBox) return;
+  clearWatchBanner();
+  const detail = [
+    entry.audio && entry.audio.sec ? `約${Math.max(1, Math.round(entry.audio.sec / 60))}分` : '',
+    entry.audio ? `音声あり（${formatBytes(entry.audio.size)}）` : '',
+  ].filter(Boolean).join(' ・ ');
+  recoverBox.innerHTML = `<div class="recover-text"><strong>ウォッチの録音を履歴に取り込みました</strong><span></span></div>
+    <div class="recover-actions">
+      <button type="button" class="chip-btn" id="watchOpen">開く</button>
+      <button type="button" class="chip-btn" id="watchClose">閉じる</button>
+    </div>`;
+  recoverBox.querySelector('.recover-text span').textContent =
+    `${entry.name}（${detail}）。履歴から「音声をAIに送る」で議事録にできます。`;
+  recoverBox.hidden = false;
+  recoverBox.querySelector('#watchOpen').addEventListener('click', () => { recoverBox.hidden = true; openMinutes(entry); });
+  recoverBox.querySelector('#watchClose').addEventListener('click', () => { recoverBox.hidden = true; });
+}
+
+/** 時計の指示で録音中のあいだのバナー（経過時間と停止ボタン） */
+function showWatchRecordingBanner(state) {
+  if (!recoverBox) return;
+  clearWatchBanner();
+  const modeLabel = state.mode === 'double' ? 'ダブル録音（ウォッチ＋スマホ）' : 'スマホのみ録音';
+  recoverBox.innerHTML = `<div class="recover-text"><strong>● ウォッチの指示で録音中 <span class="watch-elapsed">00:00</span></strong><span></span></div>
+    <div class="recover-actions">
+      <button type="button" class="chip-btn" id="watchStop">録音完了</button>
+    </div>`;
+  recoverBox.querySelector('.recover-text > span').textContent =
+    `${modeLabel}。停止するとこの履歴に保存されます。ウォッチや通知からも止められます。`;
+  recoverBox.hidden = false;
+  const el = recoverBox.querySelector('.watch-elapsed');
+  const startedAt = state.startedAt || Date.now();
+  const tick = () => {
+    const sec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    el.textContent = h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}` : `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+  tick();
+  watchBannerTimer = setInterval(tick, 500);
+  recoverBox.querySelector('#watchStop').addEventListener('click', async () => {
+    const rec = nativeRecorder();
+    try { if (rec && typeof rec.stopWatchRecording === 'function') await rec.stopWatchRecording(); } catch (_) {}
+  });
+}
+
+function clearWatchBanner() {
+  if (watchBannerTimer) { clearInterval(watchBannerTimer); watchBannerTimer = null; }
+}
+
+/** ネイティブからの通知を受ける口を開き、起動時の取り込みを行う */
+function setupWatchLink() {
+  const rec = nativeRecorder();
+  if (!rec || typeof rec.getWatchState !== 'function') return;
+  if (typeof rec.addListener === 'function') {
+    try {
+      rec.addListener('watch', (ev) => {
+        if (!ev) return;
+        if (ev.type === 'file') { importWatchRecordings(); return; }
+        if (ev.type === 'state') {
+          if (ev.recording && ev.byWatch) {
+            showWatchRecordingBanner(ev);
+          } else {
+            clearWatchBanner();
+            if (recoverBox && recoverBox.querySelector('#watchStop')) recoverBox.hidden = true;
+            if (!ev.recording) setTimeout(importWatchRecordings, 600);
+          }
+        }
+      });
+    } catch (_) {}
+  }
+  rec.getWatchState().then((st) => { if (st && st.recording && st.byWatch) showWatchRecordingBanner(st); }).catch(() => {});
+  importWatchRecordings();
 }
 
 /* =========================================================
@@ -6508,6 +6650,8 @@ sweepStaleAiPending();
 seedIfEmpty();
 // 前回の録音がアプリの終了などで中断していたら、拾い直して履歴へ保存する
 recoverInterruptedSession().catch(() => {});
+// ウォッチ（Pixel Watch）が関わる録音の取り込みと、録音中バナー（アプリ版のみ）
+setupWatchLink();
 
 // Service Worker 登録（アプリとしてインストール可能に / 起動を高速化）
 // 新しい版が出たら自動で反映されるよう、更新検出→再読み込みまで行う。

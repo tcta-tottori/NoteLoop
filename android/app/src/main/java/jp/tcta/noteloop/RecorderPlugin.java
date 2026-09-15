@@ -50,6 +50,109 @@ public class RecorderPlugin extends Plugin {
 
     private String pendingPath = null;
 
+    /* ===== ウォッチ（Pixel Watch）連携 =====
+     * 時計の指示で始まった録音の状態や、時計から届いた音声を Web 側へ知らせる。
+     * サービス（WatchSync / WearListenerService）から呼べるよう、生きているプラグインを静的に持つ。 */
+    private static volatile RecorderPlugin active = null;
+
+    @Override
+    public void load() {
+        super.load();
+        active = this;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (active == this) active = null;
+        super.handleOnDestroy();
+    }
+
+    /** 録音状態の変化（WatchSync.buildWebState の内容）を Web へ送る。Web が閉じていれば何もしない */
+    static void emitWatchState(org.json.JSONObject state) {
+        RecorderPlugin p = active;
+        if (p == null) return;
+        try {
+            JSObject ev = JSObject.fromJSONObject(state);
+            ev.put("type", "state");
+            p.notifyListeners("watch", ev, true);
+        } catch (Exception ignored) {}
+    }
+
+    /** 時計から音声ファイルが届いたことを Web へ送る */
+    static void emitWatchFile(String name) {
+        RecorderPlugin p = active;
+        if (p == null) return;
+        JSObject ev = new JSObject();
+        ev.put("type", "file");
+        ev.put("name", name);
+        p.notifyListeners("watch", ev, true);
+    }
+
+    /** いまの録音がウォッチの指示によるものか等 */
+    @PluginMethod
+    public void getWatchState(PluginCall call) {
+        try {
+            call.resolve(JSObject.fromJSONObject(WatchSync.buildWebState(getContext())));
+        } catch (Exception e) {
+            call.reject("状態を取得できませんでした: " + e.getMessage());
+        }
+    }
+
+    /** ウォッチの指示で始まった録音を、アプリ画面から止める */
+    @PluginMethod
+    public void stopWatchRecording(PluginCall call) {
+        WatchSync.stopFromWatch(getContext());
+        call.resolve();
+    }
+
+    /**
+     * ウォッチが関わる録音（時計の指示でスマホが録ったもの・時計から転送されたもの）で、
+     * まだ履歴に取り込んでいないファイルの一覧。録音中のファイルは含めない。
+     */
+    @PluginMethod
+    public void listWatchRecordings(PluginCall call) {
+        Context ctx = getContext();
+        File dir = WatchSync.dir(ctx);
+        String current = RecordingService.isRecording() ? RecordingService.getCurrentPath() : null;
+        com.getcapacitor.JSArray items = new com.getcapacitor.JSArray();
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                if (f == null || !f.isFile()) continue;
+                String abs = f.getAbsolutePath();
+                if (abs.endsWith(AudioRecorderEngine.RECOVERY_SUFFIX)) continue;   // 保険ファイルは m4a 側で扱う
+                if (current != null && current.equals(abs)) continue;            // 録音中
+                // 途中終了で m4a が書き切れていない場合は、保険ファイル（ADTS の .aac）を使う
+                File rc = new File(abs + AudioRecorderEngine.RECOVERY_SUFFIX);
+                boolean useRecovery = rc.exists() && rc.length() > 0 && f.length() == 0;
+                File src = useRecovery ? rc : f;
+                if (src.length() <= 0) continue;
+                JSObject o = new JSObject();
+                o.put("name", f.getName());
+                o.put("size", src.length());
+                o.put("modifiedAt", src.lastModified());
+                o.put("mimeType", useRecovery ? "audio/aac" : "audio/mp4");
+                o.put("source", f.getName().contains("_watch") ? "watch" : "phone");
+                o.put("url", com.getcapacitor.FileUtils.getPortablePath(
+                        ctx, getBridge().getLocalUrl(), android.net.Uri.fromFile(src)));
+                items.put(o);
+            }
+        }
+        JSObject r = new JSObject();
+        r.put("items", items);
+        call.resolve(r);
+    }
+
+    /** 履歴へ取り込み済みのウォッチ録音を片付ける */
+    @PluginMethod
+    public void discardWatchRecording(PluginCall call) {
+        String name = WatchSync.safeName(call.getString("name", ""));
+        File f = new File(WatchSync.dir(getContext()), name);
+        deleteQuietly(f);
+        deleteQuietly(new File(f.getAbsolutePath() + AudioRecorderEngine.RECOVERY_SUFFIX));
+        call.resolve();
+    }
+
     @PluginMethod
     public void isAvailable(PluginCall call) {
         JSObject r = new JSObject();

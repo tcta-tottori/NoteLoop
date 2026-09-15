@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Pixel Watch 側が CapabilityClient でスマホを見つけるための名前（watch/shared の SyncPaths.CAPABILITY_PHONE と一致） -->
+    <string-array name="android_wear_capabilities">
+        <item>noteloop_phone</item>
+    </string-array>
+</resources>

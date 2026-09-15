@@ -1,0 +1,13 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 左に時計、右にスマホ -->
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M11.5,12c0,-1.9 -0.9,-3.6 -2.3,-4.7L8.5,3h-5l-0.7,4.3C1.4,8.4 0.5,10.1 0.5,12s0.9,3.6 2.3,4.7L3.5,21h5l0.7,-4.3C10.6,15.6 11.5,13.9 11.5,12zM2.5,12c0,-2 1.6,-3.5 3.5,-3.5S9.5,10 9.5,12 7.9,15.5 6,15.5 2.5,14 2.5,12z" />
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M21.5,2h-7c-1.1,0 -2,0.9 -2,2v16c0,1.1 0.9,2 2,2h7c1.1,0 2,-0.9 2,-2V4c0,-1.1 -0.9,-2 -2,-2zM21.5,18h-7V6h7v12z" />
+</vector>

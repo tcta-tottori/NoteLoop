@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NOTELOOP</string>
+    <string name="tile_label">NOTELOOP 録音</string>
+
+    <!-- 録音モード -->
+    <string name="mode_watch">ウォッチ</string>
+    <string name="mode_double">ダブル</string>
+    <string name="mode_phone">スマホ</string>
+    <string name="mode_watch_long">ウォッチ単体で録音</string>
+    <string name="mode_double_long">ウォッチ＋スマホで録音</string>
+    <string name="mode_phone_long">スマホのみで録音</string>
+
+    <!-- ホーム -->
+    <string name="home_subtitle">録音・議事録</string>
+    <string name="home_tap_to_record">タップで録音</string>
+    <string name="home_recording">録音中</string>
+    <string name="home_recording_phone">スマホで録音中</string>
+    <string name="home_waiting_phone">スマホに接続中…</string>
+    <string name="home_stop">停止</string>
+    <string name="home_recordings">録音一覧</string>
+    <string name="home_settings">設定</string>
+    <string name="home_phone_connected">スマホ接続中</string>
+    <string name="home_phone_disconnected">スマホ未接続</string>
+    <string name="home_mic">録音</string>
+
+    <!-- メッセージ -->
+    <string name="msg_permission_denied">マイクの許可が必要です</string>
+    <string name="msg_phone_unreachable">スマホに届きません\nスマホ側アプリと接続を確認してください</string>
+    <string name="msg_double_fallback">スマホに届きません\nウォッチのみで録音します</string>
+    <string name="msg_phone_error">スマホで録音を開始できません: %1$s</string>
+    <string name="msg_saved">保存しました</string>
+    <string name="msg_record_failed">録音を開始できません</string>
+    <string name="msg_sent_to_phone">スマホへ送りました</string>
+    <string name="msg_send_failed">スマホへ送れません</string>
+    <string name="msg_deleted">削除しました</string>
+
+    <!-- 録音一覧 -->
+    <string name="recordings_title">録音一覧</string>
+    <string name="recordings_empty">録音はまだありません</string>
+    <string name="recordings_hint">ウォッチで録った音声はここに残ります。「スマホへ送る」でスマホの NOTELOOP の履歴に入ります。</string>
+    <string name="recording_play">再生</string>
+    <string name="recording_pause">一時停止</string>
+    <string name="recording_send">スマホへ送る</string>
+    <string name="recording_sending">送信中…</string>
+    <string name="recording_delete">削除</string>
+    <string name="recording_size">%1$s・%2$s</string>
+
+    <!-- 設定 -->
+    <string name="settings_title">設定</string>
+    <string name="settings_default_mode">既定の録音モード</string>
+    <string name="settings_quality">音質</string>
+    <string name="settings_quality_standard">標準（96 kbps）</string>
+    <string name="settings_quality_high">高音質（128 kbps）</string>
+    <string name="settings_phone_note">ダブル録音とスマホ録音には、スマホに NOTELOOP（Ver.9.5 以降）を入れ、Wear OS アプリで時計とペアリングしておく必要があります。録った音声はスマホの NOTELOOP の履歴に入ります。</string>
+    <string name="settings_storage">保存先: 時計内 %1$d 件</string>
+    <string name="settings_version">バージョン %1$s</string>
+
+    <!-- 通知 -->
+    <string name="notif_channel">録音中</string>
+    <string name="notif_title">NOTELOOP 録音中</string>
+    <string name="notif_stop">停止</string>
+
+    <!-- タイル -->
+    <string name="tile_title">NOTELOOP</string>
+    <string name="tile_recording">● 録音中</string>
+    <string name="tile_stop">停止</string>
+</resources>

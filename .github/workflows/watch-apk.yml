@@ -1,0 +1,155 @@
+name: Watch APK
+
+# Pixel Watch 用アプリ（watch/）と、ウォッチ連携を含むスマホ版 NOTELOOP（android/）を
+# 開発ブランチで一緒にビルドし、プレリリース dev に置く。
+# main への push では従来どおり android.yml が Release「latest」を更新する。
+on:
+  push:
+    branches:
+      - 'claude/**'
+    paths:
+      - 'watch/**'
+      - 'android/**'
+      - 'app.js'
+      - 'index.html'
+      - 'styles.css'
+      - '.github/workflows/watch-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    name: Wear OS APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: watch
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: latest
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          # 既定の "tools platform-tools" は廃止済みの tools を含み sdkmanager が失敗するので明示する
+          packages: platform-tools
+
+      - name: 必要な SDK を入れる
+        run: |
+          for p in "platforms;android-37" "platforms;android-36" "build-tools;36.0.0" "build-tools;35.0.0"; do
+            yes | sdkmanager "$p" >/dev/null 2>&1 && echo "installed: $p" || echo "skipped: $p"
+          done
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: ktlint
+        run: ./gradlew ktlintCheck
+
+      - name: Wear OS APK
+        run: ./gradlew :wear:assembleDebug
+
+      - name: APK をアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: noteloop-watch-apk
+          path: watch/wear/build/outputs/apk/debug/wear-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: レポートをアップロード（失敗時）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watch-reports
+          path: |
+            watch/*/build/reports/**
+          retention-days: 7
+
+  phone:
+    name: スマホ APK（ウォッチ連携入り）
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Android SDK を用意
+        uses: android-actions/setup-android@v3
+
+      - name: 依存関係をインストール
+        run: npm ci
+
+      - name: Web アセットを www/ へ集めて Android へ同期
+        run: |
+          npm run build
+          npx cap sync android
+
+      - name: APK をビルド
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: APK をアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: noteloop-phone-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: 開発版リリースを更新
+    needs: [watch, phone]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: APK をまとめる
+        run: |
+          mkdir -p dist
+          cp artifacts/noteloop-watch-apk/wear-debug.apk dist/noteloop-watch.apk
+          cp artifacts/noteloop-phone-apk/app-debug.apk dist/NOTELOOP.apk
+          ls -la dist
+
+      # 時計・スマホへそのまま入れられるよう、開発版リリースに APK を置く
+      - name: 開発版リリースを更新
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release delete dev --yes --cleanup-tag 2>/dev/null || true
+          gh release create dev dist/*.apk \
+            --target "$GITHUB_SHA" \
+            --title "NOTELOOP ウォッチ連携 開発版" \
+            --prerelease \
+            --notes "コミット ${GITHUB_SHA} の debug ビルド。ビルド番号 ${GITHUB_RUN_NUMBER}。
+
+          - noteloop-watch.apk — Pixel Watch（Wear OS）用
+          - NOTELOOP.apk — スマホ用 NOTELOOP（ウォッチ連携入り。従来の NOTELOOP と同じ署名なので上書きインストールできる）
+
+          インストール: スマホは NOTELOOP.apk をダウンロードして開く。
+          時計は開発者向けオプションで ADB デバッグと無線デバッグを有効にし、
+          adb pair / adb connect で時計につないでから adb install -r noteloop-watch.apk を実行する。"
