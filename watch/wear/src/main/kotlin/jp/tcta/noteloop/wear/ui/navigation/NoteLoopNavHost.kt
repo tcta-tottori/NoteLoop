@@ -9,14 +9,12 @@ import androidx.wear.compose.navigation.rememberSwipeDismissableNavController
 import jp.tcta.noteloop.wear.ui.home.HomeScreen
 import jp.tcta.noteloop.wear.ui.recordings.RecordingDetailScreen
 import jp.tcta.noteloop.wear.ui.recordings.RecordingsScreen
-import jp.tcta.noteloop.wear.ui.settings.SettingsScreen
 
-/** 画面遷移。ホーム → 録音一覧 → 詳細、ホーム → 設定。右スワイプで戻る（Wear OS 標準）。 */
+/** 画面遷移。ホーム → 録音一覧 → 詳細。右スワイプで戻る（Wear OS 標準）。 */
 object Routes {
     const val HOME = "home"
     const val RECORDINGS = "recordings"
     const val DETAIL = "detail/{name}"
-    const val SETTINGS = "settings"
     const val ARG_NAME = "name"
 
     fun detail(name: String): String = "detail/$name"
@@ -29,10 +27,7 @@ fun NoteLoopNavHost() {
     AppScaffold(timeText = { TimeText() }) {
         SwipeDismissableNavHost(navController = navController, startDestination = Routes.HOME) {
             composable(Routes.HOME) {
-                HomeScreen(
-                    onRecordings = { navController.navigate(Routes.RECORDINGS) },
-                    onSettings = { navController.navigate(Routes.SETTINGS) },
-                )
+                HomeScreen(onRecordings = { navController.navigate(Routes.RECORDINGS) })
             }
             composable(Routes.RECORDINGS) {
                 RecordingsScreen(onOpen = { name -> navController.navigate(Routes.detail(name)) })
@@ -40,9 +35,6 @@ fun NoteLoopNavHost() {
             composable(Routes.DETAIL) { entry ->
                 val name = entry.arguments?.getString(Routes.ARG_NAME).orEmpty()
                 RecordingDetailScreen(name = name, onDeleted = { navController.popBackStack() })
-            }
-            composable(Routes.SETTINGS) {
-                SettingsScreen()
             }
         }
     }

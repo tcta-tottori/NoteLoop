@@ -7,8 +7,6 @@ import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.CapabilityInfo
 import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.Wearable
-import jp.tcta.noteloop.shared.PhoneStatus
-import jp.tcta.noteloop.shared.RecordMode
 import jp.tcta.noteloop.shared.SyncPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,22 +22,16 @@ import java.io.File
 enum class SendResult { SENT, NO_PHONE, FAILED }
 
 /**
- * Wearable Data Layer でスマホ側アプリとやり取りする。
- * - 録音の開始 / 停止 / 状態問い合わせを MessageClient で送る
- * - スマホからの状態は [WearListenerService] が受け取り [phoneStatus] に入れる
- * - 時計で録った音声は ChannelClient でスマホへ送る
- * スマホが無い・Play 開発者サービスが無い場合は失敗を返すだけで、ウォッチ単体録音は影響を受けない。
+ * スマホ（NOTELOOP 本体）との通信。時計で録った音声を ChannelClient で送るだけ。
+ * 録音の開始 / 停止は時計の中で完結し、スマホには指示しない。
+ * スマホが無い・Play 開発者サービスが無い場合は失敗を返すだけで、録音は影響を受けない。
  */
 class PhoneLink(
     private val context: Context,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val messageClient get() = Wearable.getMessageClient(context)
     private val capabilityClient get() = Wearable.getCapabilityClient(context)
     private val channelClient get() = Wearable.getChannelClient(context)
-
-    private val mutablePhoneStatus = MutableStateFlow<PhoneStatus?>(null)
-    val phoneStatus: StateFlow<PhoneStatus?> = mutablePhoneStatus
 
     private val mutableReachable = MutableStateFlow(false)
     val phoneReachable: StateFlow<Boolean> = mutableReachable
@@ -52,11 +44,6 @@ class PhoneLink(
         refreshReachability()
     }
 
-    fun onPhoneStatus(status: PhoneStatus) {
-        val current = mutablePhoneStatus.value
-        if (current == null || status.sentAt >= current.sentAt) mutablePhoneStatus.value = status
-    }
-
     fun updateReachable(info: CapabilityInfo) {
         mutableReachable.value = info.nodes.isNotEmpty()
     }
@@ -67,13 +54,7 @@ class PhoneLink(
         }
     }
 
-    suspend fun sendStart(mode: RecordMode): SendResult = send(SyncPaths.RECORD_START, mode.id.toByteArray(Charsets.UTF_8))
-
-    suspend fun sendStop(): SendResult = send(SyncPaths.RECORD_STOP, ByteArray(0))
-
-    suspend fun queryStatus(): SendResult = send(SyncPaths.RECORD_QUERY, ByteArray(0))
-
-    /** 時計内のファイルをスマホの「Recordings/NoteLoop」へ送る。 */
+    /** 時計内のファイルをスマホの NOTELOOP（watch-recordings/ → 履歴）へ送る。 */
     suspend fun sendFile(file: File): SendResult {
         val node = runCatching { findPhone() }.getOrNull() ?: return SendResult.NO_PHONE
         return runCatching {
@@ -93,24 +74,10 @@ class PhoneLink(
         }
     }
 
-    private suspend fun send(
-        path: String,
-        payload: ByteArray,
-    ): SendResult {
-        val node = runCatching { findPhone() }.getOrNull() ?: return SendResult.NO_PHONE
-        return runCatching {
-            withTimeout(MESSAGE_TIMEOUT_MS) { messageClient.sendMessage(node.id, path, payload).await() }
-            SendResult.SENT
-        }.getOrElse {
-            Log.w(TAG, "送信に失敗（$path）: ${it.message}")
-            SendResult.FAILED
-        }
-    }
-
     /** スマホ側アプリを持つノード。近くにある（BT 直結）ものを優先する。 */
     private suspend fun findPhone(): Node? {
         val info =
-            withTimeout(MESSAGE_TIMEOUT_MS) {
+            withTimeout(LOOKUP_TIMEOUT_MS) {
                 capabilityClient.getCapability(SyncPaths.CAPABILITY_PHONE, CapabilityClient.FILTER_REACHABLE).await()
             }
         val nodes = info.nodes
@@ -120,7 +87,7 @@ class PhoneLink(
 
     private companion object {
         const val TAG = "PhoneLink"
-        const val MESSAGE_TIMEOUT_MS = 6_000L
+        const val LOOKUP_TIMEOUT_MS = 6_000L
         const val TRANSFER_TIMEOUT_MS = 180_000L
     }
 }

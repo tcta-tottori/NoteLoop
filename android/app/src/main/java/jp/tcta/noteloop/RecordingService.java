@@ -635,8 +635,6 @@ public class RecordingService extends Service {
         java.util.Arrays.fill(barV, 0f);
         notifCountdown = NOTIF_EVERY_AWAKE;
         startGaugeLoop();
-        // ウォッチ（Pixel Watch）へ「録音中」を知らせる
-        WatchSync.onRecordingStateChanged(this);
     }
 
     private void stopRecording() {
@@ -664,8 +662,6 @@ public class RecordingService extends Service {
             releaseRecorder();
         }
         startedAtElapsed = 0L;
-        // ウォッチ（Pixel Watch）へ「停止した」を知らせ、Web 側が音声を取り込めるようにする
-        WatchSync.onRecordingStateChanged(this);
     }
 
     private void releaseRecorder() {

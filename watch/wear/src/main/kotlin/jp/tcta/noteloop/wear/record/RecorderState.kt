@@ -1,23 +1,30 @@
 package jp.tcta.noteloop.wear.record
 
-import jp.tcta.noteloop.shared.RecordMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /** 時計側の録音サービスの状態。 */
 data class RecorderState(
     val recording: Boolean = false,
-    /** 録音開始時刻（epoch ms）。停止中は 0。 */
-    val startedAt: Long = 0L,
-    /** 直近の入力レベル（0..1）。波形アニメーション用に最新 [WAVE_SAMPLES] 個を保持。 */
+    val paused: Boolean = false,
+    /** 一時停止するまでに録った合計ミリ秒（再開のたびに積み上がる）。 */
+    val elapsedBase: Long = 0L,
+    /** 今の区間を録り始めた時刻（epoch ms）。一時停止中・停止中は 0。 */
+    val runningSince: Long = 0L,
+    /** 直近の入力レベル（0..1）。ゲージ用に最新 [LEVEL_SAMPLES] 個を保持。 */
     val levels: List<Float> = emptyList(),
     /** 直近に保存したファイル名。停止直後の「保存しました」表示に使う。 */
     val lastSavedName: String? = null,
     /** 録音の開始に失敗したときの理由。 */
     val error: String? = null,
 ) {
+    /** 録音開始からの経過ミリ秒（一時停止した分は含まない）。 */
+    fun elapsedMs(now: Long = System.currentTimeMillis()): Long = elapsedBase + if (runningSince > 0L) now - runningSince else 0L
+
+    val latestLevel: Float get() = levels.lastOrNull() ?: 0f
+
     companion object {
-        const val WAVE_SAMPLES = 28
+        const val LEVEL_SAMPLES = 16
     }
 }
 
@@ -31,21 +38,13 @@ class RecorderStateStore {
     }
 
     fun pushLevel(level: Float) {
-        update { s -> s.copy(levels = (s.levels + level.coerceIn(0f, 1f)).takeLast(RecorderState.WAVE_SAMPLES)) }
+        update { s -> s.copy(levels = (s.levels + level.coerceIn(0f, 1f)).takeLast(RecorderState.LEVEL_SAMPLES)) }
     }
 }
 
-/** 録音セッション（ユーザーが「開始」してから「停止」するまで）。 */
-data class RecordingSession(
-    val mode: RecordMode,
-    val startedAt: Long,
-)
-
 /** タイル / 通知からの操作。MainActivity が受け取り、ホーム画面が権限確認の上で実行する。 */
 sealed interface PendingAction {
-    data class Start(
-        val mode: RecordMode,
-    ) : PendingAction
+    data object Start : PendingAction
 
     data object Stop : PendingAction
 }

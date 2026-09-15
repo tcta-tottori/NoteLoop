@@ -4,7 +4,6 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import jp.tcta.noteloop.shared.RecordMode
 import jp.tcta.noteloop.wear.record.PendingAction
 import jp.tcta.noteloop.wear.ui.NoteLoopTheme
 import jp.tcta.noteloop.wear.ui.navigation.NoteLoopNavHost
@@ -34,7 +33,7 @@ class MainActivity : ComponentActivity() {
         val name = intent.action?.takeIf { it == ACTION_START || it == ACTION_STOP } ?: intent.getStringExtra(EXTRA_ACTION)
         val action =
             when (name) {
-                ACTION_START -> PendingAction.Start(RecordMode.fromId(intent.getStringExtra(EXTRA_MODE)))
+                ACTION_START -> PendingAction.Start
                 ACTION_STOP -> PendingAction.Stop
                 else -> null
             } ?: return
@@ -45,6 +44,5 @@ class MainActivity : ComponentActivity() {
         const val ACTION_START = "jp.tcta.noteloop.wear.action.START"
         const val ACTION_STOP = "jp.tcta.noteloop.wear.action.STOP"
         const val EXTRA_ACTION = "action"
-        const val EXTRA_MODE = "mode"
     }
 }

@@ -5,41 +5,21 @@ import android.util.Log;
 
 import com.google.android.gms.tasks.Tasks;
 import com.google.android.gms.wearable.ChannelClient;
-import com.google.android.gms.wearable.MessageEvent;
 import com.google.android.gms.wearable.Wearable;
 import com.google.android.gms.wearable.WearableListenerService;
 
 import java.io.File;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Pixel Watch（watch/ の Wear OS アプリ）からの指示を受け取る。
+ * Pixel Watch（watch/ の Wear OS アプリ）から転送される音声を受け取る。
  *
- * - /noteloop/record/start → 録音を開始（payload = モード id: double / phone）
- * - /noteloop/record/stop  → 停止
- * - /noteloop/record/query → いまの状態を返す
- * - /noteloop/transfer/<name>（ChannelClient）→ 時計で録った音声を受け取り watch-recordings に置く
+ * - /noteloop/transfer/<name>（ChannelClient）→ 時計で録った音声を watch-recordings に置き、Web 側へ知らせる
  *
  * Google Play 開発者サービスがこのサービスを起動するので、アプリが閉じていても届く。
  */
 public class WearListenerService extends WearableListenerService {
     private static final String TAG = "NoteLoopWear";
-
-    @Override
-    public void onMessageReceived(MessageEvent event) {
-        String path = event.getPath();
-        if (WatchSync.PATH_START.equals(path)) {
-            String mode = new String(event.getData(), StandardCharsets.UTF_8);
-            WatchSync.startFromWatch(this, mode);
-        } else if (WatchSync.PATH_STOP.equals(path)) {
-            WatchSync.stopFromWatch(this);
-        } else if (WatchSync.PATH_QUERY.equals(path)) {
-            WatchSync.sendStatusNow(this, null);
-        }
-    }
-
-    /* ===== 時計からのファイル転送 ===== */
 
     @Override
     public void onChannelOpened(ChannelClient.Channel channel) {

@@ -28,7 +28,7 @@
             android:name="com.google.android.wearable"
             android:required="true" />
 
-        <!-- ウォッチ単体録音はスマホ無しで動く。ダブル録音 / スマホ録音はスマホ側アプリが必要 -->
+        <!-- 録音は時計の中で完結する（スマホ無しで動く）。「スマホへ送る」だけスマホの NOTELOOP が要る -->
         <meta-data
             android:name="com.google.android.wearable.standalone"
             android:value="true" />
@@ -51,7 +51,7 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- タイル（ウィジェット）: 3 つのモードから録音を開始 / 録音中は経過時間と停止 -->
+        <!-- タイル（ウィジェット）: 大きなボタン 1 つで録音開始 / 録音中は経過時間 -->
         <service
             android:name=".tile.RecordTileService"
             android:exported="true"
@@ -65,19 +65,6 @@
                 android:resource="@drawable/tile_preview" />
         </service>
 
-        <!-- スマホからの録音状態を受け取る -->
-        <service
-            android:name=".sync.WearListenerService"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
-                <action android:name="com.google.android.gms.wearable.CAPABILITY_CHANGED" />
-                <data
-                    android:host="*"
-                    android:pathPrefix="/noteloop/"
-                    android:scheme="wear" />
-            </intent-filter>
-        </service>
     </application>
 
 </manifest>

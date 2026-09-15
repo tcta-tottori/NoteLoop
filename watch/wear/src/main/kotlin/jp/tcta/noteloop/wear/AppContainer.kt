@@ -2,7 +2,6 @@ package jp.tcta.noteloop.wear
 
 import android.content.Context
 import jp.tcta.noteloop.wear.data.RecordingRepository
-import jp.tcta.noteloop.wear.data.SettingsRepository
 import jp.tcta.noteloop.wear.record.PendingActionStore
 import jp.tcta.noteloop.wear.record.RecorderStateStore
 import jp.tcta.noteloop.wear.record.RecordingController
@@ -14,17 +13,16 @@ class AppContainer(
 ) {
     private val appContext = context.applicationContext
 
-    val settings = SettingsRepository(appContext)
     val recordings = RecordingRepository(appContext)
 
     /** 時計側の録音状態（RecorderService が更新し、UI とタイルが読む）。 */
     val recorderState = RecorderStateStore()
 
-    /** スマホとの通信（録音指示・状態受信・ファイル転送）。 */
+    /** スマホ（NOTELOOP 本体）へのファイル転送。 */
     val phoneLink = PhoneLink(appContext)
 
-    /** 録音セッションの入口。モードに応じて時計の録音サービスとスマホへの指示を束ねる。 */
-    val controller = RecordingController(appContext, recorderState, phoneLink, settings)
+    /** 録音操作の入口（開始 / 一時停止 / 再開 / 停止）。 */
+    val controller = RecordingController(appContext, recorderState)
 
     /** タイルからの「開始 / 停止」を MainActivity 経由で受け取り、ホーム画面が消費する。 */
     val pendingAction = PendingActionStore()

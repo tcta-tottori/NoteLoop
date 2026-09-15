@@ -20,7 +20,6 @@ import androidx.wear.tiles.TileService
 import jp.tcta.noteloop.wear.MainActivity
 import jp.tcta.noteloop.wear.R
 import jp.tcta.noteloop.wear.appContainer
-import jp.tcta.noteloop.wear.data.AudioQuality
 import jp.tcta.noteloop.wear.tile.RecordTileService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +34,7 @@ import java.io.File
 /**
  * 時計のマイクで録音するフォアグラウンドサービス。
  * MediaRecorder（AAC / m4a）で `filesDir/recordings` に書き、状態は [RecorderStateStore] に流す。
+ * 一時停止 / 再開に対応（MediaRecorder.pause / resume）。
  * 録音中は Ongoing Activity で文字盤に常駐表示し、タップでアプリに戻れる。
  */
 class RecorderService : Service() {
@@ -43,6 +43,8 @@ class RecorderService : Service() {
     private var outputFile: File? = null
     private var levelJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var notificationBuilder: NotificationCompat.Builder? = null
+    private var startedAt = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -52,20 +54,22 @@ class RecorderService : Service() {
         startId: Int,
     ): Int {
         when (intent?.action) {
-            ACTION_START -> start(AudioQuality.fromId(intent.getStringExtra(EXTRA_QUALITY)))
+            ACTION_START -> start()
+            ACTION_PAUSE -> setPaused(true)
+            ACTION_RESUME -> setPaused(false)
             ACTION_STOP -> stopAndFinish()
             else -> if (recorder == null) stopSelf()
         }
         return START_NOT_STICKY
     }
 
-    private fun start(quality: AudioQuality) {
+    private fun start() {
         if (recorder != null) return
         val store = appContainer.recorderState
         val file = appContainer.recordings.newFile()
-        val startedAt = System.currentTimeMillis()
+        startedAt = System.currentTimeMillis()
         // 先に前面化しないと Android 12+ で 5 秒以内に startForeground が無いとして落ちる
-        startForeground(startedAt)
+        startForeground()
         val r = createRecorder()
         try {
             r.setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -73,7 +77,7 @@ class RecorderService : Service() {
             r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             r.setAudioChannels(1)
             r.setAudioSamplingRate(SAMPLE_RATE)
-            r.setAudioEncodingBitRate(quality.bitRate)
+            r.setAudioEncodingBitRate(BIT_RATE)
             r.setOutputFile(file.absolutePath)
             r.prepare()
             r.start()
@@ -81,23 +85,46 @@ class RecorderService : Service() {
             Log.e(TAG, "録音を開始できません", e)
             r.release()
             file.delete()
-            store.update { it.copy(recording = false, startedAt = 0L, levels = emptyList(), error = e.message ?: e.javaClass.simpleName) }
+            store.update { RecorderState(error = e.message ?: e.javaClass.simpleName) }
             stopForegroundAndSelf()
             return
         }
         recorder = r
         outputFile = file
         acquireWakeLock()
-        store.update { it.copy(recording = true, startedAt = startedAt, levels = emptyList(), lastSavedName = null, error = null) }
+        store.update { RecorderState(recording = true, runningSince = startedAt) }
         levelJob =
             scope.launch {
                 while (isActive) {
-                    val amp = runCatching { recorder?.maxAmplitude ?: 0 }.getOrDefault(0)
+                    val paused = store.state.value.paused
+                    val amp = if (paused) 0 else runCatching { recorder?.maxAmplitude ?: 0 }.getOrDefault(0)
                     store.pushLevel(amp / MAX_AMPLITUDE)
                     delay(LEVEL_INTERVAL_MS)
                 }
             }
         TileService.getUpdater(this).requestUpdate(RecordTileService::class.java)
+    }
+
+    /** 一時停止 / 再開。音声も経過時間も止まる。マイクは掴んだまま。 */
+    private fun setPaused(pause: Boolean) {
+        val r = recorder ?: return
+        val store = appContainer.recorderState
+        val current = store.state.value
+        if (current.paused == pause) return
+        val now = System.currentTimeMillis()
+        runCatching { if (pause) r.pause() else r.resume() }
+            .onFailure { Log.w(TAG, "一時停止/再開に失敗: ${it.message}") }
+            .onSuccess {
+                store.update { s ->
+                    if (pause) {
+                        s.copy(paused = true, elapsedBase = s.elapsedMs(now), runningSince = 0L)
+                    } else {
+                        s.copy(paused = false, runningSince = now)
+                    }
+                }
+                updateNotification(pause)
+                TileService.getUpdater(this).requestUpdate(RecordTileService::class.java)
+            }
     }
 
     private fun stopAndFinish() {
@@ -121,7 +148,7 @@ class RecorderService : Service() {
             }
         }
         releaseWakeLock()
-        appContainer.recorderState.update { it.copy(recording = false, startedAt = 0L, levels = emptyList(), lastSavedName = saved) }
+        appContainer.recorderState.update { RecorderState(lastSavedName = saved) }
         scope.launch { appContainer.recordings.refresh() }
         TileService.getUpdater(this).requestUpdate(RecordTileService::class.java)
         stopForegroundAndSelf()
@@ -141,15 +168,13 @@ class RecorderService : Service() {
 
     @Suppress("DEPRECATION")
     private fun createRecorder(): MediaRecorder =
-        if (Build.VERSION.SDK_INT >=
-            Build.VERSION_CODES.S
-        ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(this)
         } else {
             MediaRecorder()
         }
 
-    private fun startForeground(startedAt: Long) {
+    private fun startForeground() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, getString(R.string.notif_channel), NotificationManager.IMPORTANCE_LOW),
@@ -178,6 +203,7 @@ class RecorderService : Service() {
                 .setSilent(true)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)
                 .addAction(R.drawable.ic_stop, getString(R.string.notif_stop), stop)
+        notificationBuilder = builder
         // 文字盤にマイクアイコンと経過時間を出し、タップでアプリへ戻る
         OngoingActivity
             .Builder(applicationContext, NOTIFICATION_ID, builder)
@@ -187,6 +213,26 @@ class RecorderService : Service() {
             .build()
             .apply(applicationContext)
         ServiceCompat.startForeground(this, NOTIFICATION_ID, builder.build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+    }
+
+    /** 一時停止 / 再開を常駐表示にも反映する。 */
+    private fun updateNotification(paused: Boolean) {
+        val builder = notificationBuilder ?: return
+        val status =
+            if (paused) {
+                Status.forPart(Status.TextPart(getString(R.string.notif_paused)))
+            } else {
+                // 再開後の時計は「経過時間ぶん前」を起点にする
+                val base =
+                    System.currentTimeMillis() -
+                        appContainer.recorderState.state.value
+                            .elapsedMs()
+                Status.forPart(Status.StopwatchPart(base))
+            }
+        runCatching {
+            OngoingActivity.recoverOngoingActivity(applicationContext)?.update(applicationContext, status)
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, builder.build())
+        }.onFailure { Log.w(TAG, "常駐表示の更新に失敗: ${it.message}") }
     }
 
     private fun acquireWakeLock() {
@@ -206,30 +252,37 @@ class RecorderService : Service() {
     companion object {
         private const val TAG = "RecorderService"
         private const val ACTION_START = "jp.tcta.noteloop.wear.record.START"
+        private const val ACTION_PAUSE = "jp.tcta.noteloop.wear.record.PAUSE"
+        private const val ACTION_RESUME = "jp.tcta.noteloop.wear.record.RESUME"
         private const val ACTION_STOP = "jp.tcta.noteloop.wear.record.STOP"
-        private const val EXTRA_QUALITY = "quality"
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1
         private const val REQUEST_OPEN = 10
         private const val REQUEST_STOP = 11
         private const val SAMPLE_RATE = 44_100
+        private const val BIT_RATE = 96_000
         private const val MAX_AMPLITUDE = 32_767f
-        private const val LEVEL_INTERVAL_MS = 120L
+        private const val LEVEL_INTERVAL_MS = 80L
         private const val WAKE_LOCK_TAG = "noteloop:recording"
 
         /** 録音の上限（安全弁）。3 時間。 */
         private const val WAKE_LOCK_MAX_MS = 3L * 60 * 60 * 1000
 
-        fun start(
-            context: Context,
-            quality: AudioQuality,
-        ) {
-            val intent = Intent(context, RecorderService::class.java).setAction(ACTION_START).putExtra(EXTRA_QUALITY, quality.id)
-            context.startForegroundService(intent)
+        fun start(context: Context) {
+            context.startForegroundService(Intent(context, RecorderService::class.java).setAction(ACTION_START))
         }
 
-        fun stop(context: Context) {
-            context.startService(Intent(context, RecorderService::class.java).setAction(ACTION_STOP))
+        fun pause(context: Context) = send(context, ACTION_PAUSE)
+
+        fun resume(context: Context) = send(context, ACTION_RESUME)
+
+        fun stop(context: Context) = send(context, ACTION_STOP)
+
+        private fun send(
+            context: Context,
+            action: String,
+        ) {
+            context.startService(Intent(context, RecorderService::class.java).setAction(action))
         }
     }
 }

@@ -323,8 +323,6 @@ select:focus, input:focus, textarea:focus {
 .recover-box .recover-text strong { font-size: 13.5px; font-weight: 800; color: var(--brand1); }
 .recover-box .recover-text span { color: var(--muted); font-size: 12.5px; }
 .recover-box .recover-actions { display: flex; gap: 8px; flex: none; }
-/* ウォッチの指示で録音中のバナー: 経過時間は等幅で揺れないように */
-.recover-box .watch-elapsed { font-variant-numeric: tabular-nums; margin-left: 4px; }
 
 /* 通知が切られているときの案内（エラーではないので警告色にする） */
 .notify-warn {
