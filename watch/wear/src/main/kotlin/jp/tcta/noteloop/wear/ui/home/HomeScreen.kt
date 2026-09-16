@@ -8,10 +8,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -27,14 +29,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
@@ -44,14 +43,15 @@ import jp.tcta.noteloop.wear.record.PendingAction
 import jp.tcta.noteloop.wear.record.RecorderState
 import jp.tcta.noteloop.wear.ui.NoteLoopColors
 import jp.tcta.noteloop.wear.ui.NoteLoopTheme
-import jp.tcta.noteloop.wear.ui.common.RecordButton
+import jp.tcta.noteloop.wear.ui.common.RecordPill
+import jp.tcta.noteloop.wear.ui.common.SmallPill
 import jp.tcta.noteloop.wear.ui.common.containerViewModel
 import jp.tcta.noteloop.wear.ui.common.formatElapsed
 import kotlinx.coroutines.delay
 
 /**
- * ホーム。スクロールしない 1 画面。
- * 中央に大きな紫の録音ボタン、上に経過時間（録音中）、下に案内。待機中だけ右下に録音一覧への小さなボタン。
+ * ホーム。スクロールしない 1 画面で、Google レコーダーのタイルと同じ並び:
+ * 上に小さなアプリアイコンと名前、中央に横長の大きな録音ピル、下に小さなピル（録音一覧 / 案内）。
  */
 @Composable
 fun HomeScreen(onRecordings: () -> Unit) {
@@ -74,11 +74,12 @@ fun HomeScreen(onRecordings: () -> Unit) {
         }
     }
 
-    // タイル / 通知からの開始・停止
+    // タイル / 通知からの開始・停止・一覧
     LaunchedEffect(pending) {
         when (pending) {
             PendingAction.Start -> startWithPermission()
             PendingAction.Stop -> viewModel.stop()
+            PendingAction.OpenRecordings -> onRecordings()
             null -> return@LaunchedEffect
         }
         viewModel.consumePendingAction()
@@ -130,90 +131,63 @@ private fun HomeContent(
         now = System.currentTimeMillis()
     }
     ScreenScaffold {
-        Box(modifier = Modifier.fillMaxSize()) {
-            // 上: 待機中はロゴ、録音中は状態と経過時間
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = TOP_PADDING),
-            ) {
-                if (state.recording) {
-                    Text(
-                        text = stringResource(if (state.paused) R.string.home_paused else R.string.home_recording),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (state.paused) NoteLoopColors.Muted else NoteLoopColors.Brand1,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        text = formatElapsed(state.elapsedMs(now)),
-                        style = MaterialTheme.typography.displaySmall,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                    )
-                } else {
-                    Image(painter = painterResource(R.drawable.app_logo), contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = NoteLoopColors.Muted,
-                    )
+        Column(
+            modifier = Modifier.fillMaxSize().padding(top = TOP_PADDING, bottom = BOTTOM_PADDING),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            // 上: 小さなアプリアイコンと名前（録音中は状態）
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    modifier = Modifier.size(ICON_CIRCLE).clip(CircleShape).background(NoteLoopColors.SurfaceHigh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Image(painter = painterResource(R.drawable.app_logo), contentDescription = null, modifier = Modifier.size(ICON_SIZE))
                 }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text =
+                        stringResource(
+                            when {
+                                !state.recording -> R.string.app_name
+                                state.paused -> R.string.home_paused
+                                else -> R.string.home_recording
+                            },
+                        ),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (state.recording && !state.paused) NoteLoopColors.Brand1 else NoteLoopColors.Text,
+                )
             }
-            // 中央: 大きな録音ボタン
-            RecordButton(
+            // 中央: 横長の大きな録音ピル
+            RecordPill(
                 recording = state.recording,
                 paused = state.paused,
                 level = state.latestLevel,
+                elapsedText = formatElapsed(state.elapsedMs(now)),
+                idleLabel = stringResource(R.string.home_record),
                 onStart = onStart,
                 onTogglePause = onTogglePause,
                 onStop = onStop,
-                modifier = Modifier.align(Alignment.Center),
             )
-            // 下: 案内
-            Text(
-                text =
-                    stringResource(
-                        when {
-                            !state.recording -> R.string.home_tap_to_record
-                            state.paused -> R.string.home_hint_paused
-                            else -> R.string.home_hint_recording
-                        },
-                    ),
-                style = MaterialTheme.typography.labelSmall,
-                color = NoteLoopColors.Muted,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = BOTTOM_PADDING, start = 24.dp, end = 24.dp),
-            )
-            // 右下: 録音一覧（待機中のみ）
-            if (!state.recording) {
-                Box(
-                    modifier =
-                        Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(end = LIST_BUTTON_PADDING, bottom = LIST_BUTTON_PADDING)
-                            .size(LIST_BUTTON_SIZE)
-                            .clip(CircleShape)
-                            .background(NoteLoopColors.Surface)
-                            .clickable(role = Role.Button, onClick = onRecordings),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_list),
-                        contentDescription = stringResource(R.string.home_recordings),
-                        tint = NoteLoopColors.Muted,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+            // 下: 小さなピル（待機中は録音一覧、録音中は操作の案内）
+            if (state.recording) {
+                SmallPill(
+                    text = stringResource(if (state.paused) R.string.home_hint_paused else R.string.home_hint_recording),
+                    onClick = null,
+                )
+            } else {
+                SmallPill(text = stringResource(R.string.home_recordings), onClick = onRecordings)
             }
         }
     }
 }
 
 private const val TIMER_TICK_MS = 250L
-private val TOP_PADDING = 26.dp
-private val BOTTOM_PADDING = 14.dp
-private val LIST_BUTTON_SIZE = 36.dp
-private val LIST_BUTTON_PADDING = 22.dp
+private val TOP_PADDING = 22.dp
+private val BOTTOM_PADDING = 18.dp
+private val ICON_CIRCLE = 30.dp
+private val ICON_SIZE = 16.dp
 
 @Preview(device = WearDevices.SMALL_ROUND, showSystemUi = true)
 @Composable

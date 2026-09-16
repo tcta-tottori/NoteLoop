@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
             when (name) {
                 ACTION_START -> PendingAction.Start
                 ACTION_STOP -> PendingAction.Stop
+                ACTION_RECORDINGS -> PendingAction.OpenRecordings
                 else -> null
             } ?: return
         appContainer.pendingAction.post(action)
@@ -43,6 +44,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val ACTION_START = "jp.tcta.noteloop.wear.action.START"
         const val ACTION_STOP = "jp.tcta.noteloop.wear.action.STOP"
+        const val ACTION_RECORDINGS = "jp.tcta.noteloop.wear.action.RECORDINGS"
         const val EXTRA_ACTION = "action"
     }
 }

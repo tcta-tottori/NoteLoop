@@ -4,7 +4,7 @@
     <string name="tile_label">NOTELOOP 録音</string>
 
     <!-- ホーム -->
-    <string name="home_tap_to_record">タップで録音</string>
+    <string name="home_record">録音</string>
     <string name="home_recording">録音中</string>
     <string name="home_paused">一時停止中</string>
     <string name="home_hint_recording">タップで一時停止 ・ 長押しで停止</string>
@@ -38,7 +38,8 @@
 
     <!-- タイル -->
     <string name="tile_record">録音</string>
-    <string name="tile_recording">● 録音中</string>
-    <string name="tile_paused">❚❚ 一時停止中</string>
-    <string name="tile_open">タップでアプリを開く</string>
+    <string name="tile_recording">録音中</string>
+    <string name="tile_paused">一時停止中</string>
+    <string name="tile_recordings">録音一覧</string>
+    <string name="tile_open">アプリを開く</string>
 </resources>

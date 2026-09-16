@@ -47,6 +47,9 @@ sealed interface PendingAction {
     data object Start : PendingAction
 
     data object Stop : PendingAction
+
+    /** タイルの「録音一覧」から */
+    data object OpenRecordings : PendingAction
 }
 
 class PendingActionStore {

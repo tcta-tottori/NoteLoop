@@ -26,11 +26,12 @@ import jp.tcta.noteloop.wear.ui.common.formatElapsed
 import java.time.Instant
 
 /**
- * タイル（ウィジェット）。文字盤から横スワイプで出し、大きな紫のボタン 1 つで録音を始める。
+ * タイル（ウィジェット）。Google レコーダーのタイルと同じ並び:
+ * 上に小さなアプリアイコンと名前、中央に横長の大きな「● 録音」ピル、下に小さな「録音一覧」ピル。
  *
- * - 待機中: 大きな丸ボタン（マイク）。タップで MainActivity を起動し、権限確認の上で録音を開始する
- * - 録音中: 同じボタンの中に「● 録音中」と経過時間（ProtoLayout の動的式で毎秒更新）。タップでアプリを開く
- *   （一時停止・停止はアプリ内のボタンで行う。タップ / 長押し）
+ * - 待機中: 大きなピルをタップで MainActivity を起動し、権限確認の上で録音を開始する。小さなピルは録音一覧を開く
+ * - 録音中: 大きなピルに「録音中」と経過時間（ProtoLayout の動的式で毎秒更新）。タップでアプリを開く
+ *   （一時停止・停止はアプリ内で行う。タップ / 長押し）
  */
 class RecordTileService : TileService() {
     override fun onTileRequest(requestParams: RequestBuilders.TileRequest): ListenableFuture<TileBuilders.Tile> =
@@ -51,32 +52,42 @@ class RecordTileService : TileService() {
                 .Builder()
                 .setVersion(RESOURCES_VERSION)
                 .addIdToImageMapping(
-                    ICON_MIC,
+                    ICON_LOGO,
                     ResourceBuilders.ImageResource
                         .Builder()
                         .setAndroidResourceByResId(
                             ResourceBuilders.AndroidImageResourceByResId
                                 .Builder()
-                                .setResourceId(R.drawable.ic_mic)
+                                .setResourceId(R.drawable.app_logo)
                                 .build(),
                         ).build(),
                 ).build()
         }
 
     private fun idleLayout(): LayoutElementBuilders.LayoutElement {
-        val icon =
-            LayoutElementBuilders.Image
+        val big =
+            LayoutElementBuilders.Row
                 .Builder()
-                .setResourceId(ICON_MIC)
-                .setWidth(dp(ICON_DP))
-                .setHeight(dp(ICON_DP))
+                .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
+                .addContent(dot())
+                .addContent(hSpacer(DOT_GAP_DP))
+                .addContent(text(getString(R.string.tile_record), LARGE_SP, WHITE, bold = true))
                 .build()
         return wrap(
             column()
-                .addContent(bigButton(icon, launchClickable("start", MainActivity.ACTION_START)))
+                .addContent(header(getString(R.string.app_name)))
                 .addContent(vSpacer(SPACER_DP))
-                .addContent(text(getString(R.string.tile_record), SMALL_SP, GREY))
-                .build(),
+                .addContent(pill(big, BIG_W_DP, BIG_H_DP, BRAND, launchClickable("start", MainActivity.ACTION_START)))
+                .addContent(vSpacer(SPACER_DP))
+                .addContent(
+                    pill(
+                        text(getString(R.string.tile_recordings), SMALL_SP, TEXT, bold = true),
+                        SMALL_W_DP,
+                        SMALL_H_DP,
+                        SURFACE,
+                        launchClickable("recordings", MainActivity.ACTION_RECORDINGS),
+                    ),
+                ).build(),
         )
     }
 
@@ -85,25 +96,113 @@ class RecordTileService : TileService() {
         elapsedMs: Long,
         runningSince: Long,
     ): LayoutElementBuilders.LayoutElement {
-        val inner =
-            LayoutElementBuilders.Column
+        val big =
+            LayoutElementBuilders.Row
                 .Builder()
-                .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
-                .addContent(text(getString(if (paused) R.string.tile_paused else R.string.tile_recording), SMALL_SP, WHITE, bold = true))
+                .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
+                .addContent(dot())
+                .addContent(hSpacer(DOT_GAP_DP))
                 .addContent(elapsedText(elapsedMs, if (paused) 0L else runningSince))
                 .build()
         return wrap(
             column()
-                .addContent(bigButton(inner, launchClickable("open", null)))
+                .addContent(header(getString(if (paused) R.string.tile_paused else R.string.tile_recording)))
                 .addContent(vSpacer(SPACER_DP))
-                .addContent(text(getString(R.string.tile_open), SMALL_SP, GREY))
-                .build(),
+                .addContent(pill(big, BIG_W_DP, BIG_H_DP, BRAND, launchClickable("open", null)))
+                .addContent(vSpacer(SPACER_DP))
+                .addContent(
+                    pill(
+                        text(getString(R.string.tile_open), SMALL_SP, TEXT, bold = true),
+                        SMALL_W_DP,
+                        SMALL_H_DP,
+                        SURFACE,
+                        launchClickable("open2", null),
+                    ),
+                ).build(),
         )
     }
 
+    /** 上のアプリアイコン（丸の中に紫のマイク）と名前 */
+    private fun header(label: String): LayoutElementBuilders.LayoutElement =
+        LayoutElementBuilders.Column
+            .Builder()
+            .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
+            .addContent(
+                LayoutElementBuilders.Box
+                    .Builder()
+                    .setWidth(dp(ICON_CIRCLE_DP))
+                    .setHeight(dp(ICON_CIRCLE_DP))
+                    .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
+                    .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
+                    .setModifiers(background(SURFACE, ICON_CIRCLE_DP / 2).build())
+                    .addContent(
+                        LayoutElementBuilders.Image
+                            .Builder()
+                            .setResourceId(ICON_LOGO)
+                            .setWidth(dp(ICON_DP))
+                            .setHeight(dp(ICON_DP))
+                            .build(),
+                    ).build(),
+            ).addContent(vSpacer(HEADER_GAP_DP))
+            .addContent(text(label, SMALL_SP, TEXT, bold = true))
+            .build()
+
+    /** 「● 録音」の点 */
+    private fun dot(): LayoutElementBuilders.LayoutElement =
+        LayoutElementBuilders.Box
+            .Builder()
+            .setWidth(dp(DOT_DP))
+            .setHeight(dp(DOT_DP))
+            .setModifiers(background(BG, DOT_DP / 2).build())
+            .build()
+
+    /** 横長の丸いボタン */
+    private fun pill(
+        content: LayoutElementBuilders.LayoutElement,
+        widthDp: Float,
+        heightDp: Float,
+        color: Int,
+        clickable: ModifiersBuilders.Clickable,
+    ): LayoutElementBuilders.LayoutElement =
+        LayoutElementBuilders.Box
+            .Builder()
+            .setWidth(dp(widthDp))
+            .setHeight(dp(heightDp))
+            .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
+            .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
+            .setModifiers(
+                background(color, heightDp / 2)
+                    .setClickable(clickable)
+                    .setSemantics(
+                        ModifiersBuilders.Semantics
+                            .Builder()
+                            .setContentDescription(clickable.id)
+                            .build(),
+                    ).build(),
+            ).addContent(content)
+            .build()
+
+    private fun background(
+        color: Int,
+        radiusDp: Float,
+    ): ModifiersBuilders.Modifiers.Builder =
+        ModifiersBuilders.Modifiers
+            .Builder()
+            .setBackground(
+                ModifiersBuilders.Background
+                    .Builder()
+                    .setColor(argb(color))
+                    .setCorner(
+                        ModifiersBuilders.Corner
+                            .Builder()
+                            .setRadius(dp(radiusDp))
+                            .build(),
+                    ).build(),
+            )
+
     /**
      * 経過時間。録音が進んでいれば動的式（毎秒更新）、一時停止中や非対応レンダラーには静的文字列。
-     * 動的式の起点は「今の区間の開始 − それまでの累計」。
+     * 動的式の起点は「今 − 経過時間」。
      */
     private fun elapsedText(
         elapsedMs: Long,
@@ -139,40 +238,6 @@ class RecordTileService : TileService() {
             .setFontStyle(fontStyle(LARGE_SP, WHITE, bold = true))
             .build()
     }
-
-    /** 画面幅いっぱいに近い紫の丸ボタン。中身は待機中はマイク、録音中は文字。 */
-    private fun bigButton(
-        content: LayoutElementBuilders.LayoutElement,
-        clickable: ModifiersBuilders.Clickable,
-    ): LayoutElementBuilders.LayoutElement =
-        LayoutElementBuilders.Box
-            .Builder()
-            .setWidth(dp(BUTTON_DP))
-            .setHeight(dp(BUTTON_DP))
-            .setHorizontalAlignment(HORIZONTAL_ALIGN_CENTER)
-            .setVerticalAlignment(VERTICAL_ALIGN_CENTER)
-            .setModifiers(
-                ModifiersBuilders.Modifiers
-                    .Builder()
-                    .setBackground(
-                        ModifiersBuilders.Background
-                            .Builder()
-                            .setColor(argb(BRAND))
-                            .setCorner(
-                                ModifiersBuilders.Corner
-                                    .Builder()
-                                    .setRadius(dp(BUTTON_DP / 2))
-                                    .build(),
-                            ).build(),
-                    ).setClickable(clickable)
-                    .setSemantics(
-                        ModifiersBuilders.Semantics
-                            .Builder()
-                            .setContentDescription(getString(R.string.tile_record))
-                            .build(),
-                    ).build(),
-            ).addContent(content)
-            .build()
 
     /** MainActivity を起動する。LaunchAction は action を持てないので extra で渡す（null なら開くだけ）。 */
     private fun launchClickable(
@@ -245,21 +310,36 @@ class RecordTileService : TileService() {
             .setHeight(dp(heightDp))
             .build()
 
+    private fun hSpacer(widthDp: Float): LayoutElementBuilders.Spacer =
+        LayoutElementBuilders.Spacer
+            .Builder()
+            .setWidth(dp(widthDp))
+            .build()
+
     private companion object {
-        const val RESOURCES_VERSION = "2"
+        const val RESOURCES_VERSION = "3"
         const val FRESHNESS_RECORDING_MILLIS = 60_000L
-        const val ICON_MIC = "ic_mic"
+        const val ICON_LOGO = "app_logo"
         const val DYNAMIC_TEXT_PATTERN = "000:00"
         const val SECONDS_PER_MINUTE = 60
         const val SPACER_DP = 8f
-        const val BUTTON_DP = 112f
-        const val ICON_DP = 44f
-        const val LARGE_SP = 26f
-        const val SMALL_SP = 12f
+        const val HEADER_GAP_DP = 3f
+        const val ICON_CIRCLE_DP = 26f
+        const val ICON_DP = 14f
+        const val BIG_W_DP = 160f
+        const val BIG_H_DP = 66f
+        const val SMALL_W_DP = 104f
+        const val SMALL_H_DP = 38f
+        const val DOT_DP = 11f
+        const val DOT_GAP_DP = 8f
+        const val LARGE_SP = 24f
+        const val SMALL_SP = 13f
         const val WHITE = 0xFFFFFFFF.toInt()
-        const val GREY = 0xFFA3A9B5.toInt()
+        const val TEXT = 0xFFE7E9EE.toInt()
+        const val BG = 0xFF17181B.toInt()
+        const val SURFACE = 0xFF2A2D33.toInt()
 
-        /** ボタンの色。ProtoLayout はグラデーションを塗れないので、本体の紫 2 色の中間 */
+        /** 大きなピルの色。ProtoLayout はグラデーションを塗れないので、本体の紫 2 色の中間 */
         const val BRAND = 0xFF9090FF.toInt()
     }
 }
